@@ -1,5 +1,5 @@
 // ============================================================
-// 叶赫那拉市场模拟 - 最终版（无完工输出）
+// 叶赫那拉市场模拟 - 修复编译错误 + 全部经济逻辑修正
 // 编译: g++ -O3 -march=native -flto -o sim main.cpp
 // ============================================================
 
@@ -16,7 +16,7 @@
 
 using namespace std;
 
-constexpr int TOTAL_STEPS = 10000;
+constexpr int TOTAL_STEPS = 6000;
 constexpr int AI_INTERVAL = 1;
 constexpr int NUM_GOODS = 11;
 
@@ -53,6 +53,7 @@ struct BuildingTemplate {
         return cost;
     }
 
+    // 利润因子（用于调节产能，利润为正返回1，利润为负则降低产能因子）
     double getProfitFactor(const array<double, NUM_GOODS>& prices, double wageRate) const {
         double unitCost = getUnitCost(prices, wageRate);
         double outputPrice = prices[outputGood];
@@ -75,10 +76,9 @@ class MarketSimulation {
 public:
     unordered_map<string, int> goodIndex;
     array<double, NUM_GOODS> prices, v, m, b, referencePrice;
-    double averageWage = 6.75;               // 0.75*5 + 0.2*10 + 0.05*20
+    double averageWage = 6.75;
     double dt = 0.5;
     double population = 10000000.0;
-    double popGrowthRate = 0.00096;
     double laborPerCapita = 1.0, maxLabor;
     double inertiaCoeff = 0.5, dampRatio = 0.3;
 
@@ -89,19 +89,23 @@ public:
     array<int, TYPE_COUNT> buildingCounts;
     vector<ConstructionOrder> constructionQueue;
     array<double, TYPE_COUNT> avgProfitRates;
+    array<double, TYPE_COUNT> smoothedProfitRate;
     array<double, TYPE_COUNT> employmentRatio;
     array<double, TYPE_COUNT> cashPools;
+    array<int, TYPE_COUNT> consecutiveLowEmpWeeks;
+    int stepCount = 0;
 
     int maxTotalFarms = 10000;
     int maxCoalMines = 500;
     int maxIronMines = 500;
     int maxConstDept = 1000;
 
-    // 消费组需求表（每10万人）
+    double satisfaction = 0.75;
+
     const array<array<double, GROUP_COUNT>, 3> demandTable = {{
-        {39.0, 106.0, 0.0, 20.0},   // 财富5
-        {41.0, 137.0, 7.0, 74.0},   // 财富10
-        {0.0,  163.0, 122.0, 130.0} // 财富20
+        {39.0, 106.0, 0.0, 20.0},
+        {41.0, 137.0, 7.0, 74.0},
+        {0.0,  163.0, 122.0, 130.0}
     }};
     vector<vector<int>> groupGoods;
 
@@ -110,7 +114,8 @@ public:
     vector<array<double, TYPE_COUNT>> profitRateHist;
     vector<array<int, TYPE_COUNT>> buildingHist;
     vector<double> gdpHist;
-    vector<array<double, TYPE_COUNT>> cashPoolHist;   // 现金池历史
+    vector<array<double, TYPE_COUNT>> cashPoolHist;
+    vector<double> populationHist;
 
     MarketSimulation() {
         for (int i = 0; i < NUM_GOODS; ++i)
@@ -140,10 +145,10 @@ public:
             bt.laborPerUnit = 5000.0 / rate;
         };
 
-        setTemplate(FARM_GRAIN, "谷物农场", goodIndex["谷物"], 20, {});
+        setTemplate(FARM_GRAIN, "谷物农场", goodIndex["谷物"], 50, {});
         setTemplate(FOOD_PROC, "加工食品厂", goodIndex["加工食品"], 45, {{goodIndex["谷物"], 40.0/45}});
         setTemplate(COTTON, "棉花种植园", goodIndex["织物"], 45, {});
-        setTemplate(CLOTHES, "服装厂", goodIndex["服装"], 60, {{goodIndex["织物"], 40.0/60}});
+        setTemplate(CLOTHES, "服装厂", goodIndex["服装"], 100, {{goodIndex["织物"], 60.0/100}});
         setTemplate(LUXURY_CLOTHES, "高档服装厂", goodIndex["高档服装"], 30, {{goodIndex["织物"], 25.0/30}});
         setTemplate(COAL_MINE, "煤矿", goodIndex["煤"], 40, {{goodIndex["工具"], 10.0/40}});
         setTemplate(IRON_MINE, "铁矿", goodIndex["铁"], 40, {{goodIndex["工具"], 10.0/40}});
@@ -155,12 +160,13 @@ public:
         maxLabor = population * laborPerCapita;
         buildingCounts.fill(10);
         avgProfitRates.fill(0.0);
+        smoothedProfitRate.fill(0.0);
         employmentRatio.fill(1.0);
+        consecutiveLowEmpWeeks.fill(0);
 
         for (int t = 0; t < TYPE_COUNT; ++t)
-            cashPools[t] = buildingCounts[t] * 5000.0;
+            cashPools[t] = buildingCounts[t] * 20000.0;
 
-        // 配置消费组
         groupGoods.resize(GROUP_COUNT);
         groupGoods[GRP_SIMPLE_CLOTHES]   = {goodIndex["织物"]};
         groupGoods[GRP_BASIC_FOOD]       = {goodIndex["谷物"], goodIndex["加工食品"]};
@@ -192,22 +198,35 @@ public:
     }
 
     void step() {
-        population *= 1.0 + popGrowthRate;
+        stepCount++;
+
+        // 人口动态变化
+        double s = (satisfaction < 0.0) ? 0.0 : (satisfaction > 1.0 ? 1.0 : satisfaction);
+        double r52;
+        if (s <= 0.75)
+            r52 = (0.20 / 0.75) * s - 0.20;
+        else
+            r52 = 0.2 * (s - 0.75);
+        if (r52 < -0.20) r52 = -0.20;
+        if (r52 > 0.05)  r52 = 0.05;
+        double r_step = pow(1.0 + r52, 1.0/52.0) - 1.0;
+        population *= (1.0 + r_step);
+
         maxLabor = population * laborPerCapita;
         const int constrIdx = goodIndex["建造力"];
 
         // 1. 利润因子
         array<double,TYPE_COUNT> profitFactor;
-        for (int t=0; t<TYPE_COUNT; ++t) {
-            if (buildingCounts[t]==0) { profitFactor[t]=0.0; continue; }
+        for (int t = 0; t < TYPE_COUNT; ++t) {
+            if (buildingCounts[t] == 0) { profitFactor[t] = 0.0; continue; }
             profitFactor[t] = buildingTemplates[t].getProfitFactor(prices, averageWage);
         }
 
         // 2. 期望产出与劳动力需求
         array<double,TYPE_COUNT> estOutputPerBuilding;
         double totalDesiredLabor = 0.0;
-        for (int t=0; t<TYPE_COUNT; ++t) {
-            if (buildingCounts[t]==0) { estOutputPerBuilding[t]=0.0; continue; }
+        for (int t = 0; t < TYPE_COUNT; ++t) {
+            if (buildingCounts[t] == 0) { estOutputPerBuilding[t] = 0.0; continue; }
             const auto& bt = buildingTemplates[t];
             estOutputPerBuilding[t] = bt.outputRate * profitFactor[t] * employmentRatio[t];
             totalDesiredLabor += buildingCounts[t] * bt.laborPerUnit * estOutputPerBuilding[t];
@@ -217,27 +236,37 @@ public:
         // 3. 实际产出、中间投入
         array<double,NUM_GOODS> totalOut{}, totalIn{};
         double actualLabor = 0.0;
-        for (int t=0; t<TYPE_COUNT; ++t) {
-            if (buildingCounts[t]==0) continue;
+        for (int t = 0; t < TYPE_COUNT; ++t) {
+            if (buildingCounts[t] == 0) continue;
             const auto& bt = buildingTemplates[t];
             double actualPerBuilding = estOutputPerBuilding[t] * laborFactor;
             double typeTotalProd = buildingCounts[t] * actualPerBuilding;
             totalOut[bt.outputGood] += typeTotalProd;
-            for (int g=0; g<NUM_GOODS; ++g)
+            for (int g = 0; g < NUM_GOODS; ++g)
                 totalIn[g] += buildingCounts[t] * bt.inputs[g] * actualPerBuilding;
             actualLabor += buildingCounts[t] * bt.laborPerUnit * actualPerBuilding;
         }
 
-        // 4. 利润入现金池
-        double wageIncome = actualLabor * averageWage;
-        for (int t=0; t<TYPE_COUNT; ++t) {
-            if (buildingCounts[t]==0) continue;
+        // 自给农场产出
+        array<int,TYPE_COUNT> inQueueCount{};
+        for (const auto& ord : constructionQueue) inQueueCount[ord.typeIndex]++;
+        int usedFarms = buildingCounts[FARM_GRAIN] + buildingCounts[COTTON]
+                        + inQueueCount[FARM_GRAIN] + inQueueCount[COTTON];
+        int subsistCount = max(0, maxTotalFarms - usedFarms);
+        totalOut[goodIndex["谷物"]] += subsistCount * 2.0;
+        totalOut[goodIndex["织物"]] += subsistCount * 1.0;
+        totalOut[goodIndex["服装"]] += subsistCount * 0.5;
+
+        // 4. 利润入现金池（除建造部门）
+        for (int t = 0; t < TYPE_COUNT; ++t) {
+            if (t == CONST_DEPT) continue;
+            if (buildingCounts[t] == 0) continue;
             const auto& bt = buildingTemplates[t];
             double actualPerBuilding = estOutputPerBuilding[t] * laborFactor;
             double totalProd = buildingCounts[t] * actualPerBuilding;
             double revenue = totalProd * prices[bt.outputGood];
             double inputCost = 0.0;
-            for (int g=0; g<NUM_GOODS; ++g)
+            for (int g = 0; g < NUM_GOODS; ++g)
                 inputCost += buildingCounts[t] * bt.inputs[g] * actualPerBuilding * prices[g];
             double laborCost = buildingCounts[t] * bt.laborPerUnit * actualPerBuilding * averageWage;
             double profit = revenue - inputCost - laborCost;
@@ -247,28 +276,27 @@ public:
 
         // 5. 消费组分配
         array<double,NUM_GOODS> netSupply;
-        for (int i=0; i<NUM_GOODS; ++i) netSupply[i] = max(0.0, totalOut[i] - totalIn[i]);
+        for (int i = 0; i < NUM_GOODS; ++i)
+            netSupply[i] = max(0.0, totalOut[i] - totalIn[i]);
 
         array<double,NUM_GOODS> weight;
-        for (int i=0; i<NUM_GOODS; ++i)
+        for (int i = 0; i < NUM_GOODS; ++i)
             weight[i] = (totalOut[i] - totalIn[i]) / (2.0 * prices[i] + 1e-9);
 
         auto per100k = getGroupDemandPer100k();
         double scale = population / 100000.0;
         array<double,GROUP_COUNT> groupDemand;
-        for (int g=0; g<GROUP_COUNT; ++g) groupDemand[g] = per100k[g] * scale;
+        for (int g = 0; g < GROUP_COUNT; ++g) groupDemand[g] = per100k[g] * scale;
 
         array<double,NUM_GOODS> avail = netSupply;
         array<double,NUM_GOODS> consumerTarget{}, consumerActual{};
 
-        for (int g=0; g<GROUP_COUNT; ++g) {
+        for (int g = 0; g < GROUP_COUNT; ++g) {
             double remain = groupDemand[g];
             if (remain <= 0) continue;
-
             vector<int> goods = groupGoods[g];
             sort(goods.begin(), goods.end(),
                  [&](int a, int b) { return weight[a] > weight[b]; });
-
             for (int good : goods) {
                 if (remain <= 0) break;
                 double want = remain;
@@ -280,12 +308,20 @@ public:
             }
         }
 
-        // 6. 建造力需求与支付
+        // 必需品满足度
+        double essentialsDemand = groupDemand[GRP_SIMPLE_CLOTHES] + groupDemand[GRP_BASIC_FOOD];
+        double essentialsActual = 0.0;
+        for (int good : groupGoods[GRP_SIMPLE_CLOTHES]) essentialsActual += consumerActual[good];
+        for (int good : groupGoods[GRP_BASIC_FOOD])   essentialsActual += consumerActual[good];
+        satisfaction = (essentialsDemand > 1e-9) ? (essentialsActual / essentialsDemand) : 1.0;
+        if (satisfaction > 1.0) satisfaction = 1.0;
+
+        // 6. 建造力分配与交易闭环
         double constrDem = 0.0;
         for (const auto& ord : constructionQueue) constrDem += ord.remainingCost;
 
         array<double,NUM_GOODS> E;
-        for (int i=0; i<NUM_GOODS; ++i) {
+        for (int i = 0; i < NUM_GOODS; ++i) {
             double totalDemand = totalIn[i] + consumerTarget[i];
             E[i] = totalDemand - totalOut[i];
         }
@@ -293,17 +329,34 @@ public:
 
         double availConstr = totalOut[constrIdx];
         double pConstr = prices[constrIdx];
+        double soldConstr = 0.0;
+
         for (auto& ord : constructionQueue) {
             if (availConstr <= 0) break;
             double maxByCash = cashPools[ord.typeIndex] / pConstr;
-            double invest = min({availConstr, 30.0, ord.remainingCost, maxByCash});
+            double invest = min({ availConstr, 30.0, ord.remainingCost, maxByCash });
             if (invest <= 0) continue;
             cashPools[ord.typeIndex] -= invest * pConstr;
+            soldConstr += invest;
             ord.remainingCost -= invest;
             availConstr -= invest;
         }
 
-        // 移除完成的订单（不再记录完工数量）
+        // 建造部门利润结算
+        {
+            const auto& bt = buildingTemplates[CONST_DEPT];
+            double actualPerBuilding = estOutputPerBuilding[CONST_DEPT] * laborFactor;
+            double inputCost = 0.0;
+            for (int g = 0; g < NUM_GOODS; ++g)
+                inputCost += buildingCounts[CONST_DEPT] * bt.inputs[g] * actualPerBuilding * prices[g];
+            double laborCost = buildingCounts[CONST_DEPT] * bt.laborPerUnit * actualPerBuilding * averageWage;
+            double revenue = soldConstr * pConstr;
+            double profit = revenue - inputCost - laborCost;
+            cashPools[CONST_DEPT] += profit;
+            if (cashPools[CONST_DEPT] < 0) cashPools[CONST_DEPT] = 0;
+        }
+
+        // 移除已完成的订单
         constructionQueue.erase(
             remove_if(constructionQueue.begin(), constructionQueue.end(),
                 [&](ConstructionOrder& o) {
@@ -315,16 +368,19 @@ public:
                 }),
             constructionQueue.end());
 
-        // ============ GDP 计算 ============
-        double consumerExpenditure = 0.0;
-        for (int i=0; i<NUM_GOODS; ++i)
-            consumerExpenditure += consumerActual[i] * prices[i];
-
-        double totalCashPool = accumulate(cashPools.begin(), cashPools.end(), 0.0);
-        double gdp = consumerExpenditure + totalCashPool;
+        // GDP 生产法计算
+        double totalOutputValue = 0.0;
+        for (int i = 0; i < NUM_GOODS; ++i) {
+            double outVal = (i == constrIdx) ? soldConstr : totalOut[i];
+            totalOutputValue += outVal * prices[i];
+        }
+        double totalIntermediate = 0.0;
+        for (int i = 0; i < NUM_GOODS; ++i)
+            totalIntermediate += totalIn[i] * prices[i];
+        double gdp = totalOutputValue - totalIntermediate;
 
         // 价格更新
-        for (int i=0; i<NUM_GOODS; ++i) {
+        for (int i = 0; i < NUM_GOODS; ++i) {
             double G = fabs(totalOut[i]) + fabs(totalIn[i]) + fabs(consumerTarget[i]) + 1.0;
             m[i] = inertiaCoeff * G;
             double restoring = b[i] * (prices[i] - referencePrice[i]);
@@ -335,26 +391,57 @@ public:
             if (prices[i] < 0.1) prices[i] = 0.1;
         }
 
-        // 利润率
+        // 利润率（当周瞬时）
         array<double,TYPE_COUNT> profitRates{};
-        for (int t=0; t<TYPE_COUNT; ++t) {
-            if (buildingCounts[t]==0) continue;
+        for (int t = 0; t < TYPE_COUNT; ++t) {
+            if (buildingCounts[t] == 0) continue;
             const auto& bt = buildingTemplates[t];
             double unitCost = bt.laborPerUnit * averageWage;
-            for (int g=0; g<NUM_GOODS; ++g) unitCost += prices[g] * bt.inputs[g];
-            profitRates[t] = (unitCost>1e-6) ? (prices[bt.outputGood] - unitCost)/unitCost : 0.0;
+            for (int g = 0; g < NUM_GOODS; ++g) unitCost += prices[g] * bt.inputs[g];
+            profitRates[t] = (unitCost > 1e-6) ? (prices[bt.outputGood] - unitCost) / unitCost : 0.0;
         }
         avgProfitRates = profitRates;
         profitRateHist.push_back(profitRates);
 
+        // 平滑利润率（EMA）
+        if (stepCount == 1) {
+            smoothedProfitRate = profitRates;
+        } else {
+            double alpha = 0.2;
+            for (int t = 0; t < TYPE_COUNT; ++t)
+                smoothedProfitRate[t] = smoothedProfitRate[t] * (1.0 - alpha) + profitRates[t] * alpha;
+        }
+
         // 雇佣调整
-        for (int t=0; t<TYPE_COUNT; ++t) {
-            if (buildingCounts[t]==0) continue;
+        for (int t = 0; t < TYPE_COUNT; ++t) {
+            if (buildingCounts[t] == 0) continue;
             if (avgProfitRates[t] < 0.0)
                 employmentRatio[t] *= 0.95;
             else
                 employmentRatio[t] += (1.0 - employmentRatio[t]) * 0.05;
             employmentRatio[t] = max(0.1, min(1.0, employmentRatio[t]));
+        }
+
+        // 建筑衰退保护
+        if (stepCount > 52) {
+            for (int t = 0; t < TYPE_COUNT; ++t) {
+                if (buildingCounts[t] == 0) {
+                    consecutiveLowEmpWeeks[t] = 0;
+                    continue;
+                }
+                if (employmentRatio[t] <= 0.75) {
+                    consecutiveLowEmpWeeks[t]++;
+                    if (consecutiveLowEmpWeeks[t] >= 52) {
+                        int reduce = max(1, (int)ceil(buildingCounts[t] * 0.05));
+                        buildingCounts[t] = max(1, buildingCounts[t] - reduce);
+                        if (buildingCounts[t] < 1) buildingCounts[t] = 1;
+                    }
+                } else {
+                    consecutiveLowEmpWeeks[t] = 0;
+                }
+            }
+        } else {
+            for (int t = 0; t < TYPE_COUNT; ++t) consecutiveLowEmpWeeks[t] = 0;
         }
 
         // 记录历史
@@ -363,6 +450,7 @@ public:
         outputHist.push_back(totalOut);
         priceHist.push_back(prices);
         cashPoolHist.push_back(cashPools);
+        populationHist.push_back(population);
     }
 
     void aiBuild() {
@@ -382,12 +470,10 @@ public:
                 buildingTemplates[CONST_DEPT].getProfitFactor(prices, averageWage) *
                 employmentRatio[CONST_DEPT] * buildingTemplates[CONST_DEPT].outputRate;
         }
-
         double totalRemainingCost = 0.0;
         for (const auto& ord : constructionQueue) totalRemainingCost += ord.remainingCost;
         double stepsNeeded = (constrCapacity > 0) ? totalRemainingCost / constrCapacity : 1e9;
-
-        if (stepsNeeded > 84.0 && inQueueCount[CONST_DEPT] == 0 && !constrCapReached) {
+        if (stepsNeeded > 52.0 && inQueueCount[CONST_DEPT] == 0 && !constrCapReached) {
             constructionQueue.insert(constructionQueue.begin(),
                                      {CONST_DEPT, buildingCost[CONST_DEPT], buildingCost[CONST_DEPT]});
         }
@@ -398,13 +484,26 @@ public:
             if (t == IRON_MINE && ironCapReached) continue;
             if (t == CONST_DEPT && constrCapReached) continue;
 
-            double rate = avgProfitRates[t];
-            if (rate > 0.1 && buildingCounts[t] > 0) {
-                int N_wanted = (int)ceil((rate - 0.1) / 0.05);
+            double smoothed = smoothedProfitRate[t];
+
+            // 零建筑启动
+            if (buildingCounts[t] == 0 && inQueueCount[t] == 0) {
+                const auto& bt = buildingTemplates[t];
+                double estCost = bt.getUnitCost(prices, averageWage);
+                double estProfitRate = (estCost > 1e-6) ? (prices[bt.outputGood] - estCost) / estCost : 0.0;
+                if (estProfitRate > 0.1) {
+                    placeOrder(t);
+                }
+                continue;
+            }
+
+            if (smoothed > 0.1 && buildingCounts[t] > 0) {
+                int N_wanted = (int)ceil((smoothed - 0.1) / 0.05);
                 if (N_wanted < 0) N_wanted = 0;
                 int N_remaining = N_wanted - inQueueCount[t];
                 if (N_remaining < 0) N_remaining = 0;
 
+                // 容量限制
                 if (t == FARM_GRAIN || t == COTTON) {
                     int slots = maxTotalFarms - totalFarms;
                     if (slots <= 0) continue;
@@ -423,7 +522,7 @@ public:
                     N_remaining = min(N_remaining, slots);
                 }
 
-                int maxExpand = (int)ceil(buildingCounts[t] * 0.1);
+                int maxExpand = max(1, (int)floor(buildingCounts[t] * 0.1));
                 int N_final = min(N_remaining, maxExpand);
 
                 for (int j = 0; j < N_final; ++j)
@@ -437,12 +536,12 @@ int main() {
     SetConsoleOutputCP(CP_UTF8);
     MarketSimulation sim;
 
-    cout << "模拟开始，共 " << TOTAL_STEPS << " 步...\n" << flush;
+    cout << "模拟开始，共 " << TOTAL_STEPS << " 周...\n" << flush;
 
     for (int t = 0; t < TOTAL_STEPS; ++t) {
         sim.step();
         if (t % AI_INTERVAL == 0) sim.aiBuild();
-        if (t % 84 == 0) cout << "周期: " << t << "/" << TOTAL_STEPS << "     \r" << flush;
+        if (t % 52 == 0) cout << "周数: " << t << "/" << TOTAL_STEPS << "     \r" << flush;
     }
     cout << "\n写入CSV...\n" << flush;
 
@@ -486,6 +585,12 @@ int main() {
         string header = "Step";
         for (const auto& name : sim.buildingTypeNames) header += "," + name;
         writeCsv("cashPool.csv", header, sim.cashPoolHist);
+    }
+    {
+        ofstream f("population.csv");
+        f << "\xEF\xBB\xBFStep,Population\n";
+        for (size_t t = 0; t < sim.populationHist.size(); ++t)
+            f << t << "," << sim.populationHist[t] << "\n";
     }
 
     cout << "CSV文件写入完毕。\n";
