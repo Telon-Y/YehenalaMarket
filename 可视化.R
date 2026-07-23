@@ -1,16 +1,13 @@
 library(showtext)
 showtext_auto()
 
-# 设置工作目录
-# setwd("CSV所在目录")
-
-prices     <- read.csv("prices.csv",     fileEncoding = "UTF-8", check.names = FALSE)
-buildings  <- read.csv("buildings.csv",  fileEncoding = "UTF-8", check.names = FALSE)
-outputs    <- read.csv("outputs.csv",    fileEncoding = "UTF-8", check.names = FALSE)
-profitRate <- read.csv("profitRate.csv", fileEncoding = "UTF-8", check.names = FALSE)
-gdp        <- read.csv("gdp.csv",        fileEncoding = "UTF-8", check.names = FALSE)
-expans     <- read.csv("expansion.csv",  fileEncoding = "UTF-8", check.names = FALSE)
-cashPool   <- read.csv("cashPool.csv",   fileEncoding = "UTF-8", check.names = FALSE)
+prices      <- read.csv("prices.csv",      fileEncoding = "UTF-8", check.names = FALSE)
+buildings   <- read.csv("buildings.csv",   fileEncoding = "UTF-8", check.names = FALSE)
+outputs     <- read.csv("outputs.csv",     fileEncoding = "UTF-8", check.names = FALSE)
+profitRate  <- read.csv("profitRate.csv",  fileEncoding = "UTF-8", check.names = FALSE)
+gdp         <- read.csv("gdp.csv",         fileEncoding = "UTF-8", check.names = FALSE)
+cashPool    <- read.csv("cashPool.csv",    fileEncoding = "UTF-8", check.names = FALSE)
+population  <- read.csv("population.csv",  fileEncoding = "UTF-8", check.names = FALSE)   # ★ 新增
 
 show_plot <- function(expr, prompt = "按 Enter 继续...") {
   if (dev.cur() != 1) plot.new()
@@ -20,6 +17,7 @@ show_plot <- function(expr, prompt = "按 Enter 继续...") {
 
 cat("7 组图表，每次显示后按 Enter。\n")
 
+# 1. 价格
 show_plot({
   par(mfrow = c(4, 3), mar = c(3, 3, 2, 1))
   for (i in 2:ncol(prices)) plot(prices$Step, prices[[i]], type = "l", col = i,
@@ -27,6 +25,7 @@ show_plot({
   title("价格", outer = TRUE, line = -1)
 })
 
+# 2. 建筑数量
 show_plot({
   par(mfrow = c(4, 3), mar = c(3, 3, 2, 1))
   for (i in 2:ncol(buildings)) plot(buildings$Step, buildings[[i]], type = "l", col = i,
@@ -34,6 +33,7 @@ show_plot({
   title("建筑", outer = TRUE)
 })
 
+# 3. 产量
 show_plot({
   par(mfrow = c(4, 3), mar = c(3, 3, 2, 1))
   for (i in 2:ncol(outputs)) plot(outputs$Step, outputs[[i]], type = "l", col = i,
@@ -41,6 +41,7 @@ show_plot({
   title("产量", outer = TRUE)
 })
 
+# 4. 利润率
 show_plot({
   par(mfrow = c(4, 3), mar = c(3, 3, 2, 1))
   for (i in 2:ncol(profitRate)) plot(profitRate$Step, profitRate[[i]], type = "l", col = i,
@@ -48,25 +49,28 @@ show_plot({
   title("利润率", outer = TRUE)
 })
 
+# 5. GDP
 show_plot({
   par(mfrow = c(1, 1), mar = c(4, 4, 2, 1))
   plot(gdp$Step, gdp$GDP, type = "l", col = "darkblue", lwd = 2,
-       main = "GDP", xlab = "Step", ylab = "GDP")
+       main = "GDP（总产出价值 + 现金池总额）", xlab = "Step", ylab = "GDP")
   grid(col = "gray80")
 })
 
-show_plot({
-  par(mfrow = c(4, 3), mar = c(3, 3, 2, 1))
-  for (i in 2:ncol(expans)) plot(expans$Step, expans[[i]], type = "h", col = i,
-                                 main = colnames(expans)[i], xlab = "Step", ylab = "完工")
-  title("完工建筑", outer = TRUE)
-})
-
+# 6. 现金池
 show_plot({
   par(mfrow = c(4, 3), mar = c(3, 3, 2, 1))
   for (i in 2:ncol(cashPool)) plot(cashPool$Step, cashPool[[i]], type = "l", col = i,
                                    main = colnames(cashPool)[i], xlab = "Step", ylab = "现金池")
   title("现金池", outer = TRUE)
+})
+
+# 7. ★ 人口数量
+show_plot({
+  par(mfrow = c(1, 1), mar = c(4, 4, 2, 1))
+  plot(population$Step, population$Population, type = "l", col = "darkred", lwd = 2,
+       main = "总人口变化", xlab = "Step", ylab = "人口")
+  grid(col = "gray80")
 })
 
 cat("✅ 完成。\n")
