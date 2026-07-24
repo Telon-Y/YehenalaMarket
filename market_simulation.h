@@ -62,6 +62,10 @@ public:
     void aiBuild();
     void placeOrder(int typeIdx);
 
+    // 1.1 新增：AI扩建阈值（可调节）和拆除建筑
+    double aiProfitThreshold = 0.1;
+    void removeBuilding(int typeIndex);
+
     // 辅助函数
     std::array<double, GROUP_COUNT> getGroupDemandPer100k() const;
 };

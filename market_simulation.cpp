@@ -2,32 +2,27 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
-#include <iostream>   // 临时输出进度
+#include <iostream>
 
 using namespace std;
 
 MarketSimulation::MarketSimulation() {
-    // 初始化商品索引
     for (int i = 0; i < NUM_GOODS; ++i)
         goodIndex[commodityNames[i]] = i;
 
-    // 复制常量
     prices = referencePrice;
     v.fill(0.0);
     m.fill(1.0);
     b = priceSuppressBase;
 
-    // 加载建筑模板
     buildingTemplates = createBuildingTemplates();
 
-    // 初始建筑等级 50
     buildingCounts.fill(50);
     avgProfitRates.fill(0.0);
     smoothedProfitRate.fill(0.0);
     employmentRatio.fill(1.0);
     consecutiveLowEmpWeeks.fill(0);
 
-    // 现金池初始：每级 5000
     for (int t = 0; t < TYPE_COUNT; ++t)
         cashPools[t] = buildingCounts[t] * 5000.0;
 
@@ -60,7 +55,6 @@ void MarketSimulation::placeOrder(int typeIdx) {
 void MarketSimulation::step() {
     stepCount++;
 
-    // 人口动态
     double s = satisfaction;
     if (s < 0.0) s = 0.0; else if (s > 1.0) s = 1.0;
     double r52;
@@ -94,7 +88,7 @@ void MarketSimulation::step() {
     }
     double laborFactor = totalDesiredLabor > 0 ? min(1.0, maxLabor / totalDesiredLabor) : 1.0;
 
-    array<double, TYPE_COUNT> laborOutput;   // 劳动调整后的单位建筑产出速率
+    array<double, TYPE_COUNT> laborOutput;
     for (int t = 0; t < TYPE_COUNT; ++t)
         laborOutput[t] = estOutputPerBuilding[t] * laborFactor;
 
@@ -113,7 +107,7 @@ void MarketSimulation::step() {
     for (int t = 0; t < TYPE_COUNT; ++t) {
         if (buildingCounts[t] == 0) continue;
         const auto& bt = buildingTemplates[t];
-        double potentialRate = laborOutput[t];   // 不考虑原料瓶颈时的理想速率
+        double potentialRate = laborOutput[t];
         for (int g = 0; g < NUM_GOODS; ++g)
             potentialIn[g] += buildingCounts[t] * bt.inputs[g] * potentialRate;
     }
@@ -124,7 +118,6 @@ void MarketSimulation::step() {
 
     for (int iter = 0; iter < 10; ++iter) {
         array<double, NUM_GOODS> tempOut{}, tempIn{};
-        // 自给农场产出
         int grainIdx = goodIndex["谷物"], fabIdx = goodIndex["织物"], clothIdx = goodIndex["服装"];
         tempOut[grainIdx] += subGrain;
         tempOut[fabIdx]   += subFabric;
@@ -199,7 +192,7 @@ void MarketSimulation::step() {
         if (cashPools[t] < 0) cashPools[t] = 0;
     }
 
-    // ---------- 8. 消费分配 ----------
+    // ---------- 8. 消费分配（已按设计修正为 price * valueCoeff 排序）----------
     auto per100k = getGroupDemandPer100k();
     double popScale = population / 100000.0;
     array<double, GROUP_COUNT> groupDemand;
@@ -210,13 +203,6 @@ void MarketSimulation::step() {
     for (int i = 0; i < NUM_GOODS; ++i)
         avail[i] = max(0.0, realOut[i] - realIn[i]);
 
-    // 消费权重基础 = (净产出 / 2) * 市场价格
-    array<double, NUM_GOODS> consumerWeightBase;
-    for (int i = 0; i < NUM_GOODS; ++i) {
-        double net = max(0.0, realOut[i] - realIn[i]);
-        consumerWeightBase[i] = (net / 2.0) * prices[i];
-    }
-
     array<double, NUM_GOODS> consumerTarget{}, consumerActual{};
 
     for (int g = 0; g < GROUP_COUNT; ++g) {
@@ -224,8 +210,11 @@ void MarketSimulation::step() {
         if (remain <= 1e-9) continue;
 
         vector<int> goods = groupGoods[g];
+        // 按 price * valueCoeff 降序（即消费权重越高越优先）
         sort(goods.begin(), goods.end(), [&](int a, int b) {
-            return consumerWeightBase[a] > consumerWeightBase[b];
+            double wa = valueCoeff[a][g] * prices[a];
+            double wb = valueCoeff[b][g] * prices[b];
+            return wa > wb;
         });
 
         for (int good : goods) {
@@ -391,7 +380,7 @@ void MarketSimulation::aiBuild() {
 
     int totalFarms = buildingCounts[FARM_GRAIN] + buildingCounts[COTTON]
                      + inQueueCount[FARM_GRAIN] + inQueueCount[COTTON];
-    int farmSlotsRemaining = maxTotalFarms - totalFarms;   // 动态剩余配额
+    int farmSlotsRemaining = maxTotalFarms - totalFarms;
     bool farmCapReached = (totalFarms >= maxTotalFarms);
     bool coalCapReached = (buildingCounts[COAL_MINE] + inQueueCount[COAL_MINE] >= maxCoalMines);
     bool ironCapReached = (buildingCounts[IRON_MINE] + inQueueCount[IRON_MINE] >= maxIronMines);
@@ -422,12 +411,12 @@ void MarketSimulation::aiBuild() {
 
         double smoothed = smoothedProfitRate[t];
 
-        // 尚无建筑：若预期利润率 > 10% 则首次建造
+        // 尚无建筑：若预期利润率 > aiProfitThreshold 则首次建造
         if (buildingCounts[t] == 0 && inQueueCount[t] == 0) {
             const auto& bt = buildingTemplates[t];
             double estCost = bt.getUnitCost(prices, averageWage);
             double estProfitRate = (estCost > 1e-6) ? (prices[bt.outputGood] - estCost) / estCost : 0.0;
-            if (estProfitRate > 0.1) {
+            if (estProfitRate > aiProfitThreshold) {
                 if (t == FARM_GRAIN || t == COTTON) {
                     if (farmSlotsRemaining <= 0) continue;
                     placeOrder(t);
@@ -440,8 +429,8 @@ void MarketSimulation::aiBuild() {
         }
 
         // 已有建筑：利润率驱动扩建
-        if (smoothed > 0.1 && buildingCounts[t] > 0) {
-            int N_wanted = (int)ceil((smoothed - 0.1) / 0.05);
+        if (smoothed > aiProfitThreshold && buildingCounts[t] > 0) {
+            int N_wanted = (int)ceil((smoothed - aiProfitThreshold) / 0.05);
             if (N_wanted < 0) N_wanted = 0;
             int N_remaining = N_wanted - inQueueCount[t];
             if (N_remaining < 0) N_remaining = 0;
@@ -460,7 +449,8 @@ void MarketSimulation::aiBuild() {
                 N_remaining = min(N_remaining, slots);
             }
 
-            int maxExpand = max(1, (int)floor(buildingCounts[t] * 0.1));
+            // ★ 修复：向上取整，符合文档“计算向上取整”要求
+            int maxExpand = max(1, (int)ceil(buildingCounts[t] * 0.1));
             int N_final = min(N_remaining, maxExpand);
 
             for (int j = 0; j < N_final; ++j)
@@ -468,6 +458,16 @@ void MarketSimulation::aiBuild() {
 
             if (t == FARM_GRAIN || t == COTTON)
                 farmSlotsRemaining -= N_final;
+        }
+    }
+}
+
+// 1.1 新增：手动拆除建筑
+void MarketSimulation::removeBuilding(int typeIndex) {
+    if (typeIndex >= 0 && typeIndex < TYPE_COUNT) {
+        if (buildingCounts[typeIndex] > 0) {
+            buildingCounts[typeIndex]--;
+            // 现金池不回收，保持简单
         }
     }
 }

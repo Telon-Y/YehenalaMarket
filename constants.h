@@ -65,15 +65,15 @@ inline const std::array<std::array<double, GROUP_COUNT>, 3> demandTable = {{
     {0.0,  210.0, 122.0, 130.0}  // 财富 20
 }};
 
-// 消费组对应的商品列表
+// 消费组对应的商品列表（已修正：简朴衣物对应服装索引3）
 inline const std::vector<std::vector<int>> groupGoods = {
-    {2},        // 简朴衣物 → 服装（索引2）
+    {3},        // 简朴衣物 → 服装（索引3）
     {0, 1},     // 基础食物 → 谷物(0)、加工食品(1)
     {4},        // 标准衣物 → 高档服装(4)
     {9}         // 住宅 → 住房(9)
 };
 
-// 使用价值系数 [商品][消费组]
+// 使用价值系数 [商品][消费组]（已修正：服装为索引3）
 inline const std::array<std::array<double, GROUP_COUNT>, NUM_GOODS> valueCoeff = [](){
     std::array<std::array<double, GROUP_COUNT>, NUM_GOODS> arr{};
     // 初始化为0
@@ -83,7 +83,7 @@ inline const std::array<std::array<double, GROUP_COUNT>, NUM_GOODS> valueCoeff =
 
     arr[0][1] = 1.0;   // 谷物 → 基础食物
     arr[1][1] = 1.5;   // 加工食品 → 基础食物
-    arr[2][0] = 1.0;   // 服装 → 简朴衣物
+    arr[3][0] = 1.0;   // 服装 → 简朴衣物
     arr[4][2] = 1.0;   // 高档服装 → 标准衣物
     arr[9][3] = 1.0;   // 住房 → 住宅
     return arr;
