@@ -6,7 +6,6 @@
 #include "market_simulation.h"
 #include "ui.h"
 
-// ───── 辅助：从一批字符串中提取所有 Unicode 码点（UTF‑8 解码）─────
 static std::vector<int> collectCodepoints(const std::vector<std::string>& texts) {
     std::set<int> cps;
     for (const auto& s : texts) {
@@ -27,7 +26,7 @@ static std::vector<int> collectCodepoints(const std::vector<std::string>& texts)
                 cp = c & 0x07;
                 extra = 3;
             }
-            if (i + extra >= s.size()) break;   // 不完整的 UTF‑8，跳过
+            if (i + extra >= s.size()) break;
             for (int j = 1; j <= extra; ++j) {
                 cp = (cp << 6) | (static_cast<unsigned char>(s[i+j]) & 0x3F);
             }
@@ -43,53 +42,73 @@ int main() {
 
     const int screenWidth = 1280;
     const int screenHeight = 800;
-    InitWindow(screenWidth, screenHeight, "Yehenala 1.1 - Market Sim");
+    InitWindow(screenWidth, screenHeight, "叶赫那拉 1.1 - 市场模拟");
     SetTargetFPS(60);
     SetExitKey(KEY_NULL);
 
-    // ───── 1. 收集所有界面需要使用的中文字符 ─────
     std::vector<std::string> uiStrings;
-    // 商品名、建筑名（来自 constants.h）
-    for (const auto& name : commodityNames) uiStrings.push_back(name);
+    for (const auto& name : commodityNames)   uiStrings.push_back(name);
     for (const auto& name : buildingTypeNames) uiStrings.push_back(name);
-    // 界面中会出现的各种中文提示
-    uiStrings.push_back("测试: 中文 谷物 English");   // 屏幕测试文字
-    uiStrings.push_back("Build");                    // 按钮
-    uiStrings.push_back("Demolish");
-    uiStrings.push_back("Urgent Constr Dept");
-    uiStrings.push_back("Goods Market");
-    uiStrings.push_back("Buildings");
-    uiStrings.push_back("Const. Queue");
-    uiStrings.push_back("Week:");                    // 状态栏
-    uiStrings.push_back("AI Profit Threshold:");
-    uiStrings.push_back("Est");
-    uiStrings.push_back("weeks");
-    // （如有其他中文，继续添加）
+    uiStrings.push_back("暂停");
+    uiStrings.push_back("1倍");
+    uiStrings.push_back("2倍");
+    uiStrings.push_back("5倍");
+    uiStrings.push_back("周期:");
+    uiStrings.push_back("AI 利润阈值:");
+    uiStrings.push_back("(上/下键)");
+    uiStrings.push_back("商品市场");
+    uiStrings.push_back("建筑");
+    uiStrings.push_back("建造队列");
+    uiStrings.push_back("商品:");
+    uiStrings.push_back("当前价格:");
+    uiStrings.push_back("(相对初始:");
+    uiStrings.push_back("市场产量:");
+    uiStrings.push_back("全市场消费:");          // v1.2 替换原“市场消费”
+    uiStrings.push_back("短缺");                // 原料短缺标记
+    uiStrings.push_back("近期价格变化 (最近200周)");
+    uiStrings.push_back("总价格变化 (全部周期)");
+    uiStrings.push_back("价格总表 (全部商品 · 百分比变化)");
+    uiStrings.push_back("未选择任何商品");
+    // 建筑页面表头 & 自给农场
+    uiStrings.push_back("建筑名称");
+    uiStrings.push_back("现有(在建)");
+    uiStrings.push_back("雇佣率%");
+    uiStrings.push_back("利润率%");
+    uiStrings.push_back("现金池");
+    uiStrings.push_back("自给农场");
+    // 建造/拆除按钮文字
+    uiStrings.push_back("建1");
+    uiStrings.push_back("建5");
+    uiStrings.push_back("建10");
+    uiStrings.push_back("拆1");
+    uiStrings.push_back("拆5");
+    uiStrings.push_back("拆10");
+    // 建造队列翻页文字
+    uiStrings.push_back("第");
+    uiStrings.push_back("页");
+    uiStrings.push_back("←");
+    uiStrings.push_back("→");
+    uiStrings.push_back("翻页");
+    // 其他可能出现的字符
+    uiStrings.push_back("紧急建造部门");
+    uiStrings.push_back("预计");
+    uiStrings.push_back("周");
 
-    // 提取所需码点
     std::vector<int> codepoints = collectCodepoints(uiStrings);
-
-    // 强制加入全部基本 ASCII 可打印字符（32-126），保证英文、数字、标点绝对可用
-    for (int c = 32; c <= 126; ++c) codepoints.push_back(c);
-
-    // 去重
+    for (int c = 32; c <= 126; ++c) codepoints.push_back(c); // ASCII
     std::set<int> uniqueCPs(codepoints.begin(), codepoints.end());
     codepoints.assign(uniqueCPs.begin(), uniqueCPs.end());
-
     printf("Collected %d unique codepoints for UI.\n", (int)codepoints.size());
 
-    // ───── 2. 多路径尝试加载字体 ─────
     Font font = { 0 };
     const char* fontPaths[] = {
-        "C:/Windows/Fonts/simhei.ttf",     // 首选系统黑体
-        "C:/Windows/Fonts/msyh.ttc",       // 微软雅黑
+        "C:/Windows/Fonts/simhei.ttf",
+        "C:/Windows/Fonts/msyh.ttc",
         "MingChinese.ttf",
         "D:\\Code\\Model\\MingChinese.ttf"
     };
-
     for (const char* path : fontPaths) {
         if (FileExists(path)) {
-            // ★ 关键：最后一个参数是数组元素个数，不再是 0
             font = LoadFontEx(path, 20, codepoints.data(), (int)codepoints.size());
             if (font.texture.id != 0 && font.glyphCount > 100) {
                 printf("Font loaded OK: %s (glyphs: %d)\n", path, font.glyphCount);
@@ -102,18 +121,14 @@ int main() {
             printf("Font not found: %s\n", path);
         }
     }
-
     if (font.texture.id == 0) {
         printf("No Chinese font found, using default (Chinese will be missing).\n");
         font = GetFontDefault();
     }
 
-    // ───── 3. 模拟与 UI ─────
     MarketSimulation sim;
     UIState uiState;
     InitUIState(&uiState);
-
-    printf("Entering main loop...\n");
 
     while (!WindowShouldClose()) {
         HandleInput(&uiState, sim);
@@ -128,13 +143,10 @@ int main() {
 
         BeginDrawing();
         ClearBackground(RAYWHITE);
-        // 绘制测试文字以验证字体
-        DrawTextEx(font, "测试: 中文 谷物 English", { 10, 10 }, 20, 1, BLACK);
         DrawUI(&uiState, sim, font);
         EndDrawing();
     }
 
-    printf("Window closed, exiting.\n");
     UnloadFont(font);
     CloseWindow();
     return 0;

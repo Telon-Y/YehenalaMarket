@@ -36,4 +36,6 @@ set_target_properties(sim PROPERTIES
 
 if(WIN32)
     target_compile_definitions(sim PRIVATE UNICODE _UNICODE)
+    # ★ 静态链接 C/C++ 运行时库，使 exe 彻底不依赖外部 DLL
+    target_link_options(sim PRIVATE -static)
 endif()
