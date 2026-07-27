@@ -1,19 +1,19 @@
 #pragma once
 #include "raylib.h"
-#include "market_simulation.h"
+#include "world.h"
 
 struct UIState {
-    int currentPanel;          // 0=商品市场, 1=建筑列表, 2=建造队列
+    int currentPanel;
     int selectedGood;
     int selectedBuilding;
     bool paused;
     int simulationSpeed;
     Rectangle speedBtns[4];
-    Rectangle panelBtns[3];
+    Rectangle panelBtns[4];
     int constructionPage;
-    bool showInTotal[NUM_GOODS];  // 总表显示控制
+    bool showInTotal[NUM_GOODS];
 };
 
 void InitUIState(UIState* state);
-void HandleInput(UIState* state, MarketSimulation& sim);
-void DrawUI(const UIState* state, const MarketSimulation& sim, Font font);
+void HandleInput(UIState* state, World& world);
+void DrawUI(const UIState* state, World& world, Font font);

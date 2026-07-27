@@ -34,7 +34,6 @@ std::vector<BuildingTemplate> createBuildingTemplates() {
         bt.laborPerUnit = 5000.0 / rate;
     };
 
-    // 使用索引而非字符串，因为 constants.h 已经定义了索引
     setTemplate(FARM_GRAIN,    "谷物农场",   0,  50, {});
     setTemplate(FOOD_PROC,     "加工食品厂",  1,  45, {{0, 40.0/45}});
     setTemplate(COTTON,        "棉花种植园",  2,  45, {});

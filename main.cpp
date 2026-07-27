@@ -3,7 +3,7 @@
 #include <set>
 #include <string>
 #include "raylib.h"
-#include "market_simulation.h"
+#include "world.h"
 #include "ui.h"
 
 static std::vector<int> collectCodepoints(const std::vector<std::string>& texts) {
@@ -13,23 +13,13 @@ static std::vector<int> collectCodepoints(const std::vector<std::string>& texts)
             unsigned char c = static_cast<unsigned char>(s[i]);
             int cp = 0;
             int extra = 0;
-            if (c < 0x80) {
-                cp = c;
-                extra = 0;
-            } else if (c < 0xE0) {
-                cp = c & 0x1F;
-                extra = 1;
-            } else if (c < 0xF0) {
-                cp = c & 0x0F;
-                extra = 2;
-            } else {
-                cp = c & 0x07;
-                extra = 3;
-            }
+            if (c < 0x80) { cp = c; extra = 0; }
+            else if (c < 0xE0) { cp = c & 0x1F; extra = 1; }
+            else if (c < 0xF0) { cp = c & 0x0F; extra = 2; }
+            else { cp = c & 0x07; extra = 3; }
             if (i + extra >= s.size()) break;
-            for (int j = 1; j <= extra; ++j) {
+            for (int j = 1; j <= extra; ++j)
                 cp = (cp << 6) | (static_cast<unsigned char>(s[i+j]) & 0x3F);
-            }
             cps.insert(cp);
             i += extra + 1;
         }
@@ -40,8 +30,8 @@ static std::vector<int> collectCodepoints(const std::vector<std::string>& texts)
 int main() {
     printf("Starting Yehenala 1.1 Market Simulation...\n");
 
-    const int screenWidth = 1280;
-    const int screenHeight = 800;
+    const int screenWidth = 1920;
+    const int screenHeight = 1080;
     InitWindow(screenWidth, screenHeight, "叶赫那拉 1.1 - 市场模拟");
     SetTargetFPS(60);
     SetExitKey(KEY_NULL);
@@ -59,43 +49,43 @@ int main() {
     uiStrings.push_back("商品市场");
     uiStrings.push_back("建筑");
     uiStrings.push_back("建造队列");
+    uiStrings.push_back("其他");
     uiStrings.push_back("商品:");
     uiStrings.push_back("当前价格:");
     uiStrings.push_back("(相对初始:");
     uiStrings.push_back("市场产量:");
-    uiStrings.push_back("全市场消费:");          // v1.2 替换原“市场消费”
-    uiStrings.push_back("短缺");                // 原料短缺标记
+    uiStrings.push_back("全市场消费:");
+    uiStrings.push_back("短缺");
     uiStrings.push_back("近期价格变化 (最近200周)");
     uiStrings.push_back("总价格变化 (全部周期)");
     uiStrings.push_back("价格总表 (全部商品 · 百分比变化)");
     uiStrings.push_back("未选择任何商品");
-    // 建筑页面表头 & 自给农场
     uiStrings.push_back("建筑名称");
     uiStrings.push_back("现有(在建)");
     uiStrings.push_back("雇佣率%");
     uiStrings.push_back("利润率%");
     uiStrings.push_back("现金池");
     uiStrings.push_back("自给农场");
-    // 建造/拆除按钮文字
     uiStrings.push_back("建1");
     uiStrings.push_back("建5");
     uiStrings.push_back("建10");
     uiStrings.push_back("拆1");
     uiStrings.push_back("拆5");
     uiStrings.push_back("拆10");
-    // 建造队列翻页文字
     uiStrings.push_back("第");
     uiStrings.push_back("页");
     uiStrings.push_back("←");
     uiStrings.push_back("→");
     uiStrings.push_back("翻页");
-    // 其他可能出现的字符
     uiStrings.push_back("紧急建造部门");
     uiStrings.push_back("预计");
     uiStrings.push_back("周");
+    uiStrings.push_back("宏观数据");
+    uiStrings.push_back("GDP (周度)");
+    uiStrings.push_back("人口 (周度)");
 
     std::vector<int> codepoints = collectCodepoints(uiStrings);
-    for (int c = 32; c <= 126; ++c) codepoints.push_back(c); // ASCII
+    for (int c = 32; c <= 126; ++c) codepoints.push_back(c);
     std::set<int> uniqueCPs(codepoints.begin(), codepoints.end());
     codepoints.assign(uniqueCPs.begin(), uniqueCPs.end());
     printf("Collected %d unique codepoints for UI.\n", (int)codepoints.size());
@@ -109,7 +99,7 @@ int main() {
     };
     for (const char* path : fontPaths) {
         if (FileExists(path)) {
-            font = LoadFontEx(path, 20, codepoints.data(), (int)codepoints.size());
+            font = LoadFontEx(path, 28, codepoints.data(), (int)codepoints.size());
             if (font.texture.id != 0 && font.glyphCount > 100) {
                 printf("Font loaded OK: %s (glyphs: %d)\n", path, font.glyphCount);
                 break;
@@ -126,24 +116,43 @@ int main() {
         font = GetFontDefault();
     }
 
-    MarketSimulation sim;
+    World& world = World::Instance();
     UIState uiState;
     InitUIState(&uiState);
 
+    int frameTimer = 0;
+    const int MAX_STEPS_PER_FRAME = 10;
+
     while (!WindowShouldClose()) {
-        HandleInput(&uiState, sim);
+        HandleInput(&uiState, world);
 
         if (!uiState.paused) {
-            for (int i = 0; i < uiState.simulationSpeed; ++i) {
-                sim.step();
-                if (sim.stepCount % AI_INTERVAL == 0)
-                    sim.aiBuild();
+            int framesPerStep;
+            switch (uiState.simulationSpeed) {
+                case 2:  framesPerStep = 10; break;
+                case 5:  framesPerStep = 4;  break;
+                default: framesPerStep = 20; break;
             }
+
+            frameTimer++;
+            int stepsThisFrame = 0;
+            while (frameTimer >= framesPerStep && stepsThisFrame < MAX_STEPS_PER_FRAME) {
+                LocalMarket& market = world.getCurrentMarket();
+                market.step();
+                if (market.getStepCount() % AI_INTERVAL == 0)
+                    market.aiBuild();
+                frameTimer -= framesPerStep;
+                stepsThisFrame++;
+            }
+            if (frameTimer >= framesPerStep)
+                frameTimer = 0;
+        } else {
+            frameTimer = 0;
         }
 
         BeginDrawing();
         ClearBackground(RAYWHITE);
-        DrawUI(&uiState, sim, font);
+        DrawUI(&uiState, world, font);
         EndDrawing();
     }
 
