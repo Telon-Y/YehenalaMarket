@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(RAYLIB_ROOT "${CMAKE_SOURCE_DIR}/raylib")
 
-add_executable(sim
+add_executable(YehenalaMarket
     main.cpp
     world.cpp
     local_market.cpp
@@ -15,19 +15,19 @@ add_executable(sim
     ui.cpp
 )
 
-target_link_libraries(sim PRIVATE
+target_link_libraries(YehenalaMarket PRIVATE
     "${RAYLIB_ROOT}/lib/libraylib.a"
     opengl32
     gdi32
     winmm
 )
 
-target_include_directories(sim PRIVATE "${RAYLIB_ROOT}/include")
-target_compile_options(sim PRIVATE -O2)
+target_include_directories(YehenalaMarket PRIVATE "${RAYLIB_ROOT}/include")
+target_compile_options(YehenalaMarket PRIVATE -O2)
 
-set_target_properties(sim PROPERTIES WIN32_EXECUTABLE FALSE)
+set_target_properties(YehenalaMarket PROPERTIES WIN32_EXECUTABLE FALSE)
 
 if(WIN32)
-    target_compile_definitions(sim PRIVATE UNICODE _UNICODE)
-    target_link_options(sim PRIVATE -static)
+    target_compile_definitions(YehenalaMarket PRIVATE UNICODE _UNICODE)
+    target_link_options(YehenalaMarket PRIVATE -static)
 endif()

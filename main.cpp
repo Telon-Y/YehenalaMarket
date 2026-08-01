@@ -28,11 +28,11 @@ static std::vector<int> collectCodepoints(const std::vector<std::string>& texts)
 }
 
 int main() {
-    printf("Starting Yehenala 1.1 Market Simulation...\n");
+    printf("Starting YehenalaMarket Simulation...\n");
 
     const int screenWidth = 1920;
     const int screenHeight = 1080;
-    InitWindow(screenWidth, screenHeight, "叶赫那拉 1.1 - 市场模拟");
+    InitWindow(screenWidth, screenHeight, "YehenalaMarket - 市场模拟");
     SetTargetFPS(60);
     SetExitKey(KEY_NULL);
 
@@ -58,7 +58,7 @@ int main() {
     uiStrings.push_back("短缺");
     uiStrings.push_back("近期价格变化 (最近200周)");
     uiStrings.push_back("总价格变化 (全部周期)");
-    uiStrings.push_back("价格总表 (全部商品 · 百分比变化)");
+    uiStrings.push_back("价格总表 (全部商品 · 绝对价格)");
     uiStrings.push_back("未选择任何商品");
     uiStrings.push_back("建筑名称");
     uiStrings.push_back("现有(在建)");
@@ -83,6 +83,35 @@ int main() {
     uiStrings.push_back("宏观数据");
     uiStrings.push_back("GDP (周度)");
     uiStrings.push_back("人口 (周度)");
+    // 1.2 新增金融面板字符串
+    uiStrings.push_back("金融数据");
+    uiStrings.push_back("总货币供给:");
+    uiStrings.push_back("投资池资金:");
+    uiStrings.push_back("劳工现金:");
+    uiStrings.push_back("工程师:");
+    uiStrings.push_back("资本家:");
+    uiStrings.push_back("万");
+    // ===== 新增：雇佣相关字符串 =====
+    uiStrings.push_back("雇佣倾向%");
+    uiStrings.push_back("实际雇佣");
+    uiStrings.push_back("实际率%");
+    uiStrings.push_back("所有权");
+    uiStrings.push_back("(G/P/F)");
+    uiStrings.push_back("[");
+    uiStrings.push_back("]");
+    uiStrings.push_back("私人");
+    uiStrings.push_back("金融");
+    uiStrings.push_back("政府");
+    uiStrings.push_back("剩余/总成本");
+    uiStrings.push_back("继续");
+    uiStrings.push_back("-");
+    uiStrings.push_back("+");
+    uiStrings.push_back("%");
+    uiStrings.push_back("(");
+    uiStrings.push_back(")");
+    uiStrings.push_back("·");
+    uiStrings.push_back("/");
+    uiStrings.push_back(":");
 
     std::vector<int> codepoints = collectCodepoints(uiStrings);
     for (int c = 32; c <= 126; ++c) codepoints.push_back(c);

@@ -1,8 +1,14 @@
+// ui.cpp
 #include "ui.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+
+// ===== 新增：按钮尺寸常量 =====
+static constexpr float BTN_W = 30.0f;
+static constexpr float BTN_H = 20.0f;
+static constexpr float BTN_GAP = 4.0f;
 
 static void FormatCash(double cash, char* buf, size_t bufSize) {
     if (cash == 0.0) { snprintf(buf, bufSize, "0.00"); return; }
@@ -65,25 +71,37 @@ void HandleInput(UIState* state, World& world) {
                 state->selectedGood = i;
         }
     } else if (state->currentPanel == 1) {
+        constexpr int panelX = 240;
+        constexpr int panelY = 245;
+        const float colOwner = panelX + 860.0f;
+        const float btnStartX = colOwner + 80.0f;
+
         for (int t = 0; t < TYPE_COUNT; ++t) {
-            float y = 245.f + (t + 1) * 36.f;
-            Rectangle build1  = { 1550, y, 42, 30 };
-            Rectangle build5  = { 1598, y, 42, 30 };
-            Rectangle build10 = { 1646, y, 42, 30 };
-            Rectangle demol1   = { 1694, y, 42, 30 };
-            Rectangle demol5   = { 1742, y, 42, 30 };
-            Rectangle demol10  = { 1790, y, 42, 30 };
-            if (CheckCollisionPointRec(mouse, build1) && mouseLeft)  market.playerBuild(t, 1);
-            if (CheckCollisionPointRec(mouse, build5) && mouseLeft)  market.playerBuild(t, 5);
-            if (CheckCollisionPointRec(mouse, build10) && mouseLeft) market.playerBuild(t, 10);
-            if (CheckCollisionPointRec(mouse, demol1) && mouseLeft)  market.playerDemolish(t, 1);
-            if (CheckCollisionPointRec(mouse, demol5) && mouseLeft)  market.playerDemolish(t, 5);
-            if (CheckCollisionPointRec(mouse, demol10) && mouseLeft) market.playerDemolish(t, 10);
+            float y = panelY + (t + 1) * 36;
+            float bx = btnStartX;
+            for (int i = 0; i < 3; ++i) {
+                Rectangle btn = { bx, y, BTN_W, BTN_H };
+                if (CheckCollisionPointRec(mouse, btn) && mouseLeft) {
+                    int cnt = (i == 0 ? 1 : (i == 1 ? 5 : 10));
+                    market.playerBuild(t, cnt);
+                }
+                bx += BTN_W + BTN_GAP;
+            }
+            if (market.getBuildingCounts()[t] > 0 && t != BANK && t != FINANCE && t != CONST_DEPT) {
+                for (int i = 0; i < 3; ++i) {
+                    Rectangle btn = { bx, y, BTN_W, BTN_H };
+                    if (CheckCollisionPointRec(mouse, btn) && mouseLeft) {
+                        int cnt = (i == 0 ? 1 : (i == 1 ? 5 : 10));
+                        market.playerDemolish(t, cnt);
+                    }
+                    bx += BTN_W + BTN_GAP;
+                }
+            }
         }
     } else if (state->currentPanel == 2) {
         Rectangle urgentBtn = { 1600, 140, 220, 40 };
         if (CheckCollisionPointRec(mouse, urgentBtn) && mouseLeft) {
-            market.playerBuild(CONST_DEPT, 1);  // 紧急建造部门（置顶、忽略现金）
+            market.playerBuild(CONST_DEPT, 1);
         }
         int totalItems = (int)market.getConstructionQueue().size();
         int totalPages = std::max(1, (int)std::ceil(totalItems / 20.0));
@@ -297,7 +315,7 @@ void DrawUI(const UIState* state, World& world, Font font) {
                 DrawLine(checkRec.x + 2, checkRec.y + 8, checkRec.x + 6, checkRec.y + 12, WHITE);
                 DrawLine(checkRec.x + 6, checkRec.y + 12, checkRec.x + 14, checkRec.y + 4, WHITE);
             }
-            Rectangle nameRec = { 30, recY, 220, 24 };
+            Rectangle nameRec = { 30, recY, 200, 24 };
             DrawRectangleRec(nameRec, (state->selectedGood == i) ? SKYBLUE : RAYWHITE);
             DrawTextEx(font, commodityNames[i].c_str(), { nameRec.x + 4, nameRec.y + 2 }, 20, 1, BLACK);
         }
@@ -312,11 +330,9 @@ void DrawUI(const UIState* state, World& world, Font font) {
         DrawTextEx(font, TextFormat("当前价格: %.2f   (相对初始: %+.1f%%)", currentPrice, pctChange),
                    { detailX, detailY }, 20, 1, BLACK);
         detailY += 28;
-        double prod = market.getPriceHistory().empty() ? 0.0 : 0.0; // 产出需从outputHist获取，简化：此处用0，可改为 market.outputHist 但未暴露。暂时忽略。
-        // 为完整，可改为从 priceHist.size 等信息推断，或者暴露 outputHist。我们先简单略过产出显示。
-        // 实际可添加 getOutputHistory() 等方法，此处省略。
+        double marketOutput = market.getLatestRealOut()[g];
         double totalCons = market.getLatestPotentialIn()[g] + market.getLatestConsumerTarget()[g];
-        DrawTextEx(font, TextFormat("市场产量: --"), { detailX, detailY }, 20, 1, BLACK); // 略
+        DrawTextEx(font, TextFormat("市场产量: %.2f", marketOutput), { detailX, detailY }, 20, 1, BLACK);
         detailY += 26;
         DrawTextEx(font, TextFormat("全市场消费: %.2f", totalCons), { detailX, detailY }, 20, 1, BLACK);
         detailY += 36;
@@ -354,31 +370,55 @@ void DrawUI(const UIState* state, World& world, Font font) {
             DrawTextEx(font, "未选择任何商品", { chart1X, chart3Y + 50 }, 18, 1, GRAY);
         }
 
-    // ----- 建筑列表 -----
+    // ----- 建筑列表（含手动建造/拆除按钮） -----
     } else if (state->currentPanel == 1) {
-        float colName   = panelX;
-        float colCount  = panelX + 260;
-        float colEmploy = panelX + 460;
-        float colProfit = panelX + 660;
-        float colCash   = panelX + 860;
+        float colName    = panelX;
+        float colCount   = panelX + 180;
+        float colTend    = panelX + 280;
+        float colEmp     = panelX + 380;
+        float colRate    = panelX + 470;
+        float colProfit  = panelX + 560;
+        float colOutput  = panelX + 650;
+        float colCash    = panelX + 750;
+        float colOwner   = panelX + 860;
+        float btnStartX  = colOwner + 80;
 
-        DrawTextEx(font, "建筑名称",   { colName,   panelY - 28.f }, 22, 1, BLACK);
-        DrawTextEx(font, "现有(在建)", { colCount,  panelY - 28.f }, 22, 1, BLACK);
-        DrawTextEx(font, "雇佣率%",    { colEmploy, panelY - 28.f }, 22, 1, BLACK);
-        DrawTextEx(font, "利润率%",    { colProfit, panelY - 28.f }, 22, 1, BLACK);
-        DrawTextEx(font, "现金池",     { colCash,   panelY - 28.f }, 22, 1, BLACK);
+        DrawTextEx(font, "建筑名称",   { colName,   panelY - 28.f }, 20, 1, BLACK);
+        DrawTextEx(font, "现有(在建)", { colCount,  panelY - 28.f }, 20, 1, BLACK);
+        DrawTextEx(font, "雇佣倾向%",  { colTend,   panelY - 28.f }, 20, 1, BLACK);
+        // 修改：加 * 标注
+        DrawTextEx(font, "实际雇佣*", { colEmp,    panelY - 28.f }, 20, 1, BLACK);
+        DrawTextEx(font, "实际率%",    { colRate,   panelY - 28.f }, 20, 1, BLACK);
+        DrawTextEx(font, "利润率%",    { colProfit, panelY - 28.f }, 20, 1, BLACK);
+        DrawTextEx(font, "周产量",     { colOutput, panelY - 28.f }, 20, 1, BLACK);
+        DrawTextEx(font, "现金池",     { colCash,   panelY - 28.f }, 20, 1, BLACK);
+        DrawTextEx(font, "所有权",     { colOwner,  panelY - 28.f }, 16, 1, BLACK);
 
         std::array<int, TYPE_COUNT> pending{};
         for (const auto& ord : market.getConstructionQueue()) pending[ord.typeIndex]++;
 
         float y = panelY;
         char buf[64];
+
+        // 自给农场行（修改：显示自给人口，标注蓝色）
         DrawTextEx(font, "自给农场", { colName, y }, 18, 1, DARKGRAY);
         snprintf(buf, sizeof(buf), "%4d(%4d)", market.getSubsistenceFarms(), 0);
         DrawTextEx(font, buf, { colCount, y }, 18, 1, DARKGRAY);
-        DrawTextEx(font, "--", { colEmploy, y }, 18, 1, DARKGRAY);
+        DrawTextEx(font, "--", { colTend, y }, 18, 1, DARKGRAY);
+        // 显示自给人口
+        double subPop = market.getSubsistencePop();
+        if (subPop >= 10000.0)
+            snprintf(buf, sizeof(buf), "%.1f万", subPop / 10000.0);
+        else
+            snprintf(buf, sizeof(buf), "%.0f", subPop);
+        DrawTextEx(font, buf, { colEmp, y }, 18, 1, BLUE);
+        DrawTextEx(font, "--", { colRate, y }, 18, 1, DARKGRAY);
         DrawTextEx(font, "--", { colProfit, y }, 18, 1, DARKGRAY);
+        DrawTextEx(font, "--", { colOutput, y }, 18, 1, DARKGRAY);
         DrawTextEx(font, "--", { colCash, y }, 18, 1, DARKGRAY);
+        DrawTextEx(font, "--", { colOwner, y }, 18, 1, DARKGRAY);
+
+        const auto& buildingOutput = market.getLatestBuildingOutput();
 
         for (int t = 0; t < TYPE_COUNT; ++t) {
             y = panelY + (t + 1) * 36;
@@ -387,29 +427,86 @@ void DrawUI(const UIState* state, World& world, Font font) {
             const char* status = shortage ? " (短缺)" : "";
             DrawTextEx(font, TextFormat("%s%s", buildingTypeNames[t].c_str(), status),
                        { colName, y }, 18, 1, nameColor);
+
             snprintf(buf, sizeof(buf), "%4d(%4d)", market.getBuildingCounts()[t], pending[t]);
             DrawTextEx(font, buf, { colCount, y }, 18, 1, BLACK);
+
             snprintf(buf, sizeof(buf), "%5.1f%%", market.getEmploymentRatio()[t] * 100);
-            DrawTextEx(font, buf, { colEmploy, y }, 18, 1, BLACK);
+            DrawTextEx(font, buf, { colTend, y }, 18, 1, BLACK);
+
+            double emp = market.getActualEmployment()[t];
+            if (emp < 1e-6) {
+                DrawTextEx(font, "--", { colEmp, y }, 18, 1, GRAY);
+            } else {
+                if (emp >= 10000.0)
+                    snprintf(buf, sizeof(buf), "%.1f万", emp / 10000.0);
+                else
+                    snprintf(buf, sizeof(buf), "%.0f", emp);
+                DrawTextEx(font, buf, { colEmp, y }, 18, 1, BLACK);
+            }
+
+            double empRate = market.getActualEmploymentRate()[t];
+            if (market.getBuildingCounts()[t] == 0) {
+                DrawTextEx(font, "--", { colRate, y }, 18, 1, GRAY);
+            } else {
+                snprintf(buf, sizeof(buf), "%5.1f%%", empRate * 100);
+                DrawTextEx(font, buf, { colRate, y }, 18, 1, BLACK);
+            }
+
             snprintf(buf, sizeof(buf), "%+6.2f%%", market.getAvgProfitRates()[t] * 100);
             DrawTextEx(font, buf, { colProfit, y }, 18, 1, BLACK);
+
+            if (market.getBuildingTemplates()[t].isFinancial || market.getBuildingCounts()[t] == 0) {
+                DrawTextEx(font, "--", { colOutput, y }, 18, 1, GRAY);
+            } else {
+                double output = buildingOutput[t];
+                if (output < 1e-3) {
+                    DrawTextEx(font, "0.0", { colOutput, y }, 18, 1, GRAY);
+                } else {
+                    snprintf(buf, sizeof(buf), "%.1f", output);
+                    DrawTextEx(font, buf, { colOutput, y }, 18, 1, BLACK);
+                }
+            }
+
             char cashStr[24];
             FormatCash(market.getCashPools()[t], cashStr, sizeof(cashStr));
             DrawTextEx(font, cashStr, { colCash, y }, 18, 1, BLACK);
 
-            Rectangle b1  = { 1550, y, 42, 30 };
-            Rectangle b5  = { 1598, y, 42, 30 };
-            Rectangle b10 = { 1646, y, 42, 30 };
-            DrawRectangleRec(b1, LIGHTGRAY);  DrawTextEx(font, "建1",  { b1.x+5,  b1.y+4 }, 18, 1, BLACK);
-            DrawRectangleRec(b5, LIGHTGRAY);  DrawTextEx(font, "建5",  { b5.x+5,  b5.y+4 }, 18, 1, BLACK);
-            DrawRectangleRec(b10, LIGHTGRAY); DrawTextEx(font, "建10", { b10.x+5, b10.y+4 }, 18, 1, BLACK);
-            Rectangle d1  = { 1694, y, 42, 30 };
-            Rectangle d5  = { 1742, y, 42, 30 };
-            Rectangle d10 = { 1790, y, 42, 30 };
-            DrawRectangleRec(d1, LIGHTGRAY);  DrawTextEx(font, "拆1",  { d1.x+5,  d1.y+4 }, 18, 1, RED);
-            DrawRectangleRec(d5, LIGHTGRAY);  DrawTextEx(font, "拆5",  { d5.x+5,  d5.y+4 }, 18, 1, RED);
-            DrawRectangleRec(d10, LIGHTGRAY); DrawTextEx(font, "拆10", { d10.x+5, d10.y+4 }, 18, 1, RED);
+            if (t == BANK || t == FINANCE || t == CONST_DEPT) {
+                DrawTextEx(font, "--", { colOwner, y }, 18, 1, GRAY);
+            } else {
+                const auto& owned = market.getBuildingManager().getOwnedBuildings()[t];
+                snprintf(buf, sizeof(buf), "%d/%d/%d", owned[OWNER_GOVERNMENT], owned[OWNER_INITIAL], owned[OWNER_FINANCE]);
+                DrawTextEx(font, buf, { colOwner, y }, 18, 1, BLACK);
+            }
+
+            float bx = btnStartX;
+            bool canBuild = (t != BANK && t != FINANCE && t != CONST_DEPT);
+            for (int i = 0; i < 3; ++i) {
+                Rectangle btn = { bx, y, BTN_W, BTN_H };
+                const char* label = (i == 0 ? "建1" : (i == 1 ? "建5" : "建10"));
+                Color col = canBuild ? GREEN : GRAY;
+                DrawRectangleRec(btn, col);
+                DrawRectangleLinesEx(btn, 1, DARKGRAY);
+                DrawTextEx(font, label, { btn.x + 2, btn.y + 2 }, 12, 1, BLACK);
+                bx += BTN_W + BTN_GAP;
+            }
+            if (market.getBuildingCounts()[t] > 0 && canBuild) {
+                for (int i = 0; i < 3; ++i) {
+                    Rectangle btn = { bx, y, BTN_W, BTN_H };
+                    const char* label = (i == 0 ? "拆1" : (i == 1 ? "拆5" : "拆10"));
+                    DrawRectangleRec(btn, RED);
+                    DrawRectangleLinesEx(btn, 1, DARKGRAY);
+                    DrawTextEx(font, label, { btn.x + 2, btn.y + 2 }, 12, 1, BLACK);
+                    bx += BTN_W + BTN_GAP;
+                }
+            }
         }
+
+        // ===== 新增：底部注释说明 * 含义 =====
+        float noteY = panelY + (TYPE_COUNT + 2) * 36;
+        DrawTextEx(font, "* 自给农场人口不计入阶级现金池，不通过市场消费。",
+                   { (float)panelX, noteY }, 16, 1, GRAY);
 
     // ----- 建造队列 -----
     } else if (state->currentPanel == 2) {
@@ -434,9 +531,16 @@ void DrawUI(const UIState* state, World& world, Font font) {
         for (int i = startIdx; i < endIdx; ++i) {
             const auto& ord = market.getConstructionQueue()[i];
             float progress = (ord.totalCost > 0) ? (float)(1.0 - ord.remainingCost / ord.totalCost) : 0.0f;
-            DrawTextEx(font, buildingTypeNames[ord.typeIndex].c_str(), { (float)panelX, (float)y }, 18, 1, BLACK);
-            DrawRectangle(panelX + 180, y + 2, 300, 20, LIGHTGRAY);
-            DrawRectangle(panelX + 180, y + 2, (int)(300 * progress), 20, GREEN);
+            const char* ownerStr = "?";
+            switch(ord.owner) {
+                case OWNER_GOVERNMENT: ownerStr = "政府"; break;
+                case OWNER_INITIAL:    ownerStr = "私人"; break;
+                case OWNER_FINANCE:    ownerStr = "金融"; break;
+            }
+            DrawTextEx(font, TextFormat("[%s] %s", ownerStr, buildingTypeNames[ord.typeIndex].c_str()),
+                       { (float)panelX, (float)y }, 18, 1, BLACK);
+            DrawRectangle(panelX + 200, y + 2, 280, 20, LIGHTGRAY);
+            DrawRectangle(panelX + 200, y + 2, (int)(280 * progress), 20, GREEN);
             DrawTextEx(font, TextFormat("%.0f / %.0f", ord.totalCost - ord.remainingCost, ord.totalCost),
                        { (float)(panelX + 490), (float)y }, 16, 1, BLACK);
 
@@ -449,7 +553,7 @@ void DrawUI(const UIState* state, World& world, Font font) {
             y += 30;
         }
 
-    // ----- 其他 -----
+    // ----- 其他（宏观 + 金融数据） -----
     } else if (state->currentPanel == 3) {
         float detailX = panelX + 10, detailY = panelY + 5;
         DrawTextEx(font, "宏观数据", { detailX, detailY }, 24, 1, BLACK);
@@ -464,5 +568,18 @@ void DrawUI(const UIState* state, World& world, Font font) {
         DrawScalarCurve(market.getPopulationHistory(),
                         detailX, detailY, chartW, chartH,
                         DARKGREEN, font, "人口 (周度)");
+        detailY += chartH + 40;
+
+        DrawTextEx(font, "金融数据", { detailX, detailY }, 22, 1, DARKGRAY);
+        detailY += 30;
+        DrawTextEx(font, TextFormat("总货币供给: %.2f 万", market.getTotalMoneySupply() / 10000.0),
+                   { detailX, detailY }, 20, 1, BLACK);
+        detailY += 26;
+        DrawTextEx(font, TextFormat("投资池资金: %.2f 万", market.getInvestmentPool() / 10000.0),
+                   { detailX, detailY }, 20, 1, BLACK);
+        detailY += 26;
+        DrawTextEx(font, TextFormat("劳工现金: %.2f 万  工程师: %.2f 万  资本家: %.2f 万",
+                   market.getClassCash(0)/10000.0, market.getClassCash(1)/10000.0, market.getClassCash(2)/10000.0),
+                   { detailX, detailY }, 20, 1, BLACK);
     }
 }
