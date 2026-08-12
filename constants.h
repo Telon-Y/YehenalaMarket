@@ -3,6 +3,7 @@
 #include <vector>
 #include <string>
 #include <array>
+#include "decimal.h"
 
 // 模拟参数
 constexpr int TOTAL_STEPS = 6000;
@@ -44,14 +45,14 @@ inline const std::array<double, NUM_GOODS> referencePrice = {
     8000.0
 };
 
-// 价格抑制系数 (1.2: 贵金属0.1)
+// 价格抑制系数 (加强版：默认0.30，原为0.15)
 inline const std::array<double, NUM_GOODS> priceSuppressBase = [](){
     std::array<double, NUM_GOODS> arr;
-    arr.fill(0.15);
-    arr[1] = 0.18;  // 加工食品
-    arr[4] = 0.12;  // 高档服装
-    arr[10] = 0.25; // 建造力
-    arr[11] = 0.1;  // 贵金属
+    arr.fill(0.30);          // 默认：从0.15提高至0.30
+    arr[1] = 0.36;           // 加工食品
+    arr[4] = 0.24;           // 高档服装
+    arr[10] = 0.50;          // 建造力
+    arr[11] = 0.20;          // 贵金属
     return arr;
 }();
 
@@ -121,3 +122,32 @@ constexpr double BASE_CREDIT_PER_BANK = 500000.0;
 constexpr double BASE_CREDIT_PER_FINANCE = 1000000.0;
 constexpr double BANK_MONEY_MULTIPLIER = 2.0;
 constexpr double ANNUAL_INTEREST_RATE = 0.05;
+
+// ===== 新增：劳工负债挂钩系数 =====
+constexpr double LABOR_DEBT_SCALE = 1e9;
+
+// ===== 新增：现金池上限常量 =====
+constexpr double CLASS_CASH_MAX    = 1e12;
+constexpr double BUILDING_CASH_MAX  = 1e12;
+constexpr double INVEST_POOL_MAX    = 1e12;
+constexpr double MONEY_SUPPLY_MAX   = 1e13;
+
+// ===== 新增：注册字体所需字符常量（如需离线收集可保留） =====
+// （本版本不再需要手动维护字符，main.cpp 会自动注册全部汉字）
+
+// ===== 新增：贷款系统常量 =====
+constexpr double BANK_LOAN_UNIT_VALUE = 1000000.0;          // 每单位贷款 = 100万
+constexpr int    BANK_MAX_LOAN_PER_LEVEL = 50;              // 每级银行最多50单位
+constexpr double INVEST_LOAN_TRIGGER_RATIO = 2.0;           // 投资池缺口触发倍数(200%)
+constexpr int    INVEST_LOAN_TERM_WEEKS = 260;              // 5年 = 260周
+
+// ===== 高精度数值类型与上限 =====
+using Money = Decimal;
+inline const Money CLASS_CASH_MAX_MONEY    = Money(1e12L);
+inline const Money BUILDING_CASH_MAX_MONEY = Money(1e12L);
+inline const Money INVEST_POOL_MAX_MONEY   = Money(1e12L);
+inline const Money MONEY_SUPPLY_MAX_MONEY  = Money(1e13L);
+
+inline const Money BASE_CREDIT_PER_BANK_MONEY      = Money(500000.0);
+inline const Money BASE_CREDIT_PER_FINANCE_MONEY   = Money(1000000.0);
+inline const Money AVERAGE_WAGE_MONEY              = Money(6.75);

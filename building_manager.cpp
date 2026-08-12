@@ -1,4 +1,3 @@
-// building_manager.cpp
 #include "building_manager.h"
 #include <algorithm>
 #include <cmath>
@@ -6,7 +5,7 @@
 
 BuildingManager::BuildingManager() {
     templates = createBuildingTemplates();
-    buildingCounts.fill(10); // 初始等级 10（根据需求调整）
+    buildingCounts.fill(10);
     for (int t = 0; t < TYPE_COUNT; ++t) {
         ownedBuildings[t][OWNER_INITIAL] = buildingCounts[t];
         ownedBuildings[t][OWNER_GOVERNMENT] = 0;
@@ -14,6 +13,8 @@ BuildingManager::BuildingManager() {
     }
     buildingCounts[FINANCE] = 0;
     buildingCounts[BANK] = 10;
+    // 同步所有权：金融区初始没有任何建筑
+    ownedBuildings[FINANCE].fill(0);
 
     avgProfitRates.fill(0.0);
     smoothedProfitRate.fill(0.0);
@@ -21,11 +22,11 @@ BuildingManager::BuildingManager() {
     consecutiveLowEmpWeeks.fill(0);
     for (int t = 0; t < TYPE_COUNT; ++t) {
         if (t == BANK)
-            cashPools[t] = 100'000'000.0;
+            cashPools[t] = Money(100000000.0);
         else if (t == FINANCE || t == CONST_DEPT)
-            cashPools[t] = 0.0;
+            cashPools[t] = Money(0);
         else
-            cashPools[t] = buildingCounts[t] * 500000.0;
+            cashPools[t] = Money(buildingCounts[t]) * Money(500000.0);
         clampCash(t);
     }
     lastDemolishStep.fill(-9999);
@@ -50,26 +51,30 @@ void BuildingManager::placePlayerOrder(int typeIdx, int count, bool top) {
     if (maxQueue <= 0) return;
     if (count > maxQueue) count = maxQueue;
     for (int i = 0; i < count; ++i) {
-        ConstructionOrder order{typeIdx, buildingCost[typeIdx], buildingCost[typeIdx], false, OWNER_GOVERNMENT};
+        ConstructionOrder order{
+            typeIdx, buildingCost[typeIdx], buildingCost[typeIdx],
+            true,               // ignoreCash = true  (玩家订单)
+            OWNER_GOVERNMENT
+        };
         if (top) constructionQueue.insert(constructionQueue.begin(), order);
         else     constructionQueue.push_back(order);
     }
 }
 
-void BuildingManager::demolishBuildings(int typeIdx, int count, int stepCount, double& investmentPool) {
+void BuildingManager::demolishBuildings(int typeIdx, int count, int stepCount, Money& investmentPool) {
     if (typeIdx < 0 || typeIdx >= TYPE_COUNT || buildingCounts[typeIdx] <= 0) return;
     if (stepCount - lastDemolishStep[typeIdx] < demolishCooldownPeriod) return;
     int actual = std::min(count, buildingCounts[typeIdx]);
     if (actual <= 0) return;
 
-    double totalCash = cashPools[typeIdx];
-    double cashPerLevel = (buildingCounts[typeIdx] > 0) ? totalCash / buildingCounts[typeIdx] : 0.0;
+    Money totalCash = cashPools[typeIdx];
+    Money cashPerLevel = (buildingCounts[typeIdx] > 0) ? totalCash / Money(buildingCounts[typeIdx]) : Money(0);
     std::array<int, OWNER_COUNT> local = ownedBuildings[typeIdx];
     int remaining = actual;
     for (int o = 0; o < OWNER_COUNT && remaining > 0; ++o) {
         int take = std::min(remaining, local[o]);
         if (take == 0) continue;
-        double cashTrans = cashPerLevel * take;
+        Money cashTrans = cashPerLevel * Money(take);
         cashPools[typeIdx] -= cashTrans;
         if (o == OWNER_GOVERNMENT || o == OWNER_INITIAL) {
             investmentPool += cashTrans;
@@ -85,6 +90,8 @@ void BuildingManager::demolishBuildings(int typeIdx, int count, int stepCount, d
 
     clampCash(typeIdx);
     clampCash(FINANCE);
+    if (!isfinite(investmentPool)) investmentPool = Money(0);
+    investmentPool = clamp(investmentPool, Money(0), INVEST_POOL_MAX_MONEY);
 
     if (buildingCounts[typeIdx] == 0) {
         cleanupDeadBuilding(typeIdx, investmentPool);
@@ -100,13 +107,12 @@ std::array<int, TYPE_COUNT> BuildingManager::getInQueueCounts() const {
 }
 
 void BuildingManager::aiBuild(double aiProfitThreshold,
-                              const std::array<double, NUM_GOODS>& prices,
-                              double averageWage,
+                              const std::array<Money, NUM_GOODS>& prices,
+                              const std::array<Money, TYPE_COUNT>& wages,
                               double availableLabor,
                               const std::array<double, TYPE_COUNT>& actualEmploymentRate) {
     auto inQueueCount = getInQueueCounts();
 
-    // 计算当前总劳动力需求（含在建）
     double totalLaborDemand = 0.0;
     for (int t = 0; t < TYPE_COUNT; ++t) {
         totalLaborDemand += (buildingCounts[t] + inQueueCount[t]) * templates[t].laborPerUnit;
@@ -124,16 +130,20 @@ void BuildingManager::aiBuild(double aiProfitThreshold,
     bool bankCap = (buildingCounts[BANK] + inQueueCount[BANK] >= maxBanks);
     bool finCap = (buildingCounts[FINANCE] + inQueueCount[FINANCE] >= maxFinances);
 
-    double constrCapacity = 0.0;
+    Money constrCapacity = Money(0);
     if (buildingCounts[CONST_DEPT] > 0) {
         const auto& bt = templates[CONST_DEPT];
-        constrCapacity = buildingCounts[CONST_DEPT] *
-            bt.getProfitFactor(prices, averageWage) *
-            employmentRatio[CONST_DEPT] * bt.outputRate;
+        constrCapacity = Money(buildingCounts[CONST_DEPT]) *
+            bt.getProfitFactor(prices, wages[CONST_DEPT]) *
+            Money(employmentRatio[CONST_DEPT] * bt.outputRate);
     }
-    double totalRemaining = 0.0;
+    Money totalRemaining = Money(0);
     for (const auto& ord : constructionQueue) totalRemaining += ord.remainingCost;
-    if (totalRemaining / (constrCapacity + 0.001) > 52.0 && inQueueCount[CONST_DEPT] == 0 && !constrCap) {
+
+    // ===== 修改：只有允许自动扩建并且产能不足时才自动扩建建造部门 =====
+    if (allowAutoConstExpansion &&
+        totalRemaining / (constrCapacity + Money(0.001)) > Money(52.0) &&
+        inQueueCount[CONST_DEPT] == 0 && !constrCap) {
         double laborNeeded = templates[CONST_DEPT].laborPerUnit;
         if (laborNeeded <= remainingLabor + 1e-9) {
             constructionQueue.insert(constructionQueue.begin(),
@@ -155,9 +165,9 @@ void BuildingManager::aiBuild(double aiProfitThreshold,
         if (buildingCounts[t] == 0 && inQueueCount[t] == 0) {
             const auto& bt = templates[t];
             if (bt.isFinancial) continue;
-            double estCost = bt.getUnitCost(prices, averageWage);
-            double estProfit = (estCost > 1e-6) ? (prices[bt.outputGood] - estCost) / estCost : 0.0;
-            if (estProfit > aiProfitThreshold) {
+            Money estCost = bt.getUnitCost(prices, wages[t]);
+            Money estProfit = (estCost > Money(1e-6)) ? (prices[bt.outputGood] - estCost) / estCost : Money(0);
+            if (estProfit > Money(aiProfitThreshold)) {
                 if (bt.laborPerUnit > remainingLabor + 1e-9) continue;
                 if (t == FARM_GRAIN || t == COTTON) {
                     if (farmSlotsRemaining > 0) {
@@ -193,13 +203,9 @@ void BuildingManager::aiBuild(double aiProfitThreshold,
             int maxExpand = std::max(1, (int)ceil(buildingCounts[t] * 0.1));
             int N_final = std::min(N_remaining, maxExpand);
 
-            // ===== 劳动力限制：实际雇佣率>=90%的建筑不受限制，否则受剩余劳动力限制 =====
             double laborPerUnit = templates[t].laborPerUnit;
             bool highEmployment = actualEmploymentRate[t] >= 0.90;
-            if (highEmployment) {
-                // 高雇佣率：不限制，但不超过队列上限等
-                N_final = N_final;
-            } else {
+            if (!highEmployment) {
                 int maxAllowedByLabor = (laborPerUnit > 1e-6) ? (int)(remainingLabor / laborPerUnit) : 0;
                 N_final = std::min(N_final, maxAllowedByLabor);
             }
@@ -245,27 +251,39 @@ std::array<double, TYPE_COUNT> BuildingManager::calculateBaseOutputRates(double 
     return rates;
 }
 
-double BuildingManager::processConstruction(double availableConstr, double constrPrice,
-                                           double& investmentPool) {
-    double soldConstr = 0.0;
-    for (auto& ord : constructionQueue) {
-        if (availableConstr <= 0) break;
-        double maxAfford = (constrPrice > 1e-9) ? investmentPool / constrPrice : 0.0;
-        if (maxAfford <= 0.0) break;
-        double invest = std::min({ availableConstr, 30.0, ord.remainingCost, maxAfford });
-        if (invest <= 0) continue;
+Money BuildingManager::processConstruction(Money availableConstr, Money constrPrice,
+                                           Money& investmentPool) {
+    Money soldConstr = Money(0);
 
-        double cost = invest * constrPrice;
-        investmentPool -= cost;
-        ord.remainingCost -= invest;
-        availableConstr -= invest;
-        soldConstr += invest;
+    for (auto& ord : constructionQueue) {
+        if (availableConstr <= Money(0)) break;
+
+        if (ord.ignoreCash) {
+            // 玩家订单：无视投资池余额，允许透支
+            Money invest = std::min({ availableConstr, Money(30.0), ord.remainingCost });
+            Money cost = invest * constrPrice;
+            investmentPool -= cost;          // 允许 investmentPool 变为负
+            ord.remainingCost -= invest;
+            availableConstr -= invest;
+            soldConstr += invest;
+        } else {
+            Money maxAfford = (constrPrice > Money(1e-9)) ? investmentPool / constrPrice : Money(0);
+            if (maxAfford <= Money(0)) continue;   // 资金不足，跳过该订单，继续下一个
+
+            Money invest = std::min({ availableConstr, Money(30.0), ord.remainingCost, maxAfford });
+            Money cost = invest * constrPrice;
+            investmentPool -= cost;
+            ord.remainingCost -= invest;
+            availableConstr -= invest;
+            soldConstr += invest;
+        }
     }
 
+    // 移除已完成订单
     constructionQueue.erase(
         std::remove_if(constructionQueue.begin(), constructionQueue.end(),
             [&](ConstructionOrder& o) {
-                if (o.remainingCost <= 0) {
+                if (o.remainingCost <= Money(0)) {
                     buildingCounts[o.typeIndex]++;
                     ownedBuildings[o.typeIndex][o.owner]++;
                     syncFinanceCount();
@@ -274,6 +292,7 @@ double BuildingManager::processConstruction(double availableConstr, double const
                 return false;
             }),
         constructionQueue.end());
+
     return soldConstr;
 }
 
@@ -313,8 +332,8 @@ void BuildingManager::adjustEmployment() {
     }
 }
 
-void BuildingManager::checkDecay(int stepCount, double& investmentPool,
-                                 std::array<double, CLASS_COUNT>& classCash) {
+void BuildingManager::checkDecay(int stepCount, Money& investmentPool,
+                                 std::array<Money, CLASS_COUNT>& classCash) {
     if (stepCount <= 52) {
         resetDecayCounters();
         return;
@@ -324,7 +343,7 @@ void BuildingManager::checkDecay(int stepCount, double& investmentPool,
             consecutiveLowEmpWeeks[t] = 0;
             continue;
         }
-        bool distressed = (employmentRatio[t] <= 0.75) || (cashPools[t] < 0.0);
+        bool distressed = (employmentRatio[t] <= 0.75) || (cashPools[t] < Money(0));
         if (distressed) {
             consecutiveLowEmpWeeks[t]++;
         } else {
@@ -333,14 +352,14 @@ void BuildingManager::checkDecay(int stepCount, double& investmentPool,
 
         if (consecutiveLowEmpWeeks[t] >= 156) {
             int reduce = std::max(1, (int)ceil(buildingCounts[t] * 0.05));
-            double totalCash = cashPools[t];
-            double cashPerLevel = (buildingCounts[t] > 0) ? totalCash / buildingCounts[t] : 0.0;
+            Money totalCash = cashPools[t];
+            Money cashPerLevel = (buildingCounts[t] > 0) ? totalCash / Money(buildingCounts[t]) : Money(0);
             std::array<int, OWNER_COUNT> local = ownedBuildings[t];
             int remaining = reduce;
             for (int o = 0; o < OWNER_COUNT && remaining > 0; ++o) {
                 int take = std::min(remaining, local[o]);
                 if (take == 0) continue;
-                double cashTrans = cashPerLevel * take;
+                Money cashTrans = cashPerLevel * Money(take);
                 cashPools[t] -= cashTrans;
                 if (o == OWNER_GOVERNMENT || o == OWNER_INITIAL) {
                     investmentPool += cashTrans;
@@ -359,6 +378,8 @@ void BuildingManager::checkDecay(int stepCount, double& investmentPool,
             syncFinanceCount();
             clampCash(t);
             clampCash(FINANCE);
+            if (!isfinite(investmentPool)) investmentPool = Money(0);
+            investmentPool = clamp(investmentPool, Money(0), INVEST_POOL_MAX_MONEY);
         }
     }
     clampAllCash();
@@ -368,14 +389,16 @@ void BuildingManager::resetDecayCounters() {
     consecutiveLowEmpWeeks.fill(0);
 }
 
-void BuildingManager::cleanupDeadBuilding(int typeIdx, double& investmentPool) {
+void BuildingManager::cleanupDeadBuilding(int typeIdx, Money& investmentPool) {
     if (buildingCounts[typeIdx] > 0) return;
-    if (cashPools[typeIdx] != 0.0) {
+    if (cashPools[typeIdx] != Money(0)) {
         investmentPool += cashPools[typeIdx];
-        cashPools[typeIdx] = 0.0;
+        cashPools[typeIdx] = Money(0);
     }
     for (int o = 0; o < OWNER_COUNT; ++o) ownedBuildings[typeIdx][o] = 0;
     clampCash(typeIdx);
+    if (!isfinite(investmentPool)) investmentPool = Money(0);
+    investmentPool = clamp(investmentPool, Money(0), INVEST_POOL_MAX_MONEY);
 }
 
 void BuildingManager::syncFinanceCount() {
@@ -394,31 +417,33 @@ void BuildingManager::syncFinanceCount() {
     }
 }
 
-double BuildingManager::transferOwnership(int typeIdx, int count, OwnerType from, OwnerType to,
-                                         double& investmentPool, std::array<double, CLASS_COUNT>& classCash) {
-    if (typeIdx < 0 || typeIdx >= TYPE_COUNT || count <= 0 || from == to) return 0.0;
+Money BuildingManager::transferOwnership(int typeIdx, int count, OwnerType from, OwnerType to,
+                                         Money& investmentPool, std::array<Money, CLASS_COUNT>& classCash) {
+    if (typeIdx < 0 || typeIdx >= TYPE_COUNT || count <= 0 || from == to) return Money(0);
     count = std::min(count, ownedBuildings[typeIdx][from]);
-    if (count == 0) return 0.0;
+    if (count == 0) return Money(0);
 
-    double unitPrice = (buildingCounts[typeIdx] > 0) ? cashPools[typeIdx] / buildingCounts[typeIdx] : 500000.0;
-    double totalPrice = unitPrice * count;
+    Money unitPrice = (buildingCounts[typeIdx] > 0) ? cashPools[typeIdx] / Money(buildingCounts[typeIdx]) : Money(500000.0);
+    Money totalPrice = unitPrice * Money(count);
 
     if (to == OWNER_FINANCE) {
-        if (cashPools[FINANCE] < totalPrice) return 0.0;
+        if (cashPools[FINANCE] < totalPrice) return Money(0);
         cashPools[FINANCE] -= totalPrice;
         clampCash(FINANCE);
     } else if (to == OWNER_GOVERNMENT) {
-        if (investmentPool < totalPrice) return 0.0;
+        if (investmentPool < totalPrice) return Money(0);
         investmentPool -= totalPrice;
     } else if (to == OWNER_INITIAL) {
-        if (classCash[CAPITALIST] < totalPrice) return 0.0;
+        if (classCash[CAPITALIST] < totalPrice) return Money(0);
         classCash[CAPITALIST] -= totalPrice;
+        classCash[CAPITALIST] = clamp(classCash[CAPITALIST], -CLASS_CASH_MAX_MONEY, CLASS_CASH_MAX_MONEY);
     }
 
     if (from == OWNER_GOVERNMENT) {
         investmentPool += totalPrice;
     } else if (from == OWNER_INITIAL) {
         classCash[CAPITALIST] += totalPrice;
+        classCash[CAPITALIST] = clamp(classCash[CAPITALIST], -CLASS_CASH_MAX_MONEY, CLASS_CASH_MAX_MONEY);
     } else if (from == OWNER_FINANCE) {
         cashPools[FINANCE] += totalPrice;
         clampCash(FINANCE);
@@ -427,5 +452,7 @@ double BuildingManager::transferOwnership(int typeIdx, int count, OwnerType from
     ownedBuildings[typeIdx][from] -= count;
     ownedBuildings[typeIdx][to]   += count;
     syncFinanceCount();
+    if (!isfinite(investmentPool)) investmentPool = Money(0);
+    investmentPool = clamp(investmentPool, Money(0), INVEST_POOL_MAX_MONEY);
     return totalPrice;
 }

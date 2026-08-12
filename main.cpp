@@ -6,9 +6,18 @@
 #include "world.h"
 #include "ui.h"
 
-static std::vector<int> collectCodepoints(const std::vector<std::string>& texts) {
+// 收集字体所需的码点
+// 不再需要手动维护 UI 字符串列表，只需自动注册：
+//   - ASCII 可见字符
+//   - CJK 基本区全部汉字（简体+繁体）
+//   - CJK 标点符号（，。！？等）
+//   - 全角 ASCII 变体（ＡＢＣ等）
+//   - 常用特殊符号（← → · —— “” ‘’ 等）
+static std::vector<int> collectCodepoints(const std::vector<std::string>& extraTexts = {}) {
     std::set<int> cps;
-    for (const auto& s : texts) {
+
+    // 1. 从显式传入的文本中收集（通常用于特殊符号）
+    for (const auto& s : extraTexts) {
         for (size_t i = 0; i < s.size(); ) {
             unsigned char c = static_cast<unsigned char>(s[i]);
             int cp = 0;
@@ -24,6 +33,32 @@ static std::vector<int> collectCodepoints(const std::vector<std::string>& texts)
             i += extra + 1;
         }
     }
+
+    // 2. ASCII 可见字符（32~126）
+    for (int c = 32; c <= 126; ++c) cps.insert(c);
+
+    // 3. CJK 基本区全部汉字（0x4E00 - 0x9FFF）
+    //    这一步覆盖所有 UI 中可能出现的中文，无需手动添加
+    for (int cp = 0x4E00; cp <= 0x9FFF; ++cp) cps.insert(cp);
+
+    // 4. CJK 标点符号（0x3000 - 0x303F）
+    for (int cp = 0x3000; cp <= 0x303F; ++cp) cps.insert(cp);
+
+    // 5. 全角 ASCII 变体（0xFF00 - 0xFFEF）
+    for (int cp = 0xFF00; cp <= 0xFFEF; ++cp) cps.insert(cp);
+
+    // 6. 常用特殊符号
+    cps.insert(0x00B7);   // · 中间点
+    cps.insert(0x2190);   // ←
+    cps.insert(0x2191);   // ↑
+    cps.insert(0x2192);   // →
+    cps.insert(0x2193);   // ↓
+    cps.insert(0x2014);   // — 破折号
+    cps.insert(0x2018);   // ‘
+    cps.insert(0x2019);   // ’
+    cps.insert(0x201C);   // “
+    cps.insert(0x201D);   // ”
+
     return std::vector<int>(cps.begin(), cps.end());
 }
 
@@ -36,87 +71,8 @@ int main() {
     SetTargetFPS(60);
     SetExitKey(KEY_NULL);
 
-    std::vector<std::string> uiStrings;
-    for (const auto& name : commodityNames)   uiStrings.push_back(name);
-    for (const auto& name : buildingTypeNames) uiStrings.push_back(name);
-    uiStrings.push_back("暂停");
-    uiStrings.push_back("1倍");
-    uiStrings.push_back("2倍");
-    uiStrings.push_back("5倍");
-    uiStrings.push_back("周期:");
-    uiStrings.push_back("AI 利润阈值:");
-    uiStrings.push_back("(上/下键)");
-    uiStrings.push_back("商品市场");
-    uiStrings.push_back("建筑");
-    uiStrings.push_back("建造队列");
-    uiStrings.push_back("其他");
-    uiStrings.push_back("商品:");
-    uiStrings.push_back("当前价格:");
-    uiStrings.push_back("(相对初始:");
-    uiStrings.push_back("市场产量:");
-    uiStrings.push_back("全市场消费:");
-    uiStrings.push_back("短缺");
-    uiStrings.push_back("近期价格变化 (最近200周)");
-    uiStrings.push_back("总价格变化 (全部周期)");
-    uiStrings.push_back("价格总表 (全部商品 · 绝对价格)");
-    uiStrings.push_back("未选择任何商品");
-    uiStrings.push_back("建筑名称");
-    uiStrings.push_back("现有(在建)");
-    uiStrings.push_back("雇佣率%");
-    uiStrings.push_back("利润率%");
-    uiStrings.push_back("现金池");
-    uiStrings.push_back("自给农场");
-    uiStrings.push_back("建1");
-    uiStrings.push_back("建5");
-    uiStrings.push_back("建10");
-    uiStrings.push_back("拆1");
-    uiStrings.push_back("拆5");
-    uiStrings.push_back("拆10");
-    uiStrings.push_back("第");
-    uiStrings.push_back("页");
-    uiStrings.push_back("←");
-    uiStrings.push_back("→");
-    uiStrings.push_back("翻页");
-    uiStrings.push_back("紧急建造部门");
-    uiStrings.push_back("预计");
-    uiStrings.push_back("周");
-    uiStrings.push_back("宏观数据");
-    uiStrings.push_back("GDP (周度)");
-    uiStrings.push_back("人口 (周度)");
-    // 1.2 新增金融面板字符串
-    uiStrings.push_back("金融数据");
-    uiStrings.push_back("总货币供给:");
-    uiStrings.push_back("投资池资金:");
-    uiStrings.push_back("劳工现金:");
-    uiStrings.push_back("工程师:");
-    uiStrings.push_back("资本家:");
-    uiStrings.push_back("万");
-    // ===== 新增：雇佣相关字符串 =====
-    uiStrings.push_back("雇佣倾向%");
-    uiStrings.push_back("实际雇佣");
-    uiStrings.push_back("实际率%");
-    uiStrings.push_back("所有权");
-    uiStrings.push_back("(G/P/F)");
-    uiStrings.push_back("[");
-    uiStrings.push_back("]");
-    uiStrings.push_back("私人");
-    uiStrings.push_back("金融");
-    uiStrings.push_back("政府");
-    uiStrings.push_back("剩余/总成本");
-    uiStrings.push_back("继续");
-    uiStrings.push_back("-");
-    uiStrings.push_back("+");
-    uiStrings.push_back("%");
-    uiStrings.push_back("(");
-    uiStrings.push_back(")");
-    uiStrings.push_back("·");
-    uiStrings.push_back("/");
-    uiStrings.push_back(":");
-
-    std::vector<int> codepoints = collectCodepoints(uiStrings);
-    for (int c = 32; c <= 126; ++c) codepoints.push_back(c);
-    std::set<int> uniqueCPs(codepoints.begin(), codepoints.end());
-    codepoints.assign(uniqueCPs.begin(), uniqueCPs.end());
+    // 不再需要手动维护 uiStrings，直接生成全部需要的码点
+    std::vector<int> codepoints = collectCodepoints();
     printf("Collected %d unique codepoints for UI.\n", (int)codepoints.size());
 
     Font font = { 0 };

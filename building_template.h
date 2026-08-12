@@ -7,13 +7,13 @@ struct BuildingTemplate {
     std::string name;
     int outputGood;                  // 商品索引，-1 表示无商品产出（金融建筑）
     double outputRate;               // 基础产出率（金融建筑可忽略）
-    std::array<double, NUM_GOODS> inputs;
-    double laborPerUnit;
-    bool isFinancial = false;        // 1.2: 金融建筑标记
-    double moneyMultiplier = 1.0;    // 1.2: 银行铸币乘数（仅银行有效）
+    std::array<double, NUM_GOODS> inputs;   // 输入系数（保持 double，非货币）
+    double laborPerUnit;             // 劳动人数（非货币）
+    bool isFinancial = false;
+    double moneyMultiplier = 1.0;    // 倍率（非货币）
 
-    double getUnitCost(const std::array<double, NUM_GOODS>& prices, double wageRate) const;
-    double getProfitFactor(const std::array<double, NUM_GOODS>& prices, double wageRate) const;
+    Money getUnitCost(const std::array<Money, NUM_GOODS>& prices, Money wageRate) const;
+    Money getProfitFactor(const std::array<Money, NUM_GOODS>& prices, Money wageRate) const;
 };
 
 std::vector<BuildingTemplate> createBuildingTemplates();

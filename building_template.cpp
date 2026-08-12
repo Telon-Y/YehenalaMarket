@@ -1,22 +1,22 @@
 #include "building_template.h"
 #include <algorithm>
 
-double BuildingTemplate::getUnitCost(const std::array<double, NUM_GOODS>& prices, double wageRate) const {
-    double cost = laborPerUnit * wageRate;
+Money BuildingTemplate::getUnitCost(const std::array<Money, NUM_GOODS>& prices, Money wageRate) const {
+    Money cost = Money(laborPerUnit) * wageRate; // 劳动成本
     for (int g = 0; g < NUM_GOODS; ++g)
-        cost += prices[g] * inputs[g];
+        cost += prices[g] * Money(inputs[g]);    // 原料成本
     return cost;
 }
 
-double BuildingTemplate::getProfitFactor(const std::array<double, NUM_GOODS>& prices, double wageRate) const {
-    if (isFinancial) return 1.0;
-    double unitCost = getUnitCost(prices, wageRate);
-    double outputPrice = prices[outputGood];
-    if (unitCost < 1e-6) return 1.0;
-    double margin = outputPrice - unitCost;
-    double ratio = margin / unitCost;
-    double factor = std::max(0.2, 1.0 + ratio * 2.0);
-    return std::min(factor, 1.0);
+Money BuildingTemplate::getProfitFactor(const std::array<Money, NUM_GOODS>& prices, Money wageRate) const {
+    if (isFinancial) return Money(1.0);
+    Money unitCost = getUnitCost(prices, wageRate);
+    Money outputPrice = prices[outputGood];
+    if (unitCost < Money(1e-6)) return Money(1.0);
+    Money margin = outputPrice - unitCost;
+    Money ratio = margin / unitCost;
+    Money factor = std::max(Money(0.2), Money(1.0) + ratio * Money(2.0));
+    return std::min(factor, Money(1.0));
 }
 
 std::vector<BuildingTemplate> createBuildingTemplates() {
@@ -33,13 +33,10 @@ std::vector<BuildingTemplate> createBuildingTemplates() {
         bt.inputs.fill(0.0);
         for (auto [gi, amt] : in)
             bt.inputs[gi] = amt;
-        // ===== 修改 1：劳动力固定 =====
-        // 所有实业建筑（非金融）每级固定雇佣 5000 人
-        // 金融建筑（银行、金融区）每级 1000 人
         if (isFin) {
-            bt.laborPerUnit = 1000.0;      // 银行/金融区：1000 人/级
+            bt.laborPerUnit = 1000.0;
         } else {
-            bt.laborPerUnit = 5000.0;      // 实业建筑：5000 人/级
+            bt.laborPerUnit = 5000.0;
         }
         bt.isFinancial = isFin;
         bt.moneyMultiplier = mult;
@@ -56,7 +53,7 @@ std::vector<BuildingTemplate> createBuildingTemplates() {
     setTemplate(TOOL_FACT,     "工具厂",         8,  80, {{7, 20.0/80}});
     setTemplate(HOUSING,       "住房",           9,  60, {{7, 5.0/60}, {8, 5.0/60}});
     setTemplate(CONST_DEPT,    "建造部门",       10, 15, {{7, 25.0/15}, {6, 25.0/15}, {8, 20.0/15}});
-    setTemplate(GOLD_MINE,     "金矿",           11, 40, {{8, 15.0/40}, {5, 5.0/40}});
+    setTemplate(GOLD_MINE,     "金矿",           11, 25, {{8, 15.0/25}, {5, 15.0/25}});
     setTemplate(BANK,          "银行",          -1,  0, {{11, 20.0}}, true, BANK_MONEY_MULTIPLIER);
     setTemplate(FINANCE,       "金融区",         -1,  0, {{8, 5.0}}, true);
 

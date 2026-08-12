@@ -1,23 +1,36 @@
-// ui.cpp
+// ==================== ui.cpp ====================
+// 完整文件，包含贷款信息显示
+
 #include "ui.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <vector>
+#include <string>
 
-// ===== 新增：按钮尺寸常量 =====
+// ===== 按钮尺寸常量 =====
 static constexpr float BTN_W = 30.0f;
 static constexpr float BTN_H = 20.0f;
 static constexpr float BTN_GAP = 4.0f;
 
+// ===== 扩展的格式化函数：支持 k, m, b, t, p =====
 static void FormatCash(double cash, char* buf, size_t bufSize) {
     if (cash == 0.0) { snprintf(buf, bufSize, "0.00"); return; }
     double absCash = fabs(cash);
     const char* sign = (cash < 0) ? "-" : "";
-    if (absCash >= 1e9) snprintf(buf, bufSize, "%s%.2fb", sign, absCash / 1e9);
+    if (absCash >= 1e18) snprintf(buf, bufSize, "%s%.2fe", sign, absCash / 1e18);
+    else if (absCash >= 1e15) snprintf(buf, bufSize, "%s%.2fp", sign, absCash / 1e15);
+    else if (absCash >= 1e12) snprintf(buf, bufSize, "%s%.2ft", sign, absCash / 1e12);
+    else if (absCash >= 1e9) snprintf(buf, bufSize, "%s%.2fb", sign, absCash / 1e9);
     else if (absCash >= 1e6) snprintf(buf, bufSize, "%s%.2fm", sign, absCash / 1e6);
     else if (absCash >= 1e3) snprintf(buf, bufSize, "%s%.2fk", sign, absCash / 1e3);
     else snprintf(buf, bufSize, "%.2f", cash);
+}
+
+// 重载：接受 Money 类型，转为 double 后调用上面
+static void FormatCash(const Money& cash, char* buf, size_t bufSize) {
+    FormatCash(cash.toDouble(), buf, bufSize);
 }
 
 void InitUIState(UIState* state) {
@@ -127,7 +140,7 @@ void HandleInput(UIState* state, World& world) {
 
 // ---------- 绘图辅助函数 ----------
 
-static void DrawPriceCurve(const std::vector<std::array<double, NUM_GOODS>>& hist,
+static void DrawPriceCurve(const std::vector<std::array<Money, NUM_GOODS>>& hist,
                            int goodIdx, float chartX, float chartY, float chartW, float chartH,
                            Color color, Font font, int startRow = -1) {
     if (hist.empty()) return;
@@ -137,11 +150,16 @@ static void DrawPriceCurve(const std::vector<std::array<double, NUM_GOODS>>& his
     if (count < 2) return;
     double minP = 1e30, maxP = -1e30;
     for (size_t i = first; i < last; ++i) {
-        double v = hist[i][goodIdx];
+        double v = hist[i][goodIdx].toDouble();
         if (v < minP) minP = v;
         if (v > maxP) maxP = v;
     }
     if (maxP <= minP) maxP = minP + 1.0;
+    double padding = (maxP - minP) * 0.1;
+    minP -= padding;
+    maxP += padding;
+    if (minP < 0.0) minP = 0.0;
+
     DrawLine(chartX, chartY, chartX, chartY + chartH, BLACK);
     DrawLine(chartX, chartY + chartH, chartX + chartW, chartY + chartH, BLACK);
     char maxBuf[32], minBuf[32];
@@ -150,21 +168,54 @@ static void DrawPriceCurve(const std::vector<std::array<double, NUM_GOODS>>& his
     DrawTextEx(font, maxBuf, { chartX + 2, chartY }, 14, 1, BLACK);
     DrawTextEx(font, minBuf, { chartX + 2, chartY + chartH - 16 }, 14, 1, BLACK);
     float prevX = chartX;
-    float prevY = chartY + chartH - (float)((hist[first][goodIdx] - minP) / (maxP - minP) * chartH);
+    float prevY = chartY + chartH - (float)((hist[first][goodIdx].toDouble() - minP) / (maxP - minP) * chartH);
     for (size_t i = first + 1; i < last; ++i) {
         float x = chartX + (i - first) * chartW / (count - 1);
-        float y = chartY + chartH - (float)((hist[i][goodIdx] - minP) / (maxP - minP) * chartH);
+        float y = chartY + chartH - (float)((hist[i][goodIdx].toDouble() - minP) / (maxP - minP) * chartH);
         DrawLine(prevX, prevY, x, y, color);
         prevX = x; prevY = y;
     }
 }
 
-static void DrawScalarCurve(const std::vector<double>& data,
+static void DrawScalarCurve(const std::vector<Money>& data,
                             float chartX, float chartY, float chartW, float chartH,
                             Color color, Font font, const char* label) {
     if (data.size() < 2) return;
-    double minV = *std::min_element(data.begin(), data.end());
-    double maxV = *std::max_element(data.begin(), data.end());
+    double minV = 1e30, maxV = -1e30;
+    for (const auto& v : data) {
+        double dv = v.toDouble();
+        if (dv < minV) minV = dv;
+        if (dv > maxV) maxV = dv;
+    }
+    if (maxV <= minV) maxV = minV + 1.0;
+    DrawLine(chartX, chartY, chartX, chartY + chartH, BLACK);
+    DrawLine(chartX, chartY + chartH, chartX + chartW, chartY + chartH, BLACK);
+    char maxBuf[32], minBuf[32];
+    FormatCash(maxV, maxBuf, sizeof(maxBuf));
+    FormatCash(minV, minBuf, sizeof(minBuf));
+    DrawTextEx(font, maxBuf, { chartX + 2, chartY }, 14, 1, BLACK);
+    DrawTextEx(font, minBuf, { chartX + 2, chartY + chartH - 16 }, 14, 1, BLACK);
+    if (label) DrawTextEx(font, label, { chartX + 2, chartY - 22 }, 16, 1, DARKGRAY);
+    size_t count = data.size();
+    float prevX = chartX;
+    float prevY = chartY + chartH - (float)((data[0].toDouble() - minV) / (maxV - minV) * chartH);
+    for (size_t i = 1; i < count; ++i) {
+        float x = chartX + (float)i / (count - 1) * chartW;
+        float y = chartY + chartH - (float)((data[i].toDouble() - minV) / (maxV - minV) * chartH);
+        DrawLine(prevX, prevY, x, y, color);
+        prevX = x; prevY = y;
+    }
+}
+
+static void DrawScalarCurveDouble(const std::vector<double>& data,
+                                  float chartX, float chartY, float chartW, float chartH,
+                                  Color color, Font font, const char* label) {
+    if (data.size() < 2) return;
+    double minV = 1e30, maxV = -1e30;
+    for (const auto& v : data) {
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
+    }
     if (maxV <= minV) maxV = minV + 1.0;
     DrawLine(chartX, chartY, chartX, chartY + chartH, BLACK);
     DrawLine(chartX, chartY + chartH, chartX + chartW, chartY + chartH, BLACK);
@@ -185,7 +236,7 @@ static void DrawScalarCurve(const std::vector<double>& data,
     }
 }
 
-static void DrawMultiPriceCurve(const std::vector<std::array<double, NUM_GOODS>>& hist,
+static void DrawMultiPriceCurve(const std::vector<std::array<Money, NUM_GOODS>>& hist,
                                 const std::vector<int>& goodIndices,
                                 const std::vector<Color>& colors,
                                 Font font, Rectangle chartRect) {
@@ -196,12 +247,16 @@ static void DrawMultiPriceCurve(const std::vector<std::array<double, NUM_GOODS>>
     double minV = 1e30, maxV = -1e30;
     for (int g : goodIndices) {
         for (const auto& row : hist) {
-            double v = row[g];
+            double v = row[g].toDouble();
             if (v < minV) minV = v;
             if (v > maxV) maxV = v;
         }
     }
     if (maxV <= minV) maxV = minV + 1.0;
+    double padding = (maxV - minV) * 0.1;
+    minV -= padding;
+    maxV += padding;
+    if (minV < 0.0) minV = 0.0;
 
     const float legendWidth = 150;
     const float legendPadding = 5;
@@ -236,12 +291,12 @@ static void DrawMultiPriceCurve(const std::vector<std::array<double, NUM_GOODS>>
     for (size_t idx = 0; idx < goodIndices.size(); ++idx) {
         int g = goodIndices[idx];
         Color col = colors[idx];
-        double v0 = hist[0][g];
+        double v0 = hist[0][g].toDouble();
         float prevX = plotArea.x;
         float prevY = plotArea.y + plotArea.height - (float)((v0 - minV) / (maxV - minV) * plotArea.height);
         for (size_t i = 1; i < count; ++i) {
             float x = plotArea.x + (float)i / (count - 1) * plotArea.width;
-            double v = hist[i][g];
+            double v = hist[i][g].toDouble();
             float y = plotArea.y + plotArea.height - (float)((v - minV) / (maxV - minV) * plotArea.height);
             DrawLine(prevX, prevY, x, y, col);
             prevX = x; prevY = y;
@@ -254,16 +309,16 @@ static int EstimateWeeksLeft(const LocalMarket& market, size_t orderIndex) {
     const auto& constrBt = market.getBuildingTemplates()[CONST_DEPT];
     double capacity = market.getBuildingCounts()[CONST_DEPT] * constrBt.outputRate * market.getEmploymentRatio()[CONST_DEPT];
     if (capacity <= 0.0) return -1;
-    std::vector<double> rem(market.getConstructionQueue().size());
+    std::vector<Money> rem(market.getConstructionQueue().size());
     for (size_t i = 0; i < rem.size(); ++i)
         rem[i] = market.getConstructionQueue()[i].remainingCost;
     int weeks = 0;
-    while (orderIndex < rem.size() && rem[orderIndex] > 0) {
+    while (orderIndex < rem.size() && rem[orderIndex] > Money(0)) {
         double avail = capacity;
         for (size_t i = 0; i < rem.size() && avail > 0; ++i) {
-            if (rem[i] <= 0) continue;
-            double invest = std::min({ avail, 30.0, rem[i] });
-            rem[i] -= invest;
+            if (rem[i] <= Money(0)) continue;
+            double invest = std::min({ avail, 30.0, rem[i].toDouble() });
+            rem[i] -= Money(invest);
             avail -= invest;
         }
         weeks++;
@@ -304,7 +359,6 @@ void DrawUI(const UIState* state, World& world, Font font) {
     int panelX = 240;
     int panelY = 245;
 
-    // ----- 商品市场 -----
     if (state->currentPanel == 0) {
         for (int i = 0; i < NUM_GOODS; ++i) {
             float recY = 235.f + i * 28.f;
@@ -324,14 +378,14 @@ void DrawUI(const UIState* state, World& world, Font font) {
         float detailX = panelX + 10, detailY = panelY - 5;
         DrawTextEx(font, TextFormat("商品: %s", commodityNames[g].c_str()), { detailX, detailY }, 24, 1, BLACK);
         detailY += 28;
-        double currentPrice = market.getPrices()[g];
+        double currentPrice = market.getPrices()[g].toDouble();
         double refPrice = referencePrice[g];
         double pctChange = (refPrice > 0) ? (currentPrice - refPrice) / refPrice * 100.0 : 0.0;
         DrawTextEx(font, TextFormat("当前价格: %.2f   (相对初始: %+.1f%%)", currentPrice, pctChange),
                    { detailX, detailY }, 20, 1, BLACK);
         detailY += 28;
-        double marketOutput = market.getLatestRealOut()[g];
-        double totalCons = market.getLatestPotentialIn()[g] + market.getLatestConsumerTarget()[g];
+        double marketOutput = market.getLatestRealOut()[g].toDouble();
+        double totalCons = market.getLatestPotentialIn()[g].toDouble() + market.getLatestConsumerTarget()[g].toDouble();
         DrawTextEx(font, TextFormat("市场产量: %.2f", marketOutput), { detailX, detailY }, 20, 1, BLACK);
         detailY += 26;
         DrawTextEx(font, TextFormat("全市场消费: %.2f", totalCons), { detailX, detailY }, 20, 1, BLACK);
@@ -370,7 +424,6 @@ void DrawUI(const UIState* state, World& world, Font font) {
             DrawTextEx(font, "未选择任何商品", { chart1X, chart3Y + 50 }, 18, 1, GRAY);
         }
 
-    // ----- 建筑列表（含手动建造/拆除按钮） -----
     } else if (state->currentPanel == 1) {
         float colName    = panelX;
         float colCount   = panelX + 180;
@@ -386,7 +439,6 @@ void DrawUI(const UIState* state, World& world, Font font) {
         DrawTextEx(font, "建筑名称",   { colName,   panelY - 28.f }, 20, 1, BLACK);
         DrawTextEx(font, "现有(在建)", { colCount,  panelY - 28.f }, 20, 1, BLACK);
         DrawTextEx(font, "雇佣倾向%",  { colTend,   panelY - 28.f }, 20, 1, BLACK);
-        // 修改：加 * 标注
         DrawTextEx(font, "实际雇佣*", { colEmp,    panelY - 28.f }, 20, 1, BLACK);
         DrawTextEx(font, "实际率%",    { colRate,   panelY - 28.f }, 20, 1, BLACK);
         DrawTextEx(font, "利润率%",    { colProfit, panelY - 28.f }, 20, 1, BLACK);
@@ -400,12 +452,10 @@ void DrawUI(const UIState* state, World& world, Font font) {
         float y = panelY;
         char buf[64];
 
-        // 自给农场行（修改：显示自给人口，标注蓝色）
         DrawTextEx(font, "自给农场", { colName, y }, 18, 1, DARKGRAY);
         snprintf(buf, sizeof(buf), "%4d(%4d)", market.getSubsistenceFarms(), 0);
         DrawTextEx(font, buf, { colCount, y }, 18, 1, DARKGRAY);
         DrawTextEx(font, "--", { colTend, y }, 18, 1, DARKGRAY);
-        // 显示自给人口
         double subPop = market.getSubsistencePop();
         if (subPop >= 10000.0)
             snprintf(buf, sizeof(buf), "%.1f万", subPop / 10000.0);
@@ -459,7 +509,7 @@ void DrawUI(const UIState* state, World& world, Font font) {
             if (market.getBuildingTemplates()[t].isFinancial || market.getBuildingCounts()[t] == 0) {
                 DrawTextEx(font, "--", { colOutput, y }, 18, 1, GRAY);
             } else {
-                double output = buildingOutput[t];
+                double output = buildingOutput[t].toDouble();
                 if (output < 1e-3) {
                     DrawTextEx(font, "0.0", { colOutput, y }, 18, 1, GRAY);
                 } else {
@@ -503,18 +553,44 @@ void DrawUI(const UIState* state, World& world, Font font) {
             }
         }
 
-        // ===== 新增：底部注释说明 * 含义 =====
         float noteY = panelY + (TYPE_COUNT + 2) * 36;
         DrawTextEx(font, "* 自给农场人口不计入阶级现金池，不通过市场消费。",
                    { (float)panelX, noteY }, 16, 1, GRAY);
 
-    // ----- 建造队列 -----
     } else if (state->currentPanel == 2) {
         const float titleY = panelY - 28;
         DrawTextEx(font, "建造队列 (剩余/总成本)", { (float)panelX, titleY }, 24, 1, BLACK);
         Rectangle urgentBtn = { 1600, 140, 220, 40 };
         DrawRectangleRec(urgentBtn, RED);
         DrawTextEx(font, "紧急建造部门", { urgentBtn.x + 15, urgentBtn.y + 8 }, 20, 1, WHITE);
+
+        Money totalRemaining = Money(0);
+        for (const auto& ord : market.getConstructionQueue()) totalRemaining += ord.remainingCost;
+        double constrCapacity = market.getLastConstrProduced().toDouble();
+        double constrUsed = market.getLastConstrUsed().toDouble();
+        double constrWasted = constrCapacity - constrUsed;
+        if (constrWasted < 0.0) constrWasted = 0.0;
+        double usageRate = (constrCapacity > 0.0) ? (constrUsed / constrCapacity * 100.0) : 0.0;
+
+        int totalWeeksLeft = -1;
+        if (constrCapacity > 0 && totalRemaining > Money(0)) {
+            totalWeeksLeft = (int)std::ceil(totalRemaining.toDouble() / constrCapacity);
+        }
+
+        float infoY = titleY + 58;
+        DrawTextEx(font, TextFormat("建造力产出: %.2f / 周", constrCapacity),
+                   { (float)panelX, infoY }, 20, 1, BLACK);
+        DrawTextEx(font, TextFormat("实际使用: %.2f / 周", constrUsed),
+                   { (float)panelX + 220, infoY }, 20, 1, BLACK);
+        DrawTextEx(font, TextFormat("未使用: %.2f", constrWasted),
+                   { (float)panelX + 440, infoY }, 20, 1, (constrWasted > 0.1) ? RED : BLACK);
+        DrawTextEx(font, TextFormat("利用率: %.1f%%", usageRate),
+                   { (float)panelX + 620, infoY }, 20, 1, BLACK);
+        if (totalWeeksLeft >= 0)
+            DrawTextEx(font, TextFormat("预计全部完成: %d 周", totalWeeksLeft),
+                       { (float)panelX + 800, infoY }, 20, 1, BLACK);
+        else
+            DrawTextEx(font, "预计全部完成: -- 周", { (float)panelX + 800, infoY }, 20, 1, GRAY);
 
         int totalItems = (int)market.getConstructionQueue().size();
         int totalPages = std::max(1, (int)std::ceil(totalItems / 20.0));
@@ -523,14 +599,14 @@ void DrawUI(const UIState* state, World& world, Font font) {
         if (page >= totalPages) page = totalPages - 1;
         int displayPage = page;
         DrawTextEx(font, TextFormat("第 %d / %d 页 (←→ 翻页)", displayPage + 1, totalPages),
-                   { (float)panelX, titleY + 30 }, 18, 1, DARKGRAY);
+                   { (float)panelX, titleY + 28 }, 18, 1, DARKGRAY);
 
         int startIdx = displayPage * 20;
         int endIdx = std::min(startIdx + 20, totalItems);
-        int y = panelY + 30;
+        int y = panelY + 90;
         for (int i = startIdx; i < endIdx; ++i) {
             const auto& ord = market.getConstructionQueue()[i];
-            float progress = (ord.totalCost > 0) ? (float)(1.0 - ord.remainingCost / ord.totalCost) : 0.0f;
+            float progress = (ord.totalCost > Money(0)) ? (float)(1.0 - ord.remainingCost.toDouble() / ord.totalCost.toDouble()) : 0.0f;
             const char* ownerStr = "?";
             switch(ord.owner) {
                 case OWNER_GOVERNMENT: ownerStr = "政府"; break;
@@ -541,7 +617,7 @@ void DrawUI(const UIState* state, World& world, Font font) {
                        { (float)panelX, (float)y }, 18, 1, BLACK);
             DrawRectangle(panelX + 200, y + 2, 280, 20, LIGHTGRAY);
             DrawRectangle(panelX + 200, y + 2, (int)(280 * progress), 20, GREEN);
-            DrawTextEx(font, TextFormat("%.0f / %.0f", ord.totalCost - ord.remainingCost, ord.totalCost),
+            DrawTextEx(font, TextFormat("%.0f / %.0f", ord.totalCost.toDouble() - ord.remainingCost.toDouble(), ord.totalCost.toDouble()),
                        { (float)(panelX + 490), (float)y }, 16, 1, BLACK);
 
             int weeksLeft = EstimateWeeksLeft(market, i);
@@ -553,7 +629,6 @@ void DrawUI(const UIState* state, World& world, Font font) {
             y += 30;
         }
 
-    // ----- 其他（宏观 + 金融数据） -----
     } else if (state->currentPanel == 3) {
         float detailX = panelX + 10, detailY = panelY + 5;
         DrawTextEx(font, "宏观数据", { detailX, detailY }, 24, 1, BLACK);
@@ -565,21 +640,50 @@ void DrawUI(const UIState* state, World& world, Font font) {
                         BLUE, font, "GDP (周度)");
         detailY += chartH + 50;
 
-        DrawScalarCurve(market.getPopulationHistory(),
-                        detailX, detailY, chartW, chartH,
-                        DARKGREEN, font, "人口 (周度)");
+        DrawScalarCurveDouble(market.getPopulationHistory(),
+                              detailX, detailY, chartW, chartH,
+                              DARKGREEN, font, "人口 (周度)");
         detailY += chartH + 40;
 
         DrawTextEx(font, "金融数据", { detailX, detailY }, 22, 1, DARKGRAY);
         detailY += 30;
-        DrawTextEx(font, TextFormat("总货币供给: %.2f 万", market.getTotalMoneySupply() / 10000.0),
+
+        char cashBuf[64];
+        FormatCash(market.getTotalMoneySupply(), cashBuf, sizeof(cashBuf));
+        DrawTextEx(font, TextFormat("总货币供给: %s", cashBuf),
                    { detailX, detailY }, 20, 1, BLACK);
         detailY += 26;
-        DrawTextEx(font, TextFormat("投资池资金: %.2f 万", market.getInvestmentPool() / 10000.0),
+        FormatCash(market.getInvestmentPool(), cashBuf, sizeof(cashBuf));
+        DrawTextEx(font, TextFormat("投资池资金: %s", cashBuf),
                    { detailX, detailY }, 20, 1, BLACK);
         detailY += 26;
-        DrawTextEx(font, TextFormat("劳工现金: %.2f 万  工程师: %.2f 万  资本家: %.2f 万",
-                   market.getClassCash(0)/10000.0, market.getClassCash(1)/10000.0, market.getClassCash(2)/10000.0),
+
+        FormatCash(market.getClassCash(LABORER), cashBuf, sizeof(cashBuf));
+        DrawTextEx(font, TextFormat("劳工现金: %s", cashBuf),
                    { detailX, detailY }, 20, 1, BLACK);
+        detailY += 26;
+        FormatCash(market.getClassCash(ENGINEER), cashBuf, sizeof(cashBuf));
+        DrawTextEx(font, TextFormat("工程师现金: %s", cashBuf),
+                   { detailX, detailY }, 20, 1, BLACK);
+        detailY += 26;
+        FormatCash(market.getClassCash(CAPITALIST), cashBuf, sizeof(cashBuf));
+        DrawTextEx(font, TextFormat("资本家现金: %s", cashBuf),
+                   { detailX, detailY }, 20, 1, BLACK);
+        detailY += 26;
+
+        // ===== 新增：贷款信息显示 =====
+        FormatCash(market.getBankLoanCapacity(), cashBuf, sizeof(cashBuf));
+        DrawTextEx(font, TextFormat("银行贷款额度: %s", cashBuf),
+                   { detailX, detailY }, 20, 1, BLACK);
+        detailY += 26;
+        FormatCash(market.getInvestmentLoanBalance(), cashBuf, sizeof(cashBuf));
+        DrawTextEx(font, TextFormat("投资池贷款余额: %s", cashBuf),
+                   { detailX, detailY }, 20, 1, BLACK);
+        detailY += 26;
+        if (market.getInvestmentLoanDueStep() >= 0)
+            DrawTextEx(font, TextFormat("贷款到期周: %d", market.getInvestmentLoanDueStep()),
+                       { detailX, detailY }, 20, 1, BLACK);
+        else
+            DrawTextEx(font, "贷款到期周: --", { detailX, detailY }, 20, 1, GRAY);
     }
 }
