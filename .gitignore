@@ -1,0 +1,41 @@
+# CMake build trees and generated files
+/build/
+/build-fresh/
+/out/
+/.codex-build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+DartConfiguration.tcl
+Testing/
+*.ninja
+.ninja_deps
+.ninja_log
+Makefile
+
+# Compiler and test artifacts
+*.a
+*.dll
+*.exe
+*.obj
+*.o
+*.pdb
+*.log
+
+# Keep the packaged game executable under version control.
+!/dist/YehenalaMarket.exe
+
+# Local assistant and document-review state
+/.claude/
+/.docx_review/
+/memory/
+
+# Editor and OS files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+.DS_Store
+Thumbs.db

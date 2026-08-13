@@ -3,6 +3,11 @@
 #include <array>
 #include <string>
 
+enum class BuildingCategory {
+    PRODUCTION,
+    DEVELOPMENT
+};
+
 struct BuildingTemplate {
     std::string name;
     int outputGood;                  // 商品索引，-1 表示无商品产出（金融建筑）
@@ -10,8 +15,11 @@ struct BuildingTemplate {
     std::array<double, NUM_GOODS> inputs;   // 输入系数（保持 double，非货币）
     double laborPerUnit;             // 劳动人数（非货币）
     bool isFinancial = false;
+    BuildingCategory category = BuildingCategory::PRODUCTION;
+    std::array<double, CLASS_COUNT> workforceShares{0.75, 0.20, 0.05};
     double moneyMultiplier = 1.0;    // 倍率（非货币）
 
+    bool isDevelopment() const { return category == BuildingCategory::DEVELOPMENT; }
     Money getUnitCost(const std::array<Money, NUM_GOODS>& prices, Money wageRate) const;
     Money getProfitFactor(const std::array<Money, NUM_GOODS>& prices, Money wageRate) const;
 };

@@ -5,6 +5,8 @@
 #include <string>
 #include <algorithm>
 #include <cstdio>
+#include <unordered_map>
+#include <stdexcept>
 
 // 高精度数值类型：有效数字 + 指数（科学计数法）
 class Decimal {
@@ -12,7 +14,7 @@ public:
     // 构造函数
     Decimal() : mant(0.0L), exp(0) {}
     Decimal(double v) : mant((long double)v), exp(0) { normalize(); }
-    Decimal(long double v) : mant(v), exp(0) { normalize(); }   // 新增：支持 long double
+    Decimal(long double v) : mant(v), exp(0) { normalize(); }
     Decimal(long double m, int e) : mant(m), exp(e) { normalize(); }
     Decimal(int v) : mant((long double)v), exp(0) { normalize(); }
 
@@ -31,7 +33,8 @@ public:
         return Decimal(mant * o.mant, exp + o.exp);
     }
     Decimal operator/(const Decimal& o) const {
-        if (o.mant == 0.0L) return Decimal(0, 0); // 除零保护，返回0
+        if (o.mant == 0.0L)
+            throw std::domain_error("Decimal division by zero");
         return Decimal(mant / o.mant, exp - o.exp);
     }
 
@@ -49,7 +52,6 @@ public:
         if (o.mant == 0) return mant < 0;
         if (mant < 0 && o.mant > 0) return true;
         if (mant > 0 && o.mant < 0) return false;
-        // 同号时比较指数和尾数
         if (exp != o.exp) {
             return (mant > 0) ? (exp < o.exp) : (exp > o.exp);
         }
@@ -79,13 +81,19 @@ private:
     int exp;
 
     void normalize() {
+        if (!std::isfinite(mant)) { exp = 0; return; }
         if (mant == 0.0L) { exp = 0; return; }
         while (std::fabs(mant) >= 10.0L) { mant /= 10.0L; exp++; }
         while (std::fabs(mant) < 1.0L)   { mant *= 10.0L; exp--; }
     }
 
     static long double pow10(int e) {
-        return std::pow(10.0L, (long double)e);
+        static thread_local std::unordered_map<int, long double> cache;
+        auto it = cache.find(e);
+        if (it != cache.end()) return it->second;
+        long double val = std::pow(10.0L, (long double)e);
+        cache[e] = val;
+        return val;
     }
 };
 

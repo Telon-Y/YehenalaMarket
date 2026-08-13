@@ -1,53 +1,65 @@
-# 叶赫那拉计划
+# Yehenala Market Simulation
 
-由于《维多利亚3》的更新质量低下、市场等底层架构过于落后，现希望借助 AI 编程辅助，得到更完善高效的市场模型，并应用于对标《维多利亚3》的免费开源游戏中去。该计划称为 **“叶赫那拉计划”**，游戏名为 **《叶赫那拉》**。
+C++17 economic simulation with a Raylib UI. The current 1.2 model includes
+production chains, labor allocation, construction, money, banking, investment,
+securities, and the first multi-market trade interfaces.
 
-游戏将采用三步走战略开发：
-- 第一个大版本要求建立可视的市场模型；
-- 第二个大版本完成市场功能并接入 GUI；
-- 第三个大版本完成游戏内容搭建。
+## Build on Windows
 
-本游戏基于 **C++** 开发，旨在提升运行速度，图形化界面将相对简陋。
+The repository includes Raylib headers and static libraries. The supplied CMake
+presets use the MinGW and Ninja installations under `D:/Code/mingw64`.
 
-## 核心设计思路
+```powershell
+cmake --preset mingw-debug
+cmake --build --preset mingw-debug
+ctest --preset mingw-debug
+```
 
-《维多利亚3》的本地/全局市场系统因贸易中心与建筑间自由贸易，复杂度随数量呈指数级递增（约 O(n²) 级别）。  
-叶赫那拉改用 **建筑 → 本地市场 → 外地市场 → 外地建筑** 的固定贸易路径，优点在于本地市场数量固定，理论复杂度可降至 **O(1) 或 O(n)**。
+The GUI executable is `out/build/mingw-debug/YehenalaMarket.exe`.
 
-## 版本规划
+## Headless diagnostics
 
-### 1.0 版本 – 市场模拟系统
-- 完成市场模拟微分方程模型
-- 确定商品类型与具体种类
-- 接入建造/拆除系统
-- 搭建简易测试 AI 模拟市场参与者
-- 实现自动扩大再生产直到利润归零的市场系统
+`YehenalaProbe` runs the same core model without opening a window:
 
-### 1.1 版本 – 市场可视化
-- 通过简单图形界面展示市场变量（对标维多利亚3市场页面）
-- 展示内容：当前价格、溢价比例、供需关系、价格折线图等
+```powershell
+out/build/mingw-debug/YehenalaProbe.exe 6000 520
+```
 
-### 1.2 版本 – 货币与金融
-- 搭建相对完善的货币系统（对标维多利亚3的英镑系统）
-- 引入自动追求盈利的金融业并持续扩大再生产
-- 引入基于需求的建造融资关系
+Arguments are the number of simulated weeks and the reporting interval.
 
-### 2.0 版本 – 本地市场与库存系统
-- 完成具体地块划分，设置本地市场与本地库存
-- 本地建筑仅与本地市场交互，市场间自动补全商品库存
+## Tests
 
-### 2.1 版本 – GUI 接入
-- 本阶段实现《维多利亚3》发售版本约 50% 功能，具备一定可玩性
+CTest covers:
 
-### 2.2 版本 – 金融补完
-- 引入银行和本币系统
-- 允许实体产业发行金融产品，由金融区购买
-- 金融产品接入独立随机市场
+- Decimal division-by-zero behavior in all build modes.
+- Pool-derived bank levels, exact upgrade thresholds, minimum availability,
+  and the rule that banks never enter the construction queue.
+- Development building classification: construction and financial buildings
+  remain fully employed despite labor shortages or operating-fund constraints.
+- Development wages are paid by each building owner's pool. Financial levels
+  employ 1,000 people: 500 laborers, 250 engineers, and 250 capitalists.
+- Construction departments are government-owned development buildings. Their
+  wages and inputs use the player/government fund, while private construction
+  spending transfers the matching amount from the investment pool to that fund.
+- Construction output remains available at full employment even when there are
+  no current construction orders or no separate construction-building cash.
+- 6000-week numerical stability and the system credit ceiling.
+- Invalid market lookup behavior.
+- Cross-market goods and money conservation.
+- Smoke simulations at 52, 700, 2600, and 6000 weeks.
 
-### 3.0 版本 – Pop 系统与国家系统
-- 达到《维多利亚3》发售版本约 70% 功能
-- 直接复用维多利亚3的数据
+## Source layout
 
-### 3.1 版本 – 游戏内 AI
+- `local_market*.cpp`: weekly market pipeline, labor, supply, consumption,
+  finance, settlement, and history.
+- `building_manager*.cpp`: buildings, construction, AI expansion, employment,
+  decay, and ownership.
+- `price_engine.*`: commodity price dynamics.
+- `world.*`: market collection and trade paths.
+- `ui_*.cpp`, `main.cpp`: Raylib presentation and input.
+- `tools/`: headless diagnostic executables.
+- `tests/`: deterministic integration tests.
 
-### 3.2 版本 – 其他功能补完
+All source files are UTF-8. The application reads the selected font's `cmap`
+table and passes every mapped Unicode codepoint to Raylib, including extended
+CJK, compatibility, symbol, and private-use glyphs supported by the font.

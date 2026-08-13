@@ -13,7 +13,7 @@ constexpr int AI_INTERVAL = 1;
 constexpr int NUM_GOODS = 12;
 
 // 建筑类型数量 (1.2: 新增金矿、银行、金融区)
-constexpr int TYPE_COUNT = 14;
+constexpr int TYPE_COUNT = 16;
 
 // 消费组数量
 constexpr int GROUP_COUNT = 4;
@@ -29,13 +29,13 @@ inline const std::vector<std::string> commodityNames = {
 inline const std::vector<std::string> buildingTypeNames = {
     "谷物农场", "加工食品厂", "棉花种植园", "服装厂", "高档服装厂",
     "煤矿", "铁矿", "炼钢厂", "工具厂", "住房", "建造部门",
-    "金矿", "银行", "金融区"   // 1.2: 新增
+    "金矿", "中央银行", "金融区", "工商银行", "储蓄银行"   // 1.2: 新增
 };
 
 // 建造成本 (1.2: 新增金矿600, 银行800, 金融区800)
 inline const std::vector<double> buildingCost = {
     200, 600, 200, 600, 600, 600, 600, 800, 800, 800, 100,
-    600, 800, 800
+    600, 800, 800, 800, 800        // 金矿、央行、金融区、工商银行、储蓄银行
 };
 
 // 初始参考价格 (1.2: 贵金属初始参考价8000)
@@ -56,11 +56,11 @@ inline const std::array<double, NUM_GOODS> priceSuppressBase = [](){
     return arr;
 }();
 
-// 需求表（每10万人）
+// 需求表（每10万人）。数值已按当前初始产能校准。
 inline const std::array<std::array<double, GROUP_COUNT>, 3> demandTable = {{
-    {39.0, 210.0, 0.0, 20.0},   // 财富5 (劳工)
-    {41.0, 210.0, 7.0, 74.0},   // 财富10 (工程师)
-    {0.0,  210.0, 122.0, 130.0} // 财富20 (资本家)
+    {1.95, 10.5, 0.0, 1.0},      // 财富5 (劳工)
+    {2.05, 10.5, 0.35, 3.7},     // 财富10 (工程师)
+    {0.0,  10.5, 6.1, 6.5}       // 财富20 (资本家)
 }};
 
 // 消费组对应商品
@@ -90,7 +90,7 @@ inline const std::array<std::array<double, GROUP_COUNT>, NUM_GOODS> valueCoeff =
 enum BuildingType {
     FARM_GRAIN, FOOD_PROC, COTTON, CLOTHES, LUXURY_CLOTHES,
     COAL_MINE, IRON_MINE, STEEL_MILL, TOOL_FACT, HOUSING, CONST_DEPT,
-    GOLD_MINE, BANK, FINANCE
+    GOLD_MINE, BANK, FINANCE, INDUSTRIAL_BANK, SAVINGS_BANK
 };
 
 // 消费组枚举
@@ -132,14 +132,28 @@ constexpr double BUILDING_CASH_MAX  = 1e12;
 constexpr double INVEST_POOL_MAX    = 1e12;
 constexpr double MONEY_SUPPLY_MAX   = 1e13;
 
-// ===== 新增：注册字体所需字符常量（如需离线收集可保留） =====
-// （本版本不再需要手动维护字符，main.cpp 会自动注册全部汉字）
-
 // ===== 新增：贷款系统常量 =====
-constexpr double BANK_LOAN_UNIT_VALUE = 1000000.0;          // 每单位贷款 = 100万
+constexpr double BANK_LOAN_UNIT_VALUE = 500000.0;          // 每单位贷款 = 50万（修改）
 constexpr int    BANK_MAX_LOAN_PER_LEVEL = 50;              // 每级银行最多50单位
+constexpr double BANK_LOAN_CAPACITY_PER_LEVEL =
+    BANK_MAX_LOAN_PER_LEVEL * BANK_LOAN_UNIT_VALUE;
 constexpr double INVEST_LOAN_TRIGGER_RATIO = 2.0;           // 投资池缺口触发倍数(200%)
 constexpr int    INVEST_LOAN_TERM_WEEKS = 260;              // 5年 = 260周
+constexpr double BANK_MAX_SYSTEM_CREDIT_RATIO = 0.25;       // 信贷余额不超过初始货币量25%
+
+// ===== 新增：贷款利息常量 =====
+constexpr double LOAN_INTEREST_RATE_ANNUAL = 0.05;         // 年利率 5%
+constexpr double LOAN_INTEREST_PER_WEEK = LOAN_INTEREST_RATE_ANNUAL / 52.0;
+
+// ===== 黄金固定平价 =====
+constexpr double GOLD_FIXED_PRICE = 10000.0;               // 1黄金 = 10,000货币
+
+// ===== 劳动人口系数（男0.25 + 女0.15 = 0.40） =====
+constexpr double LABOR_FORCE_PARTICIPATION = 0.40;
+
+// ===== 商品索引常量（避免魔法数字） =====
+constexpr int CONSTR_GOOD_INDEX = 10;    // 建造力
+constexpr int GOLD_GOOD_INDEX = 11;      // 贵金属
 
 // ===== 高精度数值类型与上限 =====
 using Money = Decimal;

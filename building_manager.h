@@ -5,13 +5,19 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 struct ConstructionOrder {
     int typeIndex;
     Money totalCost;
     Money remainingCost;
-    bool ignoreCash = false;   // true 表示玩家订单，允许透支投资池
+    bool ignoreCash = false;   // Retained for serialized-order compatibility.
     OwnerType owner = OWNER_INITIAL;
+};
+
+struct ConstructionSettlement {
+    Money totalUsed = Money(0);
+    Money privatePayment = Money(0);
 };
 
 class BuildingManager {
@@ -33,7 +39,8 @@ public:
 
     void placeOrder(int typeIdx, OwnerType owner = OWNER_INITIAL);
     void placePlayerOrder(int typeIdx, int count, bool top);
-    void demolishBuildings(int typeIdx, int count, int stepCount, Money& investmentPool);
+    bool canDemolish(int typeIdx, int stepCount) const;
+    int demolishBuildings(int typeIdx, int count, int stepCount, Money& investmentPool);
 
     void aiBuild(double aiProfitThreshold,
                  const std::array<Money, NUM_GOODS>& prices,
@@ -46,8 +53,11 @@ public:
 
     std::array<double, TYPE_COUNT> calculateBaseOutputRates(double maxLabor) const;
 
-    Money processConstruction(Money availableConstr, Money constrPrice,
-                              Money& investmentPool);
+    Money getWeeklyPrivateConstructionDemand(Money availableConstr) const;
+    ConstructionSettlement processConstruction(Money availableConstr,
+                                               Money constrPrice,
+                                               Money& investmentPool,
+                                               Money& governmentCash);
 
     void updateActualProfitRates(const std::array<double, TYPE_COUNT>& actualRates);
 
@@ -80,8 +90,16 @@ public:
             avgProfitRates[typeIdx] = rate;
     }
 
-    // ===== 新增：获取银行上限 =====
-    int getMaxBanks() const { return maxBanks; }
+    void syncBankLevels(Money savingsPool);
+    void payDevelopmentWages(int typeIdx, Money wages,
+                             Money& governmentCash,
+                             Money& investmentPool,
+                             std::array<Money, CLASS_COUNT>& classCash);
+    void setFinanceLevelFromSecurities(int level);
+
+    // 建筑完成时的回调（用于发行证券）
+    std::function<void(int typeIdx, int count, OwnerType owner)> onBuildingCompleted;
+    std::function<void(int typeIdx, int count)> onBuildingsRemoving;
 
 private:
     void clampCash(int typeIdx) {
@@ -91,7 +109,8 @@ private:
     }
 
     void resetDecayCounters();
-    void syncFinanceCount();
+    void setBankLevelFromPool(int typeIdx, Money pool);
+    void syncFinanceCount();   // 已废弃，保留空实现
     void cleanupDeadBuilding(int typeIdx, Money& investmentPool);
 
     std::vector<BuildingTemplate> templates;
@@ -111,8 +130,7 @@ private:
     int maxCoalMines = 500;
     int maxIronMines = 500;
     int maxConstDept = 1000;
-    int maxGoldMines = 50;      // 修正为 50，与 1.2 文档一致
-    int maxBanks = 200;
+    int maxGoldMines = 50;
     int maxFinances = 200;
     int demolishCooldownPeriod = 156;
 
