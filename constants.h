@@ -9,11 +9,45 @@
 constexpr int TOTAL_STEPS = 6000;
 constexpr int AI_INTERVAL = 1;
 
-// 商品数量 (1.2: 新增贵金属)
-constexpr int NUM_GOODS = 12;
+// Commodity catalog
+constexpr int NUM_GOODS = 13;
 
-// 建筑类型数量 (1.2: 新增金矿、银行、金融区)
-constexpr int TYPE_COUNT = 16;
+// Building catalog
+constexpr int TYPE_COUNT = 17;
+
+// Logistics pricing is quoted once per weekly inventory review. Railways sell
+// transport capacity at labor/material cost. Distance changes the amount
+// of capacity consumed by a shipment, rather than the price of one capacity unit.
+constexpr double RAIL_TRANSPORT_COST_PER_KM = 0.75; // legacy non-rail route parameter
+constexpr double RAILWAY_MARKUP_RATE = 0.15; // legacy snapshot field, unused
+constexpr double WAREHOUSE_MARGIN_SHARE = 0.35; // legacy snapshot field, unused
+constexpr double RAIL_KM_PER_TRANSIT_WEEK = 500.0;
+// 100 units of cargo over 100 km consume one unit of railway capacity.
+constexpr double RAIL_DISTANCE_CAPACITY_COEFFICIENT = 0.01;
+// Kept as the public route-construction default for source compatibility.
+constexpr double RAIL_DISTANCE_COST_COEFFICIENT =
+    RAIL_DISTANCE_CAPACITY_COEFFICIENT;
+constexpr double RAIL_CAPACITY_PER_LEVEL = 20.0;
+constexpr int INITIAL_RAILWAY_LEVELS = 10;
+constexpr double PRODUCTION_BONUS_GAP_PREMIUM = 0.25;
+constexpr double PRODUCTION_BONUS_SMOOTHING = 0.20;
+constexpr double MAX_BONUS_TO_BASE_WAGE = 2.0;
+constexpr int TRANSPORT_CAPACITY_GOOD_INDEX = 12;
+constexpr int DEMAND_AVERAGE_WEEKS = 52;
+constexpr int CONSTRUCTION_BACKLOG_DRAIN_WEEKS = 4;
+constexpr int INVENTORY_TARGET_COVERAGE_WEEKS = 10;
+constexpr int INVENTORY_REVIEW_INTERVAL_WEEKS = 1;
+constexpr int INVENTORY_SAFETY_WEEKS = 2;
+constexpr int PRODUCTION_INVENTORY_RECOVERY_WEEKS = 4;
+constexpr double EMPLOYMENT_WEEKLY_HIRE_CAPACITY_SHARE = 0.05;
+constexpr double EMPLOYMENT_WEEKLY_LAYOFF_CURRENT_SHARE = 0.02;
+constexpr int COUNTRY_BASE_CONSTRUCTION_CAPACITY = 10;
+constexpr int CONSTRUCTION_MAX_PER_BUILDING_PER_CYCLE = 30;
+constexpr int CONSTRUCTION_INPUT_SAFETY_WEEKS = 2;
+// Recursive production forecasts include a small operating margin so a
+// balanced recipe graph can absorb rounding, transit, and startup losses
+// without starving a downstream construction department.
+constexpr double PRODUCTION_FORECAST_SAFETY_FACTOR = 1.10;
 
 // 消费组数量
 constexpr int GROUP_COUNT = 4;
@@ -22,27 +56,28 @@ constexpr int GROUP_COUNT = 4;
 inline const std::vector<std::string> commodityNames = {
     "谷物", "加工食品", "织物", "服装", "高档服装",
     "煤炭", "铁", "钢", "工具", "住房", "建造力",
-    "贵金属"   // 1.2: 新增
+    "贵金属", "运力"   // 非库存运输服务
 };
 
 // 建筑类型名称
 inline const std::vector<std::string> buildingTypeNames = {
     "谷物农场", "加工食品厂", "棉花种植园", "服装厂", "高档服装厂",
     "煤矿", "铁矿", "炼钢厂", "工具厂", "住房", "建造部门",
-    "金矿", "中央银行", "金融区", "工商银行", "储蓄银行"   // 1.2: 新增
+    "金矿", "中央银行", "金融区", "工商银行", "储蓄银行",
+    "铁路枢纽"   // Warehouse-trade intermediary
 };
 
-// 建造成本 (1.2: 新增金矿600, 银行800, 金融区800)
+// Building construction costs
 inline const std::vector<double> buildingCost = {
     200, 600, 200, 600, 600, 600, 600, 800, 800, 800, 100,
-    600, 800, 800, 800, 800        // 金矿、央行、金融区、工商银行、储蓄银行
+    600, 800, 800, 800, 800, 500   // 金矿、金融建筑、铁路枢纽
 };
 
-// 初始参考价格 (1.2: 贵金属初始参考价8000)
+// Initial reference prices
 inline const std::array<double, NUM_GOODS> referencePrice = {
     2400.0, 4000.0, 5000.0, 12000.0, 40000.0,
     4000.0, 4000.0, 8000.0, 4000.0, 1600.0, 24000.0,
-    8000.0
+    8000.0, 1.0
 };
 
 // 价格抑制系数 (加强版：默认0.30，原为0.15)
@@ -53,6 +88,7 @@ inline const std::array<double, NUM_GOODS> priceSuppressBase = [](){
     arr[4] = 0.24;           // 高档服装
     arr[10] = 0.50;          // 建造力
     arr[11] = 0.20;          // 贵金属
+    arr[12] = 0.0;            // transport service is not consumer demand
     return arr;
 }();
 
@@ -86,11 +122,11 @@ inline const std::array<std::array<double, GROUP_COUNT>, NUM_GOODS> valueCoeff =
     return arr;
 }();
 
-// 建筑类型枚举 (1.2: 新增)
+// Building type enum
 enum BuildingType {
     FARM_GRAIN, FOOD_PROC, COTTON, CLOTHES, LUXURY_CLOTHES,
     COAL_MINE, IRON_MINE, STEEL_MILL, TOOL_FACT, HOUSING, CONST_DEPT,
-    GOLD_MINE, BANK, FINANCE, INDUSTRIAL_BANK, SAVINGS_BANK
+    GOLD_MINE, BANK, FINANCE, INDUSTRIAL_BANK, SAVINGS_BANK, RAILWAY
 };
 
 // 消费组枚举
@@ -101,7 +137,7 @@ enum ConsGroup {
     GRP_HOUSING
 };
 
-// 阶层枚举 (1.2)
+// Population class enum
 enum PopClass {
     LABORER = 0,
     ENGINEER,
@@ -117,7 +153,7 @@ enum OwnerType {
     OWNER_COUNT
 };
 
-// 1.2 金融常量
+// Financial constants
 constexpr double BASE_CREDIT_PER_BANK = 500000.0;
 constexpr double BASE_CREDIT_PER_FINANCE = 1000000.0;
 constexpr double BANK_MONEY_MULTIPLIER = 2.0;
@@ -154,13 +190,39 @@ constexpr double LABOR_FORCE_PARTICIPATION = 0.40;
 // ===== 商品索引常量（避免魔法数字） =====
 constexpr int CONSTR_GOOD_INDEX = 10;    // 建造力
 constexpr int GOLD_GOOD_INDEX = 11;      // 贵金属
+constexpr int TRANSPORT_GOOD_INDEX = TRANSPORT_CAPACITY_GOOD_INDEX;  // 运力
 
 // ===== 高精度数值类型与上限 =====
 using Money = Decimal;
 inline const Money CLASS_CASH_MAX_MONEY    = Money(1e12L);
+inline const Money COUNTRY_INITIAL_TREASURY_MONEY = Money(50000000.0);
 inline const Money BUILDING_CASH_MAX_MONEY = Money(1e12L);
 inline const Money INVEST_POOL_MAX_MONEY   = Money(1e12L);
 inline const Money MONEY_SUPPLY_MAX_MONEY  = Money(1e13L);
+
+// One-time capital reserved by the private investment pool when it submits
+// an AI expansion request. The fee is separate from the construction
+// budget and is paid per building request.
+inline Money expansionStartupCapital(int typeIndex) {
+    switch (typeIndex) {
+    case FARM_GRAIN:
+    case COTTON:
+        return Money(100000.0);
+    case FOOD_PROC:
+    case CLOTHES:
+    case LUXURY_CLOTHES:
+    case HOUSING:
+        return Money(200000.0);
+    case STEEL_MILL:
+    case TOOL_FACT:
+    case COAL_MINE:
+    case IRON_MINE:
+    case GOLD_MINE:
+        return Money(400000.0);
+    default:
+        return Money(0);
+    }
+}
 
 inline const Money BASE_CREDIT_PER_BANK_MONEY      = Money(500000.0);
 inline const Money BASE_CREDIT_PER_FINANCE_MONEY   = Money(1000000.0);

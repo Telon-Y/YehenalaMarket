@@ -1,6 +1,7 @@
 // ==================== local_market_consumption.cpp ====================
-// 消费与工资
+// Consumption and wages.
 #include "local_market.h"
+#include "country.h"
 #include "local_market_internal.h"
 #include <algorithm>
 #include <cmath>
@@ -13,6 +14,8 @@ void LocalMarket::processConsumption(const std::array<Money, NUM_GOODS>& realOut
                                      std::array<Money, NUM_GOODS>& consumerPlanned,
                                      std::array<Money, NUM_GOODS>& consumerActual,
                                      std::array<Money, NUM_GOODS>& consumerSpending) {
+    (void)realOut;
+    (void)realIn;
     constexpr double popScale = 1.0 / 100000.0;
     std::array<double, GROUP_COUNT> urbanGroupDemand{};
     for (int g = 0; g < GROUP_COUNT; ++g) {
@@ -20,6 +23,10 @@ void LocalMarket::processConsumption(const std::array<Money, NUM_GOODS>& realOut
                             + demandTable[1][g] * totalEngineers * popScale
                             + demandTable[2][g] * totalCapitalists * popScale;
     }
+    const double subsistenceFood =
+        demandTable[0][GRP_BASIC_FOOD] * subsistencePop * popScale;
+    urbanGroupDemand[GRP_BASIC_FOOD] = std::max(
+        0.0, urbanGroupDemand[GRP_BASIC_FOOD] - subsistenceFood);
 
     Money totalClassFund = classCash[LABORER] + classCash[ENGINEER] + classCash[CAPITALIST];
     double wealthPerCap = totalClassFund.toDouble() / max(laborPopulation, 1.0);
@@ -32,7 +39,8 @@ void LocalMarket::processConsumption(const std::array<Money, NUM_GOODS>& realOut
     urbanGroupDemand[GRP_STANDARD_CLOTHES] *= (1.0 + luxuryFactor * 0.4);
     urbanGroupDemand[GRP_HOUSING] += laborPopulation * popScale * luxuryFactor * 1.5;
 
-    consumerTarget.fill(Money(0));
+    std::array<Money, NUM_GOODS> rawConsumerTarget{};
+    rawConsumerTarget.fill(Money(0));
     for (int g = 0; g < GROUP_COUNT; ++g) {
         double remain = urbanGroupDemand[g];
         if (remain <= 1e-9) continue;
@@ -53,8 +61,19 @@ void LocalMarket::processConsumption(const std::array<Money, NUM_GOODS>& realOut
             double u = valueCoeff[good][g];
             double share = weight / totalWeight;
             double want = share * remain / u;
-            consumerTarget[good] += Money(want);
+            rawConsumerTarget[good] += Money(want);
         }
+    }
+
+    for (int good = 0; good < NUM_GOODS; ++good) {
+        latestRawConsumerTarget[good] = rawConsumerTarget[good];
+        // The production-facing demand policy is the exact mean of the most
+        // recent 52 observed weeks. During startup it uses all observed weeks
+        // rather than treating future, unobserved weeks as zero demand.
+        smoothedConsumerDemand[good] =
+            consumerDemandFilters[good].update(
+                rawConsumerTarget[good], 1.0);
+        consumerTarget[good] = smoothedConsumerDemand[good];
     }
 
     Money urbanBudget = clamp(classCash[LABORER] + classCash[ENGINEER] + classCash[CAPITALIST],
@@ -69,15 +88,14 @@ void LocalMarket::processConsumption(const std::array<Money, NUM_GOODS>& realOut
     consumerPlanned.fill(Money(0));
     consumerSpending.fill(Money(0));
     for (int i = 0; i < NUM_GOODS; ++i) {
-        Money available = realOut[i] + inventory[i] - realIn[i];
-        available = std::max(Money(0), available);
         consumerPlanned[i] = consumerTarget[i] * scale;
-        consumerActual[i] = std::min(consumerPlanned[i], available);
+        consumerActual[i] = std::min(
+            consumerPlanned[i], warehouse.stock(i).available());
         consumerSpending[i] = consumerActual[i] * priceState.prices[i];
     }
 
     latestConsumerTarget = consumerTarget;
-    latestConsumerActual = consumerActual;
+    latestPlannedConsumerDemand = consumerPlanned;
 }
 
 void LocalMarket::processWagePayment(std::array<Money, TYPE_COUNT>& laborCostByBuilding) {
@@ -87,16 +105,47 @@ void LocalMarket::processWagePayment(std::array<Money, TYPE_COUNT>& laborCostByB
 
     for (int t = 0; t < TYPE_COUNT; ++t) {
         if (actualEmployment[t] <= 0) continue;
-        Money lc = Money(actualEmployment[t]) * buildingWages[t];
-        laborCostByBuilding[t] = lc;
+        Money lc = Money(actualEmployment[t]) * (buildingWages[t] + buildingBonuses[t]);
+        Money paid = lc;
         if (bld.getTemplates()[t].isDevelopment()) {
-            bld.payDevelopmentWages(t, lc, playerCash, investmentPool, classCash);
+            const int levels = std::max(0, bld.getBuildingCounts()[t]);
+            const int governmentLevels = std::clamp(
+                bld.getOwnedBuildings()[t][OWNER_GOVERNMENT], 0, levels);
+            const Money governmentWages = levels > 0
+                ? lc * Money(governmentLevels) / Money(levels)
+                : Money(0);
+            const Money privateWages =
+                std::max(Money(0), lc - governmentWages);
+            if (privateWages > Money(0))
+                bld.addCash(t, -privateWages);
+
+            if (fiscalCountry == nullptr) {
+                paid = privateWages + bld.payDevelopmentWages(
+                    t, governmentWages, playerCash, investmentPool,
+                    classCash);
+            } else {
+                // Only the government-owned share is paid by the country.
+                // Reserved construction funds remain unavailable to payroll;
+                // privately owned infrastructure pays from building cash.
+                Money governmentCash = fiscalCountry->getAvailableTreasury();
+                Money governmentPaid = bld.payDevelopmentWages(
+                    t, governmentWages, governmentCash, investmentPool,
+                    classCash);
+                if (governmentPaid > Money(0) &&
+                    !fiscalCountry->spendTreasury(governmentPaid)) {
+                    governmentPaid = Money(0);
+                }
+                paid = privateWages + governmentPaid;
+            }
         } else {
             bld.addCash(t, -lc);
         }
+        // Profit statements and class income must reflect cash that actually
+        // left the government pool, rather than an unfunded payroll request.
+        laborCostByBuilding[t] = paid;
         const auto& shares = bld.getTemplates()[t].workforceShares;
         for (int c = 0; c < CLASS_COUNT; ++c)
-            wageIncome[c] += lc * Money(shares[c]);
+            wageIncome[c] += paid * Money(shares[c]);
     }
     for (int c = 0; c < CLASS_COUNT; ++c) {
         classCash[c] += wageIncome[c];

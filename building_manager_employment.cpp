@@ -20,6 +20,13 @@ void BuildingManager::updateActualProfitRates(const std::array<double, TYPE_COUN
     }
 }
 
+void BuildingManager::updateActualUnitProfits(
+    const std::array<Money, TYPE_COUNT>& actualProfits) {
+    actualUnitProfits = actualProfits;
+    for (Money& profit : actualUnitProfits)
+        if (!isfinite(profit)) profit = Money(0);
+}
+
 void BuildingManager::adjustEmployment() {
     for (int t = 0; t < TYPE_COUNT; ++t) {
         if (buildingCounts[t] == 0) continue;

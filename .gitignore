@@ -37,5 +37,6 @@ Makefile
 .idea/
 *.user
 *.suo
+tempCodeRunnerFile.*
 .DS_Store
 Thumbs.db

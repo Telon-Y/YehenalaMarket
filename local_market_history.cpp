@@ -9,11 +9,10 @@ using namespace std;
 
 void LocalMarket::recordInventoryChange(const std::array<Money, NUM_GOODS>& supply,
                                         const std::array<Money, NUM_GOODS>& demand) {
-    for (int i = 0; i < NUM_GOODS; ++i) {
-        Money net = supply[i] - demand[i];
-        if (net > Money(0)) addToInventory(i, net);
-        else if (net < Money(0)) takeFromInventory(i, -net);
-    }
+    // Production output, material delivery and consumption are all posted
+    // directly to Warehouse. Retained for legacy callers without double entry.
+    (void)supply;
+    (void)demand;
 }
 
 void LocalMarket::recordHistory(const std::array<Money, NUM_GOODS>& realOut,
@@ -28,6 +27,7 @@ void LocalMarket::recordHistory(const std::array<Money, NUM_GOODS>& realOut,
     constexpr size_t MAX_HISTORY_POINTS = 20000;
     if (priceHist.size() > MAX_HISTORY_POINTS) {
         const size_t removeCount = MAX_HISTORY_POINTS / 2;
+        historyFirstCycle += static_cast<int>(removeCount);
         priceHist.erase(priceHist.begin(), priceHist.begin() + removeCount);
         outputHist.erase(outputHist.begin(), outputHist.begin() + removeCount);
         buildingHist.erase(buildingHist.begin(), buildingHist.begin() + removeCount);

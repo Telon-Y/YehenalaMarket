@@ -42,7 +42,7 @@ std::vector<BuildingTemplate> createBuildingTemplates() {
             bt.workforceShares = {0.75, 0.20, 0.05};
         }
         bt.isFinancial = isFin;
-        bt.category = isFin ? BuildingCategory::DEVELOPMENT
+        bt.category = isFin ? BuildingCategory::FINANCIAL
                             : BuildingCategory::PRODUCTION;
         bt.moneyMultiplier = mult;
     };
@@ -52,7 +52,9 @@ std::vector<BuildingTemplate> createBuildingTemplates() {
     setTemplate(COTTON,        "棉花种植园",     2,  45, {});
     setTemplate(CLOTHES,       "服装厂",         3, 100, {{2, 60.0/100}});
     setTemplate(LUXURY_CLOTHES,"高档服装厂",     4,  30, {{2, 25.0/30}});
-    setTemplate(COAL_MINE,     "煤矿",           5,  60, {{8, 15.0/60}, {5, 15.0/60}});
+    // Coal cannot be a mandatory input to coal production: once the buffer
+    // reaches zero that recursive recipe can never bootstrap again.
+    setTemplate(COAL_MINE,     "煤矿",           5,  60, {{8, 15.0/60}});
     setTemplate(IRON_MINE,     "铁矿",           6,  60, {{8, 15.0/60}, {5, 15.0/60}});
     setTemplate(STEEL_MILL,    "炼钢厂",         7,  90, {{6, 60.0/90}, {5, 30.0/90}});
     setTemplate(TOOL_FACT,     "工具厂",         8,  80, {{7, 20.0/80}});
@@ -66,6 +68,11 @@ std::vector<BuildingTemplate> createBuildingTemplates() {
     // 工商银行和储蓄银行负责资金中介，不行使铸币权，也不消耗黄金。
     setTemplate(INDUSTRIAL_BANK, "工商银行",    -1,  0, {}, true);
     setTemplate(SAVINGS_BANK,  "储蓄银行",      -1,  0, {}, true);
+    // Railways are development buildings that produce transport capacity.
+    setTemplate(RAILWAY,       "铁路枢纽",       TRANSPORT_CAPACITY_GOOD_INDEX,
+                 RAIL_CAPACITY_PER_LEVEL, {{7, 0.02}, {8, 0.01}});
+    temps[RAILWAY].category = BuildingCategory::DEVELOPMENT;
+    temps[RAILWAY].laborPerUnit = 1000.0;
 
     return temps;
 }

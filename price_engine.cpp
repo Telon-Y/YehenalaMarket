@@ -46,13 +46,14 @@ void stepPrices(PriceState& ps,
                 double debtFactor,
                 double dt,
                 int excludedGood1,
-                int excludedGood2) {
+                int excludedGood2,
+                int excludedGood3) {
     const double oversupplyGain = 1.5;
     constexpr double PRICE_MAX_MULTIPLE = 20.0;
     constexpr double PRICE_MIN_MULTIPLE = 0.05;
 
     for (int i = 0; i < NUM_GOODS; ++i) {
-        if (i == excludedGood1 || i == excludedGood2) continue;
+        if (i == excludedGood1 || i == excludedGood2 || i == excludedGood3) continue;
 
         // 过剩需求：正值为超额需求，负值为过剩供给（负值放大惩罚）
         double rawExcess = (demandInput[i] + demandConsumer[i] - supply[i]).toDouble();

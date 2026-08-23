@@ -6,3 +6,7 @@
 std::vector<int> collectFontCodepoints(
     const char* fontPath,
     const std::vector<std::string>& requiredTexts = {});
+
+std::vector<int> collectMissingFontCodepoints(
+    const char* fontPath,
+    const std::vector<std::string>& requiredTexts);

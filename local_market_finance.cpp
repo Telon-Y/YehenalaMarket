@@ -1,6 +1,7 @@
 // ==================== local_market_finance.cpp ====================
-// 银行、贷款、利润分配、货币供给
+// Banking, lending, profit distribution, and money supply.
 #include "local_market.h"
+#include "country.h"
 #include "local_market_internal.h"
 #include <algorithm>
 #include <cmath>
@@ -12,7 +13,7 @@ Money LocalMarket::calculateInvestmentCreditCapacity() const {
         investmentLoanDueStep >= 0 && stepCount >= investmentLoanDueStep;
     if (maturedDebtOutstanding) return Money(0);
 
-    Money systemCreditLimit = initialTotalMoneySupply *
+    Money systemCreditLimit = moneySupplyBaseline() *
                               Money(BANK_MAX_SYSTEM_CREDIT_RATIO);
     Money systemHeadroom = std::max(Money(0), systemCreditLimit - totalDebt);
     Money levelCapacity = Money(bld.getBuildingCounts()[INDUSTRIAL_BANK]) *
@@ -23,7 +24,7 @@ Money LocalMarket::calculateInvestmentCreditCapacity() const {
 
 void LocalMarket::processBankLoans(Money weeklyConstrDemand, Money constrPrice) {
     // ==========================================
-    // 工商银行：商业贷款主体
+    // The industrial bank is the primary commercial lender.
     // ==========================================
     recalculateTotalDebt();
     bool settledMaturedLoanThisWeek = false;
@@ -51,7 +52,7 @@ void LocalMarket::processBankLoans(Money weeklyConstrDemand, Money constrPrice) 
 
     bankLoanCapacity = calculateInvestmentCreditCapacity();
 
-    // 投资池不足本周建造力需求的 200% 时，向工商银行借款。
+    // Investment pool borrowing is triggered by construction demand.
     Money neededMoney = weeklyConstrDemand * constrPrice * Money(INVEST_LOAN_TRIGGER_RATIO);
     bool investmentCreditEligible = !settledMaturedLoanThisWeek &&
                                     (investmentLoanDueStep < 0 ||
@@ -96,7 +97,7 @@ void LocalMarket::processBuildingBorrowing() {
         int bankAffordableUnits = (int)std::floor(industriBankCash.toDouble() / BANK_LOAN_UNIT_VALUE);
         recalculateTotalDebt();
         Money systemHeadroom = std::max(
-            Money(0), initialTotalMoneySupply * Money(BANK_MAX_SYSTEM_CREDIT_RATIO) - totalDebt);
+            Money(0), moneySupplyBaseline() * Money(BANK_MAX_SYSTEM_CREDIT_RATIO) - totalDebt);
         int regulatoryUnits = static_cast<int>(std::floor(
             (systemHeadroom / Money(BANK_LOAN_UNIT_VALUE)).toDouble()));
         int actualBorrow = std::min({borrowUnits, bankAffordableUnits, regulatoryUnits});
@@ -147,7 +148,15 @@ void LocalMarket::processBuildingRepayment(int typeIdx, Money& curCash, Money ta
     constexpr int BAD_DEBT_WEEKS = 260;
     if (loanDelinquentWeeks[typeIdx] >= BAD_DEBT_WEEKS) {
         Money borrowerCash = bld.getCashPools()[typeIdx];
-        if (borrowerCash < Money(0)) bld.addCash(typeIdx, -borrowerCash);
+        // Write off the bank's asset and charge the matching shortfall to
+        // bank cash/capital. Do not recapitalize the borrower from nowhere:
+        // setting a negative borrower balance to zero must have an equal and
+        // opposite entry on the lender side.
+        if (borrowerCash < Money(0)) {
+            const Money loss = -borrowerCash;
+            bld.addCash(typeIdx, loss);
+            bld.addCash(INDUSTRIAL_BANK, -loss);
+        }
         loanBalance[typeIdx] = Money(0);
         buildingLoanCount[typeIdx] = 0;
         loanDelinquentWeeks[typeIdx] = 0;
@@ -171,6 +180,8 @@ void LocalMarket::processProfitDistribution(
     std::array<double, TYPE_COUNT>& actualProfitRates) {
 
     actualProfitRates.fill(0.0);
+    for (int t = 0; t < TYPE_COUNT; ++t)
+        bld.setActualUnitProfit(t, Money(0));
 
     for (int t = 0; t < TYPE_COUNT; ++t) {
         if (bld.getBuildingCounts()[t] == 0 ||
@@ -178,6 +189,7 @@ void LocalMarket::processProfitDistribution(
         Money netProfit = revenueByBuilding[t] - inputCostByBuilding[t] - laborCostByBuilding[t];
         Money profitPerLevel = (bld.getBuildingCounts()[t] > 0)
             ? netProfit / Money(bld.getBuildingCounts()[t]) : Money(0);
+        bld.setActualUnitProfit(t, profitPerLevel);
 
         Money targetWage = Money(averageWage);
         if (laborShortage && netProfit > Money(0) && actualEmployment[t] > 0)
@@ -198,7 +210,8 @@ void LocalMarket::processProfitDistribution(
             if (dividend <= Money(0)) continue;
             totalDividend += dividend;
             if (o == OWNER_GOVERNMENT) {
-                playerCash += dividend;
+                if (fiscalCountry != nullptr) fiscalCountry->creditTreasury(dividend);
+                else playerCash += dividend;
             } else if (o == OWNER_INITIAL) {
                 classCash[CAPITALIST] += dividend;
             } else if (o == OWNER_FINANCE) {
@@ -208,22 +221,9 @@ void LocalMarket::processProfitDistribution(
         if (totalDividend > Money(0)) {
             bld.addCash(t, -totalDividend);
             netProfit -= totalDividend;
-            playerCash = clamp(playerCash, -CLASS_CASH_MAX_MONEY, CLASS_CASH_MAX_MONEY);
+            if (fiscalCountry == nullptr)
+                playerCash = clamp(playerCash, -CLASS_CASH_MAX_MONEY, CLASS_CASH_MAX_MONEY);
             clampMoney(classCash[CAPITALIST]);
-        }
-
-        if (laborShortage && netProfit > Money(0)) {
-            Money desiredBonus = netProfit * Money(0.3);
-            Money cashNow = bld.getCashPools()[t];
-            Money actualBonus = std::min(desiredBonus, cashNow);
-            if (actualBonus > Money(0)) {
-                bld.addCash(t, -actualBonus);
-                classCash[LABORER]    += actualBonus * Money(0.75);
-                classCash[ENGINEER]   += actualBonus * Money(0.20);
-                classCash[CAPITALIST] += actualBonus * Money(0.05);
-                for (int c = 0; c < CLASS_COUNT; ++c) clampMoney(classCash[c]);
-                netProfit -= actualBonus;
-            }
         }
 
         Money curCash = bld.getCashPools()[t];
@@ -241,7 +241,7 @@ void LocalMarket::processProfitDistribution(
     }
 
     // ==========================================
-    // 金融区特殊处理：现金池全部进入工商银行
+    // Transfer all financial-district cash to the industrial bank.
     // ==========================================
     if (bld.getBuildingCounts()[FINANCE] > 0) {
         Money revenue = revenueByBuilding[FINANCE];
@@ -261,7 +261,7 @@ void LocalMarket::processProfitDistribution(
     }
 
     // ==========================================
-    // 中央银行特殊处理：净利润50%留存于资金池并反馈为银行等级，50%上缴玩家账户
+    // Retain half of central-bank profit and remit the rest to government.
     // ==========================================
     if (bld.getBuildingCounts()[BANK] > 0) {
         Money cbRevenue = revenueByBuilding[BANK];
@@ -271,10 +271,12 @@ void LocalMarket::processProfitDistribution(
             Money retained = cbNet * Money(0.5);
             Money distributed = cbNet - retained;
             bld.addCash(BANK, -distributed);
-            playerCash += distributed;
-            playerCash = clamp(playerCash, -CLASS_CASH_MAX_MONEY, CLASS_CASH_MAX_MONEY);
+            if (fiscalCountry != nullptr) fiscalCountry->creditTreasury(distributed);
+            else playerCash += distributed;
+            if (fiscalCountry == nullptr)
+                playerCash = clamp(playerCash, -CLASS_CASH_MAX_MONEY, CLASS_CASH_MAX_MONEY);
         }
-        // 央行现金池上限：超额转入储蓄银行（投资池）
+        // Move central-bank cash above the cap into the investment pool.
         if (bld.getCashPools()[BANK] > Money(1e12L)) {
             Money excess = bld.getCashPools()[BANK] - Money(1e12L);
             bld.addCash(BANK, -excess);
@@ -284,7 +286,7 @@ void LocalMarket::processProfitDistribution(
     }
 
     // ==========================================
-    // 工商银行：硬上限转入储蓄银行（投资池）
+    // Move industrial-bank cash above the cap into the investment pool.
     // ==========================================
     if (bld.getBuildingCounts()[INDUSTRIAL_BANK] > 0 && bld.getCashPools()[INDUSTRIAL_BANK] > Money(1e12L)) {
         Money excess = bld.getCashPools()[INDUSTRIAL_BANK] - Money(1e12L);
@@ -294,10 +296,10 @@ void LocalMarket::processProfitDistribution(
     }
 
     // ==========================================
-    // 储蓄银行：现金池即投资池，无需额外处理
+    // The savings-bank cash pool is the investment pool itself.
     // ==========================================
 
-    // 实际利润率
+    // Actual profit rates.
     for (int t = 0; t < TYPE_COUNT; ++t) {
         if (bld.getBuildingCounts()[t] == 0) continue;
         Money totalCost = inputCostByBuilding[t] + laborCostByBuilding[t];
@@ -321,6 +323,8 @@ void LocalMarket::processMoneySupply() {
         if (isfinite(val)) totalMoneySupply += val;
     }
     if (isfinite(investmentPool)) totalMoneySupply += investmentPool;
-    if (isfinite(playerCash)) totalMoneySupply += playerCash;
+    if (fiscalCountry == nullptr && isfinite(playerCash)) totalMoneySupply += playerCash;
+    const Money treasuryShare = fiscalTreasuryShare(false);
+    if (isfinite(treasuryShare)) totalMoneySupply += treasuryShare;
     if (!isfinite(totalMoneySupply)) totalMoneySupply = Money(0);
 }

@@ -5,7 +5,8 @@
 
 enum class BuildingCategory {
     PRODUCTION,
-    DEVELOPMENT
+    DEVELOPMENT,
+    FINANCIAL
 };
 
 struct BuildingTemplate {

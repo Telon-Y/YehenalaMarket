@@ -56,7 +56,7 @@ int BuildingManager::demolishBuildings(int typeIdx, int count, int stepCount,
 Money BuildingManager::transferOwnership(int typeIdx, int count, OwnerType from, OwnerType to,
                                          Money& investmentPool, std::array<Money, CLASS_COUNT>& classCash) {
     if (typeIdx < 0 || typeIdx >= TYPE_COUNT || count <= 0 || from == to) return Money(0);
-    if (typeIdx == CONST_DEPT) return Money(0);
+
     count = std::min(count, ownedBuildings[typeIdx][from]);
     if (count == 0) return Money(0);
 

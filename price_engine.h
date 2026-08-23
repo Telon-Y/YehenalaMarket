@@ -39,4 +39,5 @@ void stepPrices(PriceState& ps,
                 double debtFactor,
                 double dt,
                 int excludedGood1,
-                int excludedGood2);
+                int excludedGood2,
+                int excludedGood3 = TRANSPORT_CAPACITY_GOOD_INDEX);

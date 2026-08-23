@@ -1,20 +1,59 @@
 // ui.h
 #pragma once
 #include "raylib.h"
+#include "debug_ui.h"
+#include <array>
 #include "world.h"
 
+enum class UIView {
+    WorldMap,
+    ProvinceDetail,
+    CountryOverview,
+    NationalMarket,
+    TransportLogistics
+};
+enum class MapMode {
+    Political,
+    Logistics
+};
+
+
 struct UIState {
-    int currentPanel;
-    int selectedGood;
+    MapMode mapMode;
+    UIView provinceReturnView;
+    UIView view;
+    int selectedProvinceId;
+    int hoveredProvinceId;
+    int selectedCountryId;
+    int countryTab;
+    int countrySelectedProvinceId;
+    int provinceTab;
+    std::array<int, 3> provincePageScroll;
+    bool panelConsumesInput;
+    int countryProvinceScroll;
+    float mapScrollX;
+    float mapZoom;
+    bool mapInputEnabled;
+    bool constructionPanelOpen;
+    int constructionListScroll;
     int selectedBuilding;
     bool paused;
-    int simulationSpeed;        // 1, 2, 5, 或 -1 表示无限速
-    Rectangle speedBtns[5];     // 5 个速度按钮（暂停/1x/2x/5x/无限）
-    Rectangle panelBtns[4];
-    int constructionPage;
-    bool showInTotal[NUM_GOODS];
+    int simulationSpeed;
+    Rectangle speedBtns[5];
+    Rectangle backButton;
+    int selectedTransportRouteId;
+    WarehouseOrderId selectedTransportOrderId;
+    int transportShipmentScroll;
+    int transportOrderScroll;
+    DebugUIState localMarketUI;
 };
 
 void InitUIState(UIState* state);
 void HandleInput(UIState* state, World& world);
-void DrawUI(const UIState* state, World& world, Font font, double elapsedSeconds);
+void DrawUI(UIState* state, World& world, Font font, double elapsedSeconds);
+
+// Pure navigation transitions keep the world/model out of the UI state
+// machine. Callers validate IDs against World before entering a page.
+void NavigateToCountry(UIState* state, int countryId, int provinceId);
+void NavigateToProvince(UIState* state, int provinceId);
+void NavigateBack(UIState* state);

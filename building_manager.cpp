@@ -20,13 +20,17 @@ BuildingManager::BuildingManager() {
     buildingCounts[BANK] = 1;
     buildingCounts[INDUSTRIAL_BANK] = 1;
     buildingCounts[SAVINGS_BANK] = 1;
+    buildingCounts[RAILWAY] = INITIAL_RAILWAY_LEVELS;
     ownedBuildings[BANK].fill(0);
     ownedBuildings[FINANCE].fill(0);
     ownedBuildings[INDUSTRIAL_BANK].fill(0);
     ownedBuildings[SAVINGS_BANK].fill(0);
+    ownedBuildings[RAILWAY].fill(0);
+    ownedBuildings[RAILWAY][OWNER_INITIAL] = buildingCounts[RAILWAY];
 
     avgProfitRates.fill(0.0);
     smoothedProfitRate.fill(0.0);
+    actualUnitProfits.fill(Money(0));
     employmentRatio.fill(1.0);
     consecutiveLowEmpWeeks.fill(0);
     for (int t = 0; t < TYPE_COUNT; ++t) {
@@ -45,6 +49,40 @@ BuildingManager::BuildingManager() {
     syncBankLevels(Money(0));
     lastDemolishStep.fill(-9999);
     currentSupplyRatio.fill(1.0);
+    capacityUtilization.fill(0.0);
+    fundingAvailability.fill(1.0);
+    materialAvailability.fill(1.0);
+    staffedCapacity.fill(Money(0));
+    productionTarget.fill(Money(0));
+}
+
+bool BuildingManager::setBuildingCountForSetup(int typeIdx, int count,
+                                                OwnerType owner) {
+    if (typeIdx < 0 || typeIdx >= TYPE_COUNT || count < 0 ||
+        owner < OWNER_GOVERNMENT || owner >= OWNER_COUNT) {
+        return false;
+    }
+
+    buildingCounts[typeIdx] = count;
+    ownedBuildings[typeIdx].fill(0);
+    ownedBuildings[typeIdx][owner] = count;
+    employmentRatio[typeIdx] = 1.0;
+    avgProfitRates[typeIdx] = 0.0;
+    smoothedProfitRate[typeIdx] = 0.0;
+    actualUnitProfits[typeIdx] = Money(0);
+    currentSupplyRatio[typeIdx] = 1.0;
+    capacityUtilization[typeIdx] = 0.0;
+    fundingAvailability[typeIdx] = 1.0;
+    materialAvailability[typeIdx] = 1.0;
+    staffedCapacity[typeIdx] = Money(0);
+    productionTarget[typeIdx] = Money(0);
+    consecutiveLowEmpWeeks[typeIdx] = 0;
+
+    if (!templates[typeIdx].isFinancial) {
+        cashPools[typeIdx] = Money(count) * Money(500000.0);
+        clampCash(typeIdx);
+    }
+    return true;
 }
 
 void BuildingManager::setBankLevelFromPool(int typeIdx, Money pool) {
@@ -61,41 +99,24 @@ void BuildingManager::syncBankLevels(Money savingsPool) {
     setBankLevelFromPool(SAVINGS_BANK, savingsPool);
 }
 
-void BuildingManager::payDevelopmentWages(
+Money BuildingManager::payDevelopmentWages(
     int typeIdx, Money wages, Money& governmentCash, Money& investmentPool,
     std::array<Money, CLASS_COUNT>& classCash) {
+    (void)investmentPool;
+    (void)classCash;
     if (typeIdx < 0 || typeIdx >= TYPE_COUNT || wages <= Money(0) ||
-        !templates[typeIdx].isDevelopment()) return;
+        !templates[typeIdx].isDevelopment()) return Money(0);
 
-    if (templates[typeIdx].isFinancial) {
-        if (typeIdx == SAVINGS_BANK) {
-            investmentPool -= wages;
-        } else {
-            cashPools[typeIdx] -= wages;
-            clampCash(typeIdx);
-        }
-        return;
-    }
-
-    int ownerLevels = 0;
-    for (int owner = 0; owner < OWNER_COUNT; ++owner)
-        ownerLevels += ownedBuildings[typeIdx][owner];
-    if (ownerLevels <= 0) {
-        cashPools[typeIdx] -= wages;
-        clampCash(typeIdx);
-        return;
-    }
-
-    for (int owner = 0; owner < OWNER_COUNT; ++owner) {
-        Money share = wages * Money(ownedBuildings[typeIdx][owner]) /
-                      Money(ownerLevels);
-        if (owner == OWNER_GOVERNMENT) {
-            governmentCash -= share;
-        } else if (owner == OWNER_INITIAL) {
-            classCash[CAPITALIST] -= share;
-        } else if (owner == OWNER_FINANCE) {
-            cashPools[FINANCE] -= share;
-            clampCash(FINANCE);
-        }
-    }
+    // Keep the government pool solvent. In particular, do not let a
+    // negative standalone compatibility balance turn into an implicit wage
+    // loan, and do not charge a financial building's own cash or investment
+    // pool for public-development payroll.
+    const Money availableCash =
+        isfinite(governmentCash) ? std::max(Money(0), governmentCash)
+                                 : Money(0);
+    const Money requestedWages =
+        isfinite(wages) ? std::max(Money(0), wages) : Money(0);
+    const Money paid = std::min(availableCash, requestedWages);
+    governmentCash = availableCash - paid;
+    return paid;
 }

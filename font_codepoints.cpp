@@ -147,9 +147,13 @@ void collectSubtable(const Bytes& data, size_t tableStart, size_t cmapEnd,
         uint16_t first = 0, count = 0;
         if (tableLength < 10 || !readU16(data, tableStart + 6, first) ||
             !readU16(data, tableStart + 8, count)) return;
+        const size_t glyphStart = tableStart + 10;
+        if (glyphStart > tableEnd ||
+            static_cast<size_t>(count) > (tableEnd - glyphStart) / 2)
+            return;
         for (uint32_t i = 0; i < count; ++i) {
             uint16_t glyph = 0;
-            if (!readU16(data, tableStart + 10 + static_cast<size_t>(i) * 2,
+            if (!readU16(data, glyphStart + static_cast<size_t>(i) * 2,
                          glyph)) break;
             addCodepoint(codepoints, static_cast<uint32_t>(first) + i, glyph);
         }
@@ -161,9 +165,14 @@ void collectSubtable(const Bytes& data, size_t tableStart, size_t cmapEnd,
         uint32_t first = 0, count = 0;
         if (tableLength < 20 || !readU32(data, tableStart + 12, first) ||
             !readU32(data, tableStart + 16, count)) return;
+        const size_t glyphStart = tableStart + 20;
+        if (glyphStart > tableEnd ||
+            static_cast<size_t>(count) > (tableEnd - glyphStart) / 2)
+            return;
         for (uint32_t i = 0; i < count; ++i) {
+            if (i > 0xFFFFFFFFu - first) break;
             uint16_t glyph = 0;
-            if (!readU16(data, tableStart + 20 + static_cast<size_t>(i) * 2,
+            if (!readU16(data, glyphStart + static_cast<size_t>(i) * 2,
                          glyph)) break;
             addCodepoint(codepoints, first + i, glyph);
         }
@@ -274,14 +283,48 @@ void collectUtf8(const std::string& text, std::set<int>& codepoints) {
 
 std::vector<int> collectFontCodepoints(
     const char* fontPath, const std::vector<std::string>& requiredTexts) {
-    std::set<int> codepoints;
-    for (const std::string& text : requiredTexts) collectUtf8(text, codepoints);
-    for (int cp = 32; cp <= 126; ++cp) codepoints.insert(cp);
+    std::set<int> requested;
+    for (const std::string& text : requiredTexts) collectUtf8(text, requested);
+    for (int cp = 32; cp <= 126; ++cp) requested.insert(cp);
 
-    if (!collectCmap(fontPath, codepoints)) {
-        for (int cp = 0x4E00; cp <= 0x9FFF; ++cp) codepoints.insert(cp);
-        for (int cp = 0x3000; cp <= 0x303F; ++cp) codepoints.insert(cp);
-        for (int cp = 0xFF00; cp <= 0xFFEF; ++cp) codepoints.insert(cp);
+    // With no requested text this function remains a cmap enumerator for the
+    // font diagnostics. The game supplies its UI catalog, so only rasterize
+    // glyphs that can actually appear instead of building an atlas for the
+    // font's complete 14k-character repertoire.
+    if (requiredTexts.empty()) {
+        if (!collectCmap(fontPath, requested)) {
+            for (int cp = 0x4E00; cp <= 0x9FFF; ++cp) requested.insert(cp);
+            for (int cp = 0x3000; cp <= 0x303F; ++cp) requested.insert(cp);
+            for (int cp = 0xFF00; cp <= 0xFFEF; ++cp) requested.insert(cp);
+        }
+        return std::vector<int>(requested.begin(), requested.end());
     }
-    return std::vector<int>(codepoints.begin(), codepoints.end());
+
+    std::set<int> supported;
+    if (!collectCmap(fontPath, supported))
+        return std::vector<int>(requested.begin(), requested.end());
+
+    std::vector<int> codepoints;
+    codepoints.reserve(requested.size());
+    for (const int codepoint : requested)
+        if (supported.count(codepoint) != 0) codepoints.push_back(codepoint);
+    return codepoints;
+}
+
+std::vector<int> collectMissingFontCodepoints(
+    const char* fontPath,
+    const std::vector<std::string>& requiredTexts) {
+    std::set<int> requested;
+    for (const std::string& text : requiredTexts)
+        collectUtf8(text, requested);
+
+    std::set<int> supported;
+    if (!collectCmap(fontPath, supported))
+        return std::vector<int>(requested.begin(), requested.end());
+
+    std::vector<int> missing;
+    for (const int codepoint : requested)
+        if (supported.count(codepoint) == 0)
+            missing.push_back(codepoint);
+    return missing;
 }
