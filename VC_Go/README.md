@@ -1,185 +1,194 @@
-# Yehenala Market Simulation
+[README.md](https://github.com/user-attachments/files/32346815/README.md)
+# gosim — 1.0 生产与市场模拟（Go 内核）
 
-> **本仓库的 Go/1.0 线全部位于 `VC_Go/` 目录下，该目录即这条线的项目根。**
-> 本文与 `VC_Go/docs/`、`VC_Go/gosim/`、`VC_Go/tools/`、`VC_Go/1.0 生产与市场模拟.md` 平级，
-> 文中路径因此都带 `VC_Go/` 前缀。所有命令**从仓库根目录执行**，例如
-> `node VC_Go/tools/leontief_probe.js`。`out/` 目录位于仓库根且不入库（见 `VC_Go/.gitignore`）。
->
-> **范围说明**：`VC_Go/` 只收录 Go/1.0 线。C++ 2.0 世界模拟的源码（`world*.cpp`、`CMakeLists.txt`、
-> `data/`、`tools/build_reviewed_geometry.*` 等）位于本仓库的其他位置，**不在此目录内**——因此下文
-> 提到的这些文件在本目录中不存在，其 `out/build/...` 路径同属该线，不在 `VC_Go/` 范围内。
+本目录把校验过程中验证过的逻辑，以及用户提出的「政府 + 资本」方案，
+显式落成可编译的 Go 工程。
 
-Yehenala is a C++17 economic simulation with a Raylib interface. Version 2.0 remains the active data, ownership, and simulation contract. The executable defaults to the standard country-market world: every province has one LocalMarket, every country has one NationalMarket, and each country's local markets receive the five-market specialization model. Use `--debug-five-markets` for the isolated five-market diagnostic fixture.
+> **先读 `VC_Go/docs/ACTIVE.md`**：那是本项目的唯一入口，含当前状态、已验证结论、
+> 未决事项与恢复工作指引。本文只讲 Go 工程的包结构与条文映射。
 
-## Two parallel tracks
+## ⚠️ 状态声明（2026-09-18 更新）
 
-| Track | What it is | Where |
-| --- | --- | --- |
-| **C++ 2.0 world simulation** | The Raylib province-and-market world described below. The active shipping contract. | this README, `world*.cpp` … |
-| **Go 1.0 market kernel** | An 11-commodity × 11-building Leontief market simulation used to validate the 1.0 production-and-market contract: single-entry ledger, cohort cash pools, government/capital layer, privatisation. Not part of the C++ build. | `VC_Go/gosim/`, `VC_Go/1.0 生产与市场模拟.md`, `VC_Go/docs/` |
+### 已完成（全部实测通过）
 
-**Start with [`VC_Go/docs/ACTIVE.md`](VC_Go/docs/ACTIVE.md)** — the single entry point for the Go/1.0 track.
-It carries the current status, the already-verified conclusions, the undecided contract
-questions, and a 30-minute context-recovery procedure. Evidence for the latest round is
-indexed by question in `out/archive/2026-09-18-equilibrium/README.md`.
+| 项 | 结果 |
+|----|------|
+| `go build ./...` | exit=0 |
+| `go vet ./...` | exit=0 |
+| `go test ./...` | 全绿（book / calibrate / fiscal / ledger / market / model / sim） |
+| `DSH_AUDIT=1 go test ./internal/sim/ -v` | **33 个审计测试全绿** |
+| 记账不变量 | 货币净变动 = 注入额（扣除后 Δ=0）；借贷 0 违规；政府现金流分解残差 0.00；**逐建筑对账残差 0.00** |
+| 平衡推导 | 平衡价格 = `P_cost`（回代偏差 0.0675%）；平衡等级 688.61 级 @ 人口 10m；起始等级全部严格小于 L\* |
 
-## Five-market Debug fixture
+> **订正**：本 README 曾记载"`go vet` / `go test` / 实跑未执行，因为沙箱禁止管道 stdio"。
+> 那是早期环境限制，现已不存在——上述命令全部跑通。工具链位于 `../Go/bin/go.exe`。
 
-The explicit `--debug-five-markets` mode creates five specialized local markets in one country. Every pair of markets is connected in both directions for every storable commodity, giving 10 undirected market pairs, 20 directed market pairs per commodity, and 220 directed routes in total.
+### 仍然未解决（属契约层，非实现缺陷）
 
-- Market A produces grain and processed food.
-- Market B produces fabric, clothes, and luxury clothes.
-- Market C produces coal and iron.
-- Market D produces steel and tools.
-- Market E produces housing, construction capacity, and precious metals.
+**经济不能存活**：基线 3000 tick 末态总级数归零。主因是政府持股约 70%
+而 10% 交易税只覆盖约 9.5% 产出，存在闭式缺口 ≈ `0.61 W`，
+**与起点布点、与税率都无关**（四组对照实验已证）。详见 `VC_Go/docs/ACTIVE.md` §四。
 
-The Debug UI keeps the 1.1 panels for Goods, Buildings, Construction, and Macro data, then adds market switching and warehouse-network diagnostics. The Goods panel exposes the complete weekly chain, 52-week demand, production commands, inventory-review cadence, route distance and price decomposition, active orders, in-transit cargo, and the conservation residual. The Buildings panel exposes each input buffer's on-hand, reserved, confirmed-inbound, and backlog quantities. The Macro panel uses 52-week GDP for the headline while retaining raw weekly GDP for batch-level diagnosis, railway revenue, and warehouse profit.
+### 复现命令
 
-    out/build/mingw-release/YehenalaMarket.exe
-    out/build/mingw-release/YehenalaMarket.exe --debug-five-markets --debug-panel macro --debug-market 4
-    out/build/mingw-release/YehenalaMarket.exe --world-gui
-    out/build/mingw-release/YehenalaMarket.exe --debug-five-markets --warmup 1000 --dump-debug-state out/debug-report.json
-    out/build/mingw-release/YehenalaMarket.exe --warmup 1000 --dump-debug-state out/report.json
+```powershell
+$env:GOROOT   = "D:\DSH Desktop\Code\YehenalaMarket\Go"
+$env:GOCACHE  = "D:\DSH Desktop\Code\YehenalaMarket\out\gocache"
+$env:GOPATH   = "D:\DSH Desktop\Code\YehenalaMarket\out\gopath"
+$env:GOTMPDIR = "D:\DSH Desktop\Code\YehenalaMarket\out\gotmp"
+Set-Location "D:\DSH Desktop\Code\YehenalaMarket\gosim"
 
-The headless report exits successfully only when topology, warehouse audit, inventory conservation, finite GDP, and positive 52-week GDP all pass.
+go build ./... && go vet ./...
+go test ./... -count=1
 
-## Production and logistics contract
+$env:DSH_AUDIT="1"
+go test ./internal/sim/ -v -count=1
 
-1. Each warehouse performs at most one all-commodity inventory review per logistics week. Repeated calls in the same cycle are suppressed and counted by the debug probe.
-2. Consumer demand and production-order arrivals feed exact rolling 52-week means. The production department receives that mean as its constant-demand command, bounded by physical capacity and outstanding committed demand.
-3. A warehouse or building-buffer shortage creates one root replenishment demand. The order first allocates unreserved local stock.
-4. Any remaining shortage selects a route only when both endpoints have railway buildings and the destination price exceeds the origin price plus the quoted railway capacity cost.
-5. Railway capacity is priced as labor wage plus railway raw-material prices. Distance does not change that capacity-unit price; it changes the capacity consumed by cargo (`distance * coefficient * cargo / 100`). The default railway setup starts at 10 levels and each level supplies 20 capacity units.
-6. The buyer funds escrow, the seller reserves exportable stock, and a producer creates a directed production child when stock alone is insufficient. Receipt settles the locked quote separately to the origin producer, source railway, and destination warehouse.
-7. Production can run only against a pending production order and committed building inputs. Inputs move from the market warehouse into the producer buffer, are reserved for that order, and are consumed when output completes.
-8. Completed output enters the producer market warehouse. Local demand moves it into a building buffer; remote demand dispatches it on the selected route, records physical in-transit stock, and settles escrow on receipt.
-9. Consumer, construction, and intermediate use remove goods only from their final local inventory. Every weekly commodity statement must satisfy:
+go run ./cmd/market-sim -ticks 3000                 # 基线（统一 5 级，人口 10m）
+go run ./cmd/market-sim -ticks 800 -init-level 0    # 物质平衡布点对照
+go run ./cmd/diag_govcash                           # 货币守恒诊断
+```
 
-       opening + production + receipts
-       - dispatches - transfers to producers - consumer use - construction use
-       = closing
+`market-sim` 的输出是真正的验收点，重点看三件事：
 
-GDP uses the production approach: current-cycle output value minus current-cycle intermediate input value. `getWeeklyGDP()` remains the raw weekly statement; `getGDP()` and world snapshots expose the rolling 52-week total so an idle batch week cannot erase a market's displayed GDP.
+1. §3.4 标定的谱半径是否为 0.5000、11 个零成本价是否与契约表格吻合；
+2. 政府现金池是否长期守住正值（若长期为负，建造力采购会归零）；
+3. 建造力采购量是否非零（为 0 即说明货币闭环仍有断点）。
 
-## Frozen ownership model
+### 参数的零值陷阱
 
-| Object | Owns | Does not own |
-| --- | --- | --- |
-| Country | Treasury, reserved construction budget, national construction queue, member provinces, aggregated population and GDP | Nothing in the player command path is outside the country |
-| Province | Local population, buildings, employment, local market, and construction placement | Player cash, an independent construction budget, or an independent player build decision |
-| Construction project | Payer country, target province, building type, quantity, budget, reservation, progress, and lifecycle status | A direct relationship to a player cash pool |
-| Player | National commands issued on behalf of the selected country | Independent cash or construction ownership |
+`-init-level` 的语义是 **-1 = 契约默认（每种生产建筑 5 级）／0 = 物质平衡布点／
+>0 = 统一该等级**。不要用 0 表示"默认"——那样就永远选不中物质平衡布点，
+>而它正是对照实验的另一臂。同一约定见 `sim.Options.ProductionInitLevel` 的注释。
 
-Private capitalist expansion remains a private-economic action. Player-issued construction always enters the payer country's national queue.
+### 工具的边界
 
-## 2.0 world UI
+`VC_Go/tools/goparse.js` 是早期为绕过沙箱限制写的 Go 语法自检器，**现已不需要**——
+`go build` / `go vet` 均可直接运行。保留它是为了在没有工具链的环境里仍能做
+粗粒度检查（字面量闭合、括号配对、`case` 位置、未使用 import 等）。
 
-The standard runtime draws the world map first and keeps it visible behind a detail overlay. `--world-gui` remains a compatibility alias for this mode.
+**它不替代编译器**：不查类型、不查接口满足、不查方法集。
 
-- Clicking a province opens its country panel with that province selected.
-- The country panel occupies the left two-fifths (40 percent) of the viewport and fills the usable height.
-- The upper-right Build list button opens an independent national construction overlay occupying the right two-fifths; its clicks and wheel input never reach the map.
-- The country header shows a 3:2 flag, name/country code, national population, GDP, treasury, reserved budget, and available treasury.
-- The country pages are Overview and Construction. The overview lists member provinces; the construction page is the only player build entry point and exposes cancellation for queued or active projects.
-- Clicking a province row opens the embedded local-market desk in the same left two-fifths overlay. It reuses the four Debug panels (Goods, Buildings, Construction, and Macro) with a compact layout; the selected province's LocalMarket is bound directly without changing the world's current market.
-- The embedded desk's building controls remain command-only: `+` queues exactly one national project through `World`, and `-` cancels the newest queued or active project for that province/building type.
-- Returning from a province preserves the country, selected province, selected page, and independent scroll offsets. Closing the panel returns to the map.
-- The panel consumes clicks and wheel input inside its rectangle. The map continues to hover, select, edge-scroll, and zoom outside that rectangle.
-- Map wheel zoom is clamped to a readable range and keeps the cursor's longitude as the zoom anchor. Horizontal map scrolling wraps at the Pacific seam.
-- The world map uses the embedded Natural Earth land layer as a neutral visual base. Reviewed province geometry is drawn above it and is the only interactive layer; land that has no province binding remains visible but cannot be selected or navigated.
+## 为什么要有这个工程
 
-Every province owns one LocalMarket. Every country owns one NationalMarket containing the IDs of its member local markets. Country population and GDP are calculated from member province snapshots for the same simulation cycle; no second writable aggregate is maintained.
+1. **契约的唯一权威是 `../1.0 生产与市场模拟.md`**，而它描述的 11 商品 ×
+   11 建筑的联合模拟此前只以碎片化探针存在（`expansion_probe.js` 还是
+   单商品自洽近似）。本工程把它组织成分层可测的内核。
+2. **1.0 契约存在一处会计黑洞**：§4.3 只写"建造力费用从现金池扣除"，
+   未定义收款方。量化结果（`VC_Go/tools/construction_sink_probe.js`）：
+   ARCHITECTURE §10.2 的扩建目标需要 128.32 亿元建造力，
+   而 §4.3 给出的初始货币总量只有 250,000 元——缺口 5.1e4 倍。
+   本工程用 G1–G6 规则闭合它（见下）。
+3. **三表必须联合标定**：工资与需求都随人口线性缩放，故"居民税后工资 =
+   最终需求价值"对人口是齐次的——缩放人口不改变比值。必须解出需求缩放
+   系数 k。**实测 k = 1.0400**（`internal/calibrate` 的 `jointDemandScale`；
+   早先探针给出的 ≈0.9361 是未含建筑工资口径的中间值，已废弃）。
+   1.0 契约从未做这一步。
 
-## Version and map scenario
+> **注意（2026-09-18 复测）**：`k` 是在 **t = 0（不收税）** 下标定的，
+> 而 §4.5.3 收全过程 10% 交易税，故在平衡布点上居民税后可购价值只覆盖
+> 名义需求的 0.909157，**结构性缺口 9.0843%**。这是待裁决项之一。
 
-The repository has no 1.1 or 1.2 branch/tag. The checked-in runtime contract is 2.0 and the map scenario is frozen in `scenario_config.h`:
+## 目录结构与契约映射
 
-- `scenarioYear = 1880`
-- `alternateHistory = true`
-- `scenarioKey = 1880_alternate_colonial_relations`
+| 路径 | 职责 | 契约依据 |
+|------|------|----------|
+| `internal/num` | 定点数、矩阵求逆、幂法谱半径、钳制与插值 | ARCHITECTURE §7.1 |
+| `internal/model` | 商品、配方、建筑、消费组、财富档、全局参数 | §3.1 §3.2 §3.3 §5 §6 |
+| `internal/calibrate` | 零利润价、加成价、谱半径校验、三表联合标定 | §3.4 |
+| `internal/market` | 价格 ODE 的 RK4 积分、钳制、解析平衡态 | §2.1–§2.4 |
+| `internal/produce` | 投入申报、等比配给、短缺惩罚、自给农场 | §3.3 §4.2 |
+| `internal/consume` | 消费组、财富插值、权重购买、满足度、人口增长 | §6.1–§6.5 |
+| `internal/build` | 扩建规则、队列、完工、缩编、雇佣调整 | §4.1–§4.4 §5 |
+| `internal/cohort` | 人群与阶级现金池（3 阶级 × 12 场地 = 36 池） | §5.1 |
+| `internal/ledger` | **记账机制**：账户、借贷相等校验、唯一注入入口 | §4.5.3 |
+| `internal/book` | **交易语义**：每类流动一个方法，借贷两侧写在同一处 | §4.5.3 |
+| `internal/fiscal` | **政府与资本：G1–G7** | 用户方案 |
+| `internal/sim` | tick 管线（17 步）、状态、快照、不变量 | §8 |
+| `internal/report` | §8.4 判据 A1–A8 判定与诊断 | §8.4 |
+| `cmd/market-sim` | CLI 入口 | — |
+| `cmd/diag_govcash` | 货币守恒与债务机制诊断 | §4.5.3 §4.5.4 |
 
-This is an explicit alternate-history scenario. It combines post-1867 Austria-Hungary, later colonial subject relations, and the alternate Prussian central-African relation; it must not be presented as one real-world historical year.
+> **记账分层的关键约定**：`ledger` 只管"借贷是否相等"，`book` 只管"这笔交易的
+> 业务语义"。所有余额只有一份，存放在 `ledger.Auditor`。
+> **诊断代码不得重算分摊**，必须使用 `book` 返回的记账事实——
+> 否则两处口径会分叉，而全局不变量仍然全绿（2026-09-18 实际发生过，残差 213 万）。
 
-The neutral land base is Natural Earth 1:50m (`data/ne_50m_admin_0_countries.geojson`). Reviewed province geometry is generated offline from Natural Earth 10m admin-1 (`data/ne_10m_admin_1_states_provinces.geojson`) plus the frozen water-hole dataset (`data/ne_10m_review_water.geojson`) by `VC_Go/tools/build_reviewed_geometry.py` using Shapely/GEOS dissolve, precision snapping, validity repair, source assignment, water-hole, and cross-feature positive-area overlap gates. Rendering, labels, and hit testing consume the same final `ProvinceShape.parts` and `ProvinceShape.holes` geometry. No post-draw historical overlay or rectangular longitude/latitude envelope is authoritative. `geometryReviewed` controls the strict ring-topology and land-coverage gates; basemap binding repairs reviewed label anchors from the same final geometry.
+## 用户方案（G1–G6）的落点
 
-Map colors are a tested palette: CHI `#F2E6A7` (China), FRA `#4777B8` (France), GBR `#C84B4B` (Britain), PRU `#8A6A4A` (Prussia), RUS `#8EBE6F` (Russia), AUS `#E6E4DD` (Austria), USA `#9DCBE7`, MEX `#4E9662`, BRA `#3E9B57`, JAP `#B83A42`, SWE `#79C6D5`, and LCO `#E58A32`. Supplementary modeled countries have explicit entries in `country_palette.cpp`. Subject countries resolve recursively to their final `overlordKey` color; every target must exist and the relation graph must be acyclic. Austria's light gray requires a dark boundary stroke.
-To regenerate the checked-in reviewed geometry, run `python VC_Go/tools/build_reviewed_geometry.py` from the repository root (or `VC_Go/tools/build_reviewed_geometry.ps1` on Windows). The CMake target `reviewed_geometry` runs the same command and is a dependency of `YehenalaCore`; it uses the checked-in 10m admin-1 and water inputs, so a normal build cannot embed a stale reviewed map. The generator fails on invalid/empty regions, any positive-area overlap between reviewed features, a missing or duplicated Russian source district, a Russian union mismatch, or a filled Caspian/1880 Aral water point.
+| 规则 | 实现位置 |
+|------|----------|
+| G1 政府抽取全部交易额的税率 t | `fiscal.CollectTax`，调用点 `sim.step` 步骤 ⑥ |
+| G2 建造力必须在市场内购买，买家是政府 | `fiscal.Government.PurchasePower` + `SellPower` |
+| G3 建筑所有权：政府 / 私有 | `model.Owner`、`sim.BuildingState.GovLevel/PrivLevel` |
+| G4 私有纯利归金融区 | `fiscal.Government.DistributeProfit` → `Capital` |
+| G5 金融区：每级 1k 人，掌控 5 级 | `model.BuildingSpecs` 的金融区项、`fiscal.Capital.UpdateControl` |
+| G6 私有扩建资金划拨给政府 | `fiscal.SaleRequest.Payer` + `sim.step` 的 `debit` 回调 |
 
-The frozen political relation set is: Britain -> South Africa, India, Canada, Australia; France -> Algeria, Indochina, West Africa; Turkey -> Egypt; Russia -> Finland; Sweden -> Norway; Prussia -> Central Africa; Low Countries -> East Indies. These relations affect political ownership and color only, not fiscal, military, or AI behavior.
+### 货币闭环为什么成立
 
-### Geography acceptance descriptions
+建造力是**唯一没有最终消费者**的商品：它的唯一买家是投资需求。
+政府用税收采购建造力，再把它卖给要扩建的企业：
 
-The following descriptions are the source contract for map editing and review:
+```
+税收 → 政府 → 建造部门（工资 + 投入）→ 回到居民/企业流通
+企业现金池 → 政府（购买建造力）
+```
 
-- **Taiwan / east China:** treat Taiwan at approximately 120-122.1E / 21.9-25.3N and Penghu as an independent `MultiPolygon` part of `east_china`; never connect it to the mainland with a straight segment. High-resolution data may add Kinmen and Matsu. Acceptance points are Taipei, Taichung, and Kaohsiung.
-- **England:** if the name remains England, use only southern Great Britain: the northern edge follows the Scotland border, Wales is excluded, and the Isle of Wight and Isles of Scilly remain parts. Scotland and Wales are separate provinces. Ireland contains no British-island geometry. If the province is not split, rename it Great Britain.
-- **Punjab:** use the upper Indus basin and the Jhelum, Chenab, Ravi, Beas, and Sutlej river basins, including Lahore, Amritsar, Multan, and Rawalpindi. The west ends at the Sulaiman foothills, the north at the Himalayan front, the east at the Yamuna watershed, and the south at the northern Thar Desert. Exclude Kabul, Balochistan, Karachi, the high Kashmir ranges, and Gujarat.
-- **Central Asian steppe:** cover the selected-year Russian Kazakh steppe and Turkestan. The west follows the eastern Caspian shore, the south the Persian and Afghan borders, the east the Tien Shan and Chinese border, and the north the Siberian forest-steppe line. The Caspian and Aral Seas are explicit water holes; Persia, Afghanistan, and Xinjiang are excluded.
-- **Prussia:** draw discontinuous territory: Rhineland/Westphalia and western enclaves, then Brandenburg, Pomerania, Silesia, Posen, and East/West Prussia. Follow Dutch, Belgian, Danish, Baltic, German-state, and Russian-Polish borders. Do not replace these components with one belt across northern Germany and Poland.
-- **Congress Poland:** because the province is Russian-owned, draw Congress Poland rather than modern Poland: Warsaw, Lodz, Lublin, and the Vistula basin; north-west touches Prussia, south touches Austrian Galicia, and east touches Russia proper. Exclude Posen, East/West Prussia, Galicia, and Vilnius.
-- **Austria-Hungary and Italy:** use the post-1867 name only. Lombardy and Venetia belong to Italy. Austria retains South Tyrol/Trentino, Trieste, Istria, Dalmatia, Bohemia, Moravia, Galicia, Bukovina, Hungary, Slovakia, Transylvania, and Croatia. Italy is the boot-shaped peninsula plus Sardinia and Sicily, with Austrian territory excluded and no rectangular islands or Adriatic bridge polygons.
-- **Ottoman Turkey:** use a date-consistent name. The homeland consists of Anatolia, East Thrace, and selected directly ruled Balkan, Levantine, and Mesopotamian parts as separate coastal/border-following `MultiPolygon` components. Exclude Greece, Persia, Russian Caucasus, and Austria-Hungary; never fill the Black, Aegean, or Mediterranean seas.
-- **Egypt:** include the Nile Delta, Nile Valley, and Sinai. If Khedivate Sudan is modeled, keep Sudan as an independent component/province along the Nile and Red Sea; do not cover the Ethiopian highlands, Somalia, Kenya, or Libya. A puppet keeps its own boundary but resolves to its overlord color.
-- **Russia:** the ten macro-regions are North Russia (Kola-White Sea-Arkhangelsk), Central Russia (Moscow and Oka-Volga core), Baltic (Gulf of Finland/Riga shore), Ukraine (Dnieper and north Black Sea), Caucasus (between Black and Caspian), Central Asian Steppe, West Siberia, Central Siberia, East Siberia, and Far East (Amur, Ussuri, Primorye, Kamchatka, Chukotka, and selected-year Sakhalin). Parts must meet without overlap, holes must remain water, and the Pacific seam must never close across ocean.
+两条流方向相反、金额相等，因此**总流通货币不变**，同时扩建获得了真实资金约束。
 
-The province page body, labels, and building cards use a shared minimum 14px text contract. Building `+` queues exactly one national project through `World`; `-` cancels the newest matching queued/active project and does not write `LocalMarket` directly.
+> **反例（已实测崩解）**：若让政府只买不卖、把税收沉淀，则每 tick 从流通中
+> 抽走与税收等量的货币，消费支出随之下降，经济进入通缩螺旋。
+> 这是本工程 v3 版本的崩解原因，记录在 `../out/core_sim_gov.txt`。
 
-## National construction accounting
+## 契约缺失项的显式补全
 
-1. A project must target a province currently owned by the payer country.
-2. Before enqueueing, the model checks treasury minus already reserved construction budget.
-3. A successful order reserves the complete requested budget atomically, so separate provinces cannot spend the same funds.
-4. Each simulation cycle consumes construction goods and settles actual spending from the reservation. Completion adds the building to the target province.
-5. Cancellation releases only the unpaid reservation. Paid construction spending is never refunded.
-6. Province building cards are snapshot-driven. `+` and `-` are command controls only: `+` queues one unit through the payer country's national queue, while `-` releases the newest matching unpaid reservation through `World`; no UI drawing function writes a province or LocalMarket directly.
-7. A country transfer is rejected while active national or legacy government orders target the province. Invalid foreign or orphaned projects are blocked and their remaining reservation is released.
-8. Government money flows for country-owned provinces use the country treasury. The legacy LocalMarket playerCash path remains only for standalone markets and private compatibility paths.
-9. Country deletion is refused while member provinces remain attached; orphaned active projects are blocked and unpaid reservations are released before an empty country is removed.
-10. National project prices are locked at enqueue time. Each country shares one staffed construction-capacity pool across its active projects, and each successful payment is posted to the target province's construction department and the next market GDP statement.
-11. Bad-debt write-off removes the matching lender-side cash/capital entry instead of recapitalizing a borrower from nowhere. Fiscal-country treasury is included once per member province in local money-supply and price-level accounting.
+代码里每一处补全都带注释说明理由，汇总如下：
 
-## Build on Windows
+| 契约位置 | 缺失内容 | 本工程的补全 |
+|----------|----------|--------------|
+| §4.3 | 建造力的付款方 | G2：政府是最终买家；G6：企业向政府购买 |
+| §4.5.3 | 各主体的余额存放处与借贷校验 | `internal/ledger`（机制）+ `internal/book`（语义），所有余额只一份 |
+| §5 | 人群现金池（居民资产负债表） | `internal/cohort`：3 阶级 × 12 场地 = 36 池，工资与消费逐池结算 |
+| §5 + §7 | 工资池与货币闭环 | 工资是居民唯一资金来源，消费支出 ≤ 税后工资 |
+| §3.4 | 三表联合标定 | `calibrate.jointDemandScale` 解出需求缩放 k = 1.0400 |
+| §3.3 | 多建筑竞争投入品的分配 | `produce.Settle` 的 pro-rata 配给（Σalloc = A） |
+| §3.2 | 开局建筑数量未规定 | `Params.ProductionInitLevel`（默认 5）+ `InitialPowerLevel`（默认 20，建模值非契约值） |
+| §4.4 | 缩编触发条件只写"雇佣率低" | 追加"亏损"条件，避免短暂解雇永久摧毁资本 |
+| §5 | "每周期增雇 5%" 未给时间语义 | D9：年化 5%，每 tick 5%/52 |
+| §6.5 | 三段插值数学互斥 | `consume.PopulationGrowth` 取两段线性，三锚点全满足 |
+| §8.4 A3 | 与 §6.5 人口增长互斥 | `report` 在判定时显式标注该矛盾 |
+| §8.4 A1 | 阈值 ln5 与钳制上限 5×Pcost 重合 | `report` 在判定时显式标注该矛盾 |
 
-The repository includes Raylib headers and static libraries. The supplied CMake presets use MinGW and Ninja under D:/Code/mingw64.
+## 如何解读输出
 
-    cmake --preset mingw-debug
-    cmake --build --preset mingw-debug --target reviewed_geometry
-    cmake --build --preset mingw-debug
+`cmd/market-sim` 会打印：
 
-The GUI executable is out/build/mingw-debug/YehenalaMarket.exe. A release package can be built with the mingw-release preset and installed with cmake --install.
+1. **§3.4 标定结果** —— 谱半径、需求缩放 k、11 个零成本价与开局利润率。
+   谱半径必须 < 1；开局利润率应全部恰为 20%（这是最容易实现错的一处，
+   见 §3.4 的口径注）。
+2. **时序摘要** —— 抽样 tick 的人口、总级数、政府现金池、税收、
+   建造力采购与售出量。**关键观察点**：政府现金池是否长期为负、
+   建造力采购是否为 0。任一项成立即说明货币闭环没接上。
+3. **§8.4 判据 A1–A8** —— 每条判据附"判据自身问题"标注，
+   不掩盖 A1/A3 的数学矛盾。
 
-## Deterministic screenshots
+> **当前实测（人口 10m）**：判据汇总"通过 3~4 / 6"，但**这不可解读为经济健康**——
+> 末态总级数为 **0**，契约 §8.4 自己指出的"空真通过"正在发生。
+> A8（货币守恒）是唯一全程真正成立的判据。
 
-    out/build/mingw-debug/YehenalaMarket.exe --screenshot map.png --size 1920x1080 --frames 3
-    out/build/mingw-debug/YehenalaMarket.exe --screenshot map_zoom.png --map-zoom 2 --map-scroll 1200 --size 1440x900 --frames 3
-    out/build/mingw-debug/YehenalaMarket.exe --screenshot country.png --view country --tab overview --province north_china --size 1024x720 --frames 3
-    out/build/mingw-debug/YehenalaMarket.exe --screenshot construction.png --view country --tab construction --province north_china --size 1440x900 --frames 3
-    out/build/mingw-debug/YehenalaMarket.exe --screenshot construction_panel.png --construction-panel --size 1024x720 --frames 3
-    out/build/mingw-debug/YehenalaMarket.exe --screenshot province.png --view province --province north_china --size 1920x1080 --frames 3
+## 已知未闭合项
 
-Supported country tab aliases are overview and construction. The older local, national, transport, and numeric aliases remain accepted by the launcher for compatibility, but they do not grant province-level construction rights.
+**记账层已全部闭合**（货币守恒、借贷相等、政府分解、逐建筑对账残差均为 0）。
+以下为**契约层**待裁决项，详见 `VC_Go/docs/ACTIVE.md` §四：
 
-### Geography regression screenshots
-
-The map viewport is a wrapped 3840px world. These deterministic zoomed captures place the reviewed regions in the center and keep the Pacific seam visible for visual review:
-
-    out/build/mingw-debug/YehenalaMarket.exe --screenshot out/taiwan.png --map-zoom 2 --map-scroll 2250 --size 1440x900 --frames 3
-    out/build/mingw-debug/YehenalaMarket.exe --screenshot out/england.png --map-zoom 2 --map-scroll 960 --size 1440x900 --frames 3
-    out/build/mingw-debug/YehenalaMarket.exe --screenshot out/poland_balkans.png --map-zoom 2 --map-scroll 1250 --size 1440x900 --frames 3
-    out/build/mingw-debug/YehenalaMarket.exe --screenshot out/near_east.png --map-zoom 2 --map-scroll 1450 --size 1440x900 --frames 3
-    out/build/mingw-debug/YehenalaMarket.exe --screenshot out/russia.png --map-zoom 2 --map-scroll 2050 --size 1440x900 --frames 3
-    out/build/mingw-debug/YehenalaMarket.exe --screenshot out/pacific_seam.png --map-zoom 2 --map-scroll 3700 --size 1440x900 --frames 3
-
-The generated files are under the ignored `out/` directory. A review must check Taiwan as a separate island part, England/Scotland/Wales separation, Congress Poland and Prussia adjacency, Balkan/Near-East coast and sea holes, the ten Russian macro-regions, and no polygon closure across the Pacific seam.
-
-## Source layout
-
-- world*.cpp, country.*, province.*, world_data.*: registries, snapshots, national queues, province markets, and simulation orchestration.
-- warehouse*.cpp and local_market*.cpp: logistics lifecycles, weekly local simulation, and standalone compatibility finance.
-- building_manager*.cpp: local buildings, private orders, and construction settlement primitives.
-- map_model.*, map_layout.*, world_basemap.*: projection, looping, zoom, geometry, and hit testing.
-- ui_map.cpp, ui_country.cpp, ui_draw.cpp, ui_input.cpp, ui_navigation.cpp, main.cpp: map shell, country overlay, province submenu, input, navigation, and screenshots.
-- ui_construction.cpp: right-side national construction list, reservation metrics, scrolling, and cancellation input.
-- debug_ui.cpp, debug_ui.h, debug_report.cpp: full-screen five-market diagnostic UI plus the embedded four-panel LocalMarket desk and headless audit report.
-
-All source files are UTF-8. The selected font is checked through its cmap table before the UI starts.
+1. **政府持股 70% 与 10% 交易税不匹配**（经济不能存活的主因）：
+   政府缺口 ≈ `0.61 W`，与起点布点、与税率均无关。
+2. **G7 债务上限资产基数只取建造力产出**：只够 3~6 个周期。
+3. **需求缩放 k 按 t=0 标定**，未含 10% 税率：平衡布点上缺口 9.0843%。
+4. **起点产能 / 平衡产能 = 1/9.8**：8/11 部门开局即负利润，§4.1 扩建阈值不触发。
+5. **政府建筑与私有建筑的经营成果归属**在契约中未定义，本实现按 G3/G4 处理，
+   但"政府建筑的利润算不算财政收入"仍待裁决。
+6. **金融区的建造成本**（默认 400 建造力）是新增参数，契约未给。
+7. `report.Assess` 中 A3 的 S/a 用 S/D 等价度量替代（两者只差一个由价格
+   决定的因子），若需严格口径应在 `Snapshot` 中直接保存标定常数 a。
