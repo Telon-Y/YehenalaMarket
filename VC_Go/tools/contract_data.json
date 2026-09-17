@@ -1,0 +1,98 @@
+{
+  "_note": "1.0 契约的机器可读副本。所有数值逐项转录自 `VC_Go/1.0 生产与市场模拟.md`（§3.1 商品表、§3.3 投入产出表、§4.5.1/§4.5.3/§4.5.4 财政参数、§5 工资表、§6.3 财富档、§8.6 平衡表）。任何工具（探针、可视化）都应只从这里取数，避免再次出现『同一份契约数据被抄成三份』。",
+  "_contract": "VC_Go/1.0 生产与市场模拟.md",
+  "_contractLines": 933,
+  "_transcribedFrom": {
+    "goods": "§3.1 商品分类、需求弹性与价格（表格：商品/类别/弹性/零利润价/开局价）",
+    "recipes": "§3.3 建筑投入产出表（每周期）",
+    "finalDemand": "§8.6 平衡价格与平衡等级（最终需求列，人口 10,000,000，k=1.04）",
+    "equilibriumLevels": "§8.6 平衡等级 L* 列（契约定案值，供对照，不作为推导输入）",
+    "wage": "§5 劳动力与工资（每级 5,000 人 × 6.75 元 = 33,750 元/周期）",
+    "fiscal": "§4.5.1 初始政府持股 0.70；§4.5.3 全过程交易税 0.10；§4.5.4 债务上限 = 2 × (建造力产出 × 建造力价格)"
+  },
+  "_knownGaps": [
+    "§4.3 未规定『每单位耕地对应几个自给农场』（契约自认为未定项）。实现取 SubsistenceScale=0.05，属建模选择。",
+    "§3.2 未规定建造部门与金融区的初始等级。实现取 InitialPowerLevel=20、金融区按掌控比布点。",
+    "§4.5.4 的债务上限倍数在契约正文写作 2，而 VC_Go/tools/debt_cap_probe.js 与实现使用 2.739116。此处记录契约正文值 2，另记 implementationMultiplier 供对照。"
+  ],
+
+  "params": {
+    "wagePerLevel": 33750,
+    "financeWagePerLevel": 6750,
+    "laborPerLevel": 5000,
+    "ticksPerYear": 52,
+    "initialGovShare": 0.70,
+    "taxRate": 0.10,
+    "debtCapMultiplier": 2.0,
+    "implementationDebtCapMultiplier": 2.739116,
+    "startLevelPerBuilding": 5,
+    "initialPowerLevel": 20,
+    "subsistenceScale": 0.05,
+    "demandScaleK": 1.04,
+    "referencePrice": "P_cost（§3.4 零利润价）",
+    "priceFloorRatio": 0.2,
+    "priceCeilRatio": 5.0,
+    "expandThreshold": 0.10,
+    "decayWindow": 156,
+    "decayRate": 0.05,
+    "hireAnnual": 0.05
+  },
+
+  "goods": [
+    { "key": "grain",   "name": "谷物",     "category": "必需",   "elasticity": 0.3, "pcost": 675,  "pinit": 810,   "outputPerLevel": 50,  "isPower": false, "isFinance": false },
+    { "key": "food",    "name": "加工食品", "category": "必需",   "elasticity": 0.3, "pcost": 1350, "pinit": 1764,  "outputPerLevel": 45,  "isPower": false, "isFinance": false },
+    { "key": "fabric",  "name": "织物",     "category": "必需",   "elasticity": 0.4, "pcost": 750,  "pinit": 900,   "outputPerLevel": 45,  "isPower": false, "isFinance": false },
+    { "key": "clothes", "name": "服装",     "category": "必需",   "elasticity": 0.4, "pcost": 788,  "pinit": 1053,  "outputPerLevel": 100, "isPower": false, "isFinance": false },
+    { "key": "luxury",  "name": "高档服装", "category": "非必需", "elasticity": 1.5, "pcost": 1750, "pinit": 2250,  "outputPerLevel": 30,  "isPower": false, "isFinance": false },
+    { "key": "coal",    "name": "煤",       "category": "原料",   "elasticity": 0.6, "pcost": 1006, "pinit": 1465,  "outputPerLevel": 60,  "isPower": false, "isFinance": false },
+    { "key": "iron",    "name": "铁",       "category": "原料",   "elasticity": 0.6, "pcost": 1006, "pinit": 1465,  "outputPerLevel": 60,  "isPower": false, "isFinance": false },
+    { "key": "steel",   "name": "钢",       "category": "原料",   "elasticity": 0.7, "pcost": 1381, "pinit": 2208,  "outputPerLevel": 90,  "isPower": false, "isFinance": false },
+    { "key": "tools",   "name": "工具",     "category": "工业品", "elasticity": 0.8, "pcost": 767,  "pinit": 1169,  "outputPerLevel": 80,  "isPower": false, "isFinance": false },
+    { "key": "housing", "name": "住房",     "category": "非必需", "elasticity": 1.2, "pcost": 741,  "pinit": 1013,  "outputPerLevel": 60,  "isPower": false, "isFinance": false },
+    { "key": "power",   "name": "建造力",   "category": "投资品", "elasticity": 0.2, "pcost": 7250, "pinit": 11917, "outputPerLevel": 15,  "isPower": true,  "isFinance": false }
+  ],
+
+  "buildings": [
+    { "good": "grain",   "name": "谷物农场",   "buildCost": 200, "allowPrivatize": false, "inputs": {} },
+    { "good": "food",    "name": "加工食品厂", "buildCost": 600, "allowPrivatize": true,  "inputs": { "grain": 40 } },
+    { "good": "fabric",  "name": "棉花种植园", "buildCost": 200, "allowPrivatize": false, "inputs": {} },
+    { "good": "clothes", "name": "服装厂",     "buildCost": 600, "allowPrivatize": true,  "inputs": { "fabric": 60 } },
+    { "good": "luxury",  "name": "高档服装厂", "buildCost": 600, "allowPrivatize": true,  "inputs": { "fabric": 25 } },
+    { "good": "coal",    "name": "煤矿",       "buildCost": 600, "allowPrivatize": true,  "inputs": { "tools": 15, "coal": 15 } },
+    { "good": "iron",    "name": "铁矿",       "buildCost": 600, "allowPrivatize": true,  "inputs": { "tools": 15, "coal": 15 } },
+    { "good": "steel",   "name": "炼钢厂",     "buildCost": 800, "allowPrivatize": true,  "inputs": { "iron": 60, "coal": 30 } },
+    { "good": "tools",   "name": "工具厂",     "buildCost": 800, "allowPrivatize": true,  "inputs": { "steel": 20 } },
+    { "good": "housing", "name": "住房",       "buildCost": 800, "allowPrivatize": false, "inputs": { "steel": 5, "tools": 5 } },
+    { "good": "power",   "name": "建造部门",   "buildCost": 100, "allowPrivatize": true,  "inputs": { "steel": 25, "iron": 25, "tools": 20 } }
+  ],
+
+  "financeDistrict": { "name": "金融区", "laborPerLevel": 1000, "wagePerLevel": 6750, "controlPerLevel": 5, "buildCost": 400, "note": "不参与商品市场，无投入产出配方" },
+
+  "subsistenceFarm": { "note": "§3.3 自给农场：无投入，产出 谷物×2、织物×1、服装×0.5", "outputs": { "grain": 2.0, "fabric": 1.0, "clothes": 0.5 } },
+
+  "finalDemand": {
+    "_population": 10000000,
+    "_demandScaleK": 1.04,
+    "_source": "§8.6 表末列『最终需求』",
+    "grain": 5487.0, "food": 8230.6, "fabric": 1947.4, "clothes": 2337.4, "luxury": 390.0,
+    "coal": 0, "iron": 0, "steel": 0, "tools": 0, "housing": 5990.4, "power": 0
+  },
+
+  "equilibriumLevelsContract": {
+    "_source": "§8.6 表列 L*（契约定案值，仅供对照）",
+    "_total": 688.61,
+    "grain": 256.06, "food": 182.90, "fabric": 81.66, "clothes": 23.37, "luxury": 13.00,
+    "coal": 7.56, "iron": 7.56, "steel": 7.56, "tools": 9.08, "housing": 99.84
+  },
+
+  "acceptanceCriteria": [
+    { "id": "A1", "text": "价格在合法带内，且不长期贴边", "threshold": "|ln(P/P_cost)| ≤ ln5，贴边 tick 占比 < 5%", "implemented": true, "selfContradictory": true, "note": "阈值 ln5 与钳制上限 5·P_cost 完全重合 ⇒ 触边即取等号 ⇒ 恒不可达" },
+    { "id": "A2", "text": "利润率有界，无大面积亏损", "threshold": "每建筑 margin ∈ [−10%, +25%]，加权平均 ≤ +15%", "implemented": true, "selfContradictory": true, "note": "与封闭经济『全局总利润恒为 0』互斥" },
+    { "id": "A3", "text": "均衡点不再漂移", "threshold": "|Δ(P/P_cost)| < 1e-4 且 |Δ(S/a)| < 2e-4 每周期", "implemented": true, "selfContradictory": true, "note": "与 §6.5 人口增长互斥（人口年增 5% 时 S/a 漂移 9.4e-4）" },
+    { "id": "A4", "text": "GDP 正值且不衰退", "threshold": "GDP > 0 全程；末 500 周期斜率 ≥ 0", "implemented": true, "selfContradictory": false, "note": "实测结论随人口口径翻转，无判别力" },
+    { "id": "A5", "text": "无爆炸与无坍缩", "threshold": "等级/价格/现金池不单调冲向 0 或上界；人口年化 ∈ [0%, +5%]", "implemented": true, "selfContradictory": false, "note": "唯一始终判定失败的判据" },
+    { "id": "A6", "text": "建造队列不饥饿", "threshold": "末 2,000 周期队列非空 tick 占比 < 20%", "implemented": true, "selfContradictory": false, "note": "死亡态下成交占比 0% ⇒ 空真通过" },
+    { "id": "A7", "text": "政府债务在上限内", "threshold": "债务 ≤ 2 × (建造力产出 × 建造力价格)，且不持续贴顶", "implemented": false, "selfContradictory": false, "note": "契约 §8.4 明列，实现未判定" },
+    { "id": "A8", "text": "货币守恒（结构性判据）", "threshold": "|ΔM − ΔM_newcapital| = 0；借贷不相等记录 = 0", "implemented": false, "selfContradictory": false, "note": "契约指定的唯一结构性判据，实现未判定；但其不变量在审计套件中实测成立" }
+  ]
+}
