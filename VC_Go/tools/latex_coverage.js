@@ -3,7 +3,7 @@
 // 做法：从 md 抽出所有公式 → 提取其中每个 \command → 逐个单独渲染并检查输出质量，
 // 一次性列出"未支持/渲染可疑"的清单，避免逐个碰到再修。
 //
-// 运行：node VC_Go/tools/latex_coverage.js "VC_Go/1.0 生产与市场模拟.md"
+// 运行：node VC_Go/tools/latex_coverage.js "VC_Go/docs/1.0 生产与市场模拟.md"
 'use strict';
 const fs = require('fs');
 const { renderMath } = require('./tex2html.js');

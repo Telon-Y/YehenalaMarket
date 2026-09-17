@@ -2,7 +2,7 @@
 
 > 本文档记录本工程对 1.0 契约的【逐条显式改动】：位置、原文、改后、理由、验证方式。
 >
-> **契约文档 `VC_Go/1.0 生产与市场模拟.md` 已同步**（本次完成）。同步范围见第七节。
+> **契约文档 `VC_Go/docs/1.0 生产与市场模拟.md` 已同步**（本次完成）。同步范围见第七节。
 
 ---
 
@@ -28,7 +28,7 @@
 | 16 | **私有化机制**（总开关 + 逐建筑开关） | `internal/book/flow.go`、`internal/model/domain.go`、`internal/sim/step.go` | ✅ 已完成并验证 |
 | 17 | **显式场景注入**（严禁不明示修改数据） | `internal/sim/scenario_test.go` | ✅ 已完成 |
 | 18 | 修复 `Gov.TaxCollected` 漏记消费税与中间投入税 | `internal/sim/step.go` | ✅ 已完成并验证 |
-| 19 | **契约文档同步** | `VC_Go/1.0 生产与市场模拟.md`、`VC_Go/docs/1.0 生产与市场模拟.html` | ✅ 已完成 |
+| 19 | **契约文档同步** | `VC_Go/docs/1.0 生产与市场模拟.md`、`VC_Go/docs/1.0 生产与市场模拟.html` | ✅ 已完成 |
 
 **当前状态**：`go build ./...` exit=0，`go vet ./...` exit=0，7 个包全绿，16 个审计测试全绿。
 
@@ -553,7 +553,7 @@ const (
 
 ### 已完成 D：契约文档同步（本次完成）
 
-`VC_Go/1.0 生产与市场模拟.md` 已同步本次全部改动。逐节：
+`VC_Go/docs/1.0 生产与市场模拟.md` 已同步本次全部改动。逐节：
 
 | 契约位置 | 同步内容 |
 |----------|----------|
@@ -725,6 +725,6 @@ go run ./cmd/diag_govcash
 
 # 契约文档重新渲染（md 为唯一源）
 Set-Location ..
-node VC_Go/tools/md2html.js "VC_Go/1.0 生产与市场模拟.md" "VC_Go/docs/1.0 生产与市场模拟.html"
+node VC_Go/tools/md2html.js "VC_Go/docs/1.0 生产与市场模拟.md" "VC_Go/docs/1.0 生产与市场模拟.html"
 node VC_Go/tools/html_audit.js "VC_Go/docs/1.0 生产与市场模拟.html"
 ```

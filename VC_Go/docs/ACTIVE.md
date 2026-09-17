@@ -94,12 +94,12 @@ go run ./cmd/market-sim -ticks 3000
 | **验收判决与游戏内核裁定（本轮）** | **`out/verdict/VERDICT-1.0-acceptance.md`** |
 | 判决的独立复算证据 | `out/verdict/survival_condition_probe.txt`、`out/verdict/contract_consistency_probe.txt` |
 | 判决的实跑留档 | `out/verdict/sim-10000pop10m.txt`、`sim-600-tax-sweep.txt`、`sim-3000-init-level-0.txt` |
-| 契约本体（含 §8.6 平衡推导、§8.5 未达标项） | `VC_Go/1.0 生产与市场模拟.md`（或渲染版 `VC_Go/docs/1.0 生产与市场模拟.html`） |
+| 契约本体（含 §8.6 平衡推导、§8.5 未达标项） | `VC_Go/docs/1.0 生产与市场模拟.md`（或渲染版 `VC_Go/docs/1.0 生产与市场模拟.html`） |
 | 修复前的缺陷史与修复后的复测 | `VC_Go/docs/AUDIT-1.0.md`（重点 §十） |
 | 历次改动的变更表 | `VC_Go/docs/CHANGES-1.0.md` |
 | 唯一记账簿的设计 | `VC_Go/docs/LEDGER-1.0.md` |
 | 本轮全部证据（按问题检索） | `out/archive/2026-09-18-equilibrium/README.md` |
-| Go 工程的包结构与契约条文映射 | `VC_Go/gosim/README.md` |
+| Go 工程的包结构与契约条文映射 | `VC_Go/README.md` |
 
 ## 四、未决事项（需裁决，按优先级）
 
@@ -128,9 +128,9 @@ go run ./cmd/market-sim -ticks 3000
    重算会导致两处口径分叉，而全局不变量仍然全绿（已发生过一次，残差 213 万）。
 4. **全局不变量 ≠ 逐账户正确**：前者是全账户求和的标量，后者是逐账户的向量。
    加新的资金流时，必须同时给逐账户对账加断言。
-5. 契约文档以 `VC_Go/1.0 生产与市场模拟.md` 为唯一源，改后必须重新渲染并校验：
+5. 契约文档以 `VC_Go/docs/1.0 生产与市场模拟.md` 为唯一源，改后必须重新渲染并校验：
    ```powershell
-   node VC_Go/tools/md2html.js "VC_Go/1.0 生产与市场模拟.md" "VC_Go/docs/1.0 生产与市场模拟.html"
+   node VC_Go/tools/md2html.js "VC_Go/docs/1.0 生产与市场模拟.md" "VC_Go/docs/1.0 生产与市场模拟.html"
    node VC_Go/tools/html_audit.js "VC_Go/docs/1.0 生产与市场模拟.html"   # 必须「全部检查通过」
    ```
    注意数学渲染器不支持 `\overset`。
@@ -145,18 +145,18 @@ go run ./cmd/market-sim -ticks 3000
 
 ```
 VC_Go/
-  1.0 生产与市场模拟.md        契约唯一源（933 行）
-  README.md                    仓库两条线的总说明（C++ 2.0 与 gosim 并行）
+  README.md                    ← 项目说明：gosim 的包结构与契约条文映射
   .gitignore                   忽略 out/ 与构建缓存
   docs/
     ACTIVE.md                  ← 本文：唯一入口
+    1.0 生产与市场模拟.md        契约唯一源（933 行）
+    1.0 生产与市场模拟.html      契约渲染产物
     AUDIT-1.0.md               审计报告（§十 = 修复后复测）
     CHANGES-1.0.md             变更表（三轮）
     LEDGER-1.0.md              唯一记账簿设计
     FEASIBILITY-1.0.md         可行性评估
     ARCHITECTURE.md            架构决策（D1–D9、风险 R1–R3）
     tasks.json                 任务清单
-    1.0 生产与市场模拟.html      契约渲染产物
   gosim/                       Go 经济仿真（模块 yehenala/market）
     cmd/market-sim             主程序
     cmd/diag_govcash           货币守恒诊断

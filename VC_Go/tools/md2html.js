@@ -1,4 +1,4 @@
-// VC_Go/tools/md2html.js —— 把 `VC_Go/1.0 生产与市场模拟.md` 直接编译为自包含 HTML
+// VC_Go/tools/md2html.js —— 把 `VC_Go/docs/1.0 生产与市场模拟.md` 直接编译为自包含 HTML
 //
 // 为什么不走 md → tex → html：
 //   原链路是 `VC_Go/docs/1.0 生产与市场模拟.tex` 由 `VC_Go/tools/tex2html.js` 转成 HTML，
@@ -14,8 +14,8 @@
 //   样式表也与 tex2html.js 保持一致，因此新旧产物的视觉相同。
 //
 // 用法：
-//   node VC_Go/tools/md2html.js "VC_Go/1.0 生产与市场模拟.md" "VC_Go/docs/1.0 生产与市场模拟.html"
-//   node VC_Go/tools/md2html.js "VC_Go/1.0 生产与市场模拟.md"        # 试运行：打印目录与统计
+//   node VC_Go/tools/md2html.js "VC_Go/docs/1.0 生产与市场模拟.md" "VC_Go/docs/1.0 生产与市场模拟.html"
+//   node VC_Go/tools/md2html.js "VC_Go/docs/1.0 生产与市场模拟.md"        # 试运行：打印目录与统计
 //   node VC_Go/tools/html_audit.js "VC_Go/docs/1.0 生产与市场模拟.html"   # 生成后做结构校验
 'use strict';
 const fs = require('fs');

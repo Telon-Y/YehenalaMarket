@@ -139,7 +139,7 @@ gosim ──→ run-*.txt ──→ VC_Go/tools/viz/parse_run.js ──→ run-*
 
 ### `VC_Go/tools/contract_data.json`（契约声明值）
 
-逐项转录自 `VC_Go/1.0 生产与市场模拟.md`，每个字段都标了来源章节：
+逐项转录自 `VC_Go/docs/1.0 生产与市场模拟.md`，每个字段都标了来源章节：
 
 | 字段 | 契约出处 |
 |------|---------|
@@ -272,9 +272,8 @@ L\* 反解、财政量级、参数网格**全部由这个文件推导**，不需
 |--------|-----|
 | **项目唯一入口**（状态、判决、纪律、恢复上下文） | `VC_Go/docs/ACTIVE.md` |
 | **验收判决与游戏内核裁定**（本面板结论的完整论证） | `out/verdict/VERDICT-1.0-acceptance.md` |
-| Go 内核的包结构与契约条文映射 | `VC_Go/gosim/README.md` |
-| 契约本体（933 行） | `VC_Go/1.0 生产与市场模拟.md` |
-| 2.0 世界模拟（另一条线，C++/Raylib） | `VC_Go/README.md` |
+| Go 内核的包结构与契约条文映射 | `VC_Go/README.md` |
+| 契约本体（933 行） | `VC_Go/docs/1.0 生产与市场模拟.md` |
 
 面板里出现的两条独立复算脚本（不依赖 Go，纯 Node）：
 

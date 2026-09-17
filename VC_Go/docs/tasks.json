@@ -3,7 +3,7 @@
   "revision": 4,
   "project": "YehenalaMarket",
   "scope": "1.0 生产与市场模拟",
-  "authoritativeContract": "VC_Go/1.0 生产与市场模拟.md",
+  "authoritativeContract": "VC_Go/docs/1.0 生产与市场模拟.md",
   "designDoc": "VC_Go/docs/ARCHITECTURE.md",
   "feasibilityReport": "VC_Go/docs/FEASIBILITY-1.0.md",
   "referenceArchiveOnly": "README.md",
