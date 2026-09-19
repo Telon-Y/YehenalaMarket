@@ -6,8 +6,10 @@
 #include "decimal.h"
 
 // 模拟参数
-constexpr int TOTAL_STEPS = 6000;
-constexpr int AI_INTERVAL = 1;
+// Expansion planning is intentionally less frequent than the weekly market
+// cycle. Re-evaluating every province after every accepted project stalls the
+// render thread without materially improving a quarterly-scale decision.
+constexpr int AI_INTERVAL = 4;
 
 // Commodity catalog
 constexpr int NUM_GOODS = 13;
@@ -18,15 +20,13 @@ constexpr int TYPE_COUNT = 17;
 // Logistics pricing is quoted once per weekly inventory review. Railways sell
 // transport capacity at labor/material cost. Distance changes the amount
 // of capacity consumed by a shipment, rather than the price of one capacity unit.
-constexpr double RAIL_TRANSPORT_COST_PER_KM = 0.75; // legacy non-rail route parameter
 constexpr double RAILWAY_MARKUP_RATE = 0.15; // legacy snapshot field, unused
 constexpr double WAREHOUSE_MARGIN_SHARE = 0.35; // legacy snapshot field, unused
+// Intended transit rate. Nothing reads it: addRailRoute() pins every route to
+// one cycle, so this constant documents the model that is not implemented yet.
 constexpr double RAIL_KM_PER_TRANSIT_WEEK = 500.0;
 // 100 units of cargo over 100 km consume one unit of railway capacity.
 constexpr double RAIL_DISTANCE_CAPACITY_COEFFICIENT = 0.01;
-// Kept as the public route-construction default for source compatibility.
-constexpr double RAIL_DISTANCE_COST_COEFFICIENT =
-    RAIL_DISTANCE_CAPACITY_COEFFICIENT;
 constexpr double RAIL_CAPACITY_PER_LEVEL = 20.0;
 constexpr int INITIAL_RAILWAY_LEVELS = 10;
 constexpr double PRODUCTION_BONUS_GAP_PREMIUM = 0.25;
@@ -154,21 +154,23 @@ enum OwnerType {
 };
 
 // Financial constants
-constexpr double BASE_CREDIT_PER_BANK = 500000.0;
-constexpr double BASE_CREDIT_PER_FINANCE = 1000000.0;
 constexpr double BANK_MONEY_MULTIPLIER = 2.0;
-constexpr double ANNUAL_INTEREST_RATE = 0.05;
 
-// ===== 新增：劳工负债挂钩系数 =====
+// ===== 金融中介参数 =====
+// The financial district is paid out of the interest a borrower already hands
+// over, so the split is money-neutral: it moves income between two institutions
+// rather than creating any.
+constexpr double FINANCE_INTERMEDIATION_FEE_SHARE = 0.25;
+// The savings bank earns a deposit spread on the funds it intermediates and
+// passes part of it on to households as deposit interest. The remaining part is
+// retained as bank capital, which is what lets the institution grow.
+constexpr double SAVINGS_DEPOSIT_RATE_PER_WEEK = 0.0005;
+constexpr double SAVINGS_PASS_THROUGH_SHARE = 0.60;
+
+// ===== 劳工负债挂钩系数 =====
 constexpr double LABOR_DEBT_SCALE = 1e9;
 
-// ===== 新增：现金池上限常量 =====
-constexpr double CLASS_CASH_MAX    = 1e12;
-constexpr double BUILDING_CASH_MAX  = 1e12;
-constexpr double INVEST_POOL_MAX    = 1e12;
-constexpr double MONEY_SUPPLY_MAX   = 1e13;
-
-// ===== 新增：贷款系统常量 =====
+// ===== 贷款系统常量 =====
 constexpr double BANK_LOAN_UNIT_VALUE = 500000.0;          // 每单位贷款 = 50万（修改）
 constexpr int    BANK_MAX_LOAN_PER_LEVEL = 50;              // 每级银行最多50单位
 constexpr double BANK_LOAN_CAPACITY_PER_LEVEL =
@@ -187,6 +189,20 @@ constexpr double GOLD_FIXED_PRICE = 10000.0;               // 1黄金 = 10,000�
 // ===== 劳动人口系数（男0.25 + 女0.15 = 0.40） =====
 constexpr double LABOR_FORCE_PARTICIPATION = 0.40;
 
+// ===== 投资池回流：劳动力资金池作为终点资金池 =====
+// The investment pool is working capital for construction, not a store of
+// value. With no outlet it absorbs the whole household circulation: over 208
+// weeks of the standard world it grew by 4.0e10 while every class pool drained
+// (labor -8.2e9, engineers -1.6e10, capitalists -6.6e9), and the resulting loss
+// of household purchasing power is what drags consumer demand down. Money above
+// the market's own construction requirement is therefore paid out to
+// households, whose pools - the labor pool above all - are its terminal
+// destination.
+constexpr int INVESTMENT_POOL_WORKING_WEEKS = 52;
+// Share of a surplus returned per cycle, so an accumulated surplus is paid out
+// smoothly instead of in one shock.
+constexpr double INVESTMENT_POOL_RETURN_SHARE = 0.02;
+
 // ===== 商品索引常量（避免魔法数字） =====
 constexpr int CONSTR_GOOD_INDEX = 10;    // 建造力
 constexpr int GOLD_GOOD_INDEX = 11;      // 贵金属
@@ -199,6 +215,9 @@ inline const Money COUNTRY_INITIAL_TREASURY_MONEY = Money(50000000.0);
 inline const Money BUILDING_CASH_MAX_MONEY = Money(1e12L);
 inline const Money INVEST_POOL_MAX_MONEY   = Money(1e12L);
 inline const Money MONEY_SUPPLY_MAX_MONEY  = Money(1e13L);
+// Floor of the investment pool's working requirement, so a market with no
+// current construction demand still keeps a usable capital balance.
+inline const Money INVESTMENT_POOL_MIN_WORKING_MONEY = Money(5000000.0);
 
 // One-time capital reserved by the private investment pool when it submits
 // an AI expansion request. The fee is separate from the construction

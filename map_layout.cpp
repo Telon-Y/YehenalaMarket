@@ -62,6 +62,15 @@ bool StrictlyInside(map_model::Point point,
     return map_model::PointInPolygon(point, ring);
 }
 
+bool InsideOrTouches(map_model::Point point,
+                     const std::vector<map_model::Point>& ring) {
+    for (std::size_t index = 0; index < ring.size(); ++index) {
+        const map_model::Point next = ring[(index + 1) % ring.size()];
+        if (OnSegment(point, ring[index], next)) return true;
+    }
+    return map_model::PointInPolygon(point, ring);
+}
+
 bool BoundsOverlap(const map_model::Rect& first,
                   const map_model::Rect& second) {
     return first.x <= second.x + second.width + kTopologyEpsilon &&
@@ -142,7 +151,7 @@ bool RingsStrictlyOverlap(
             if (!StrictlyInside(midpoint, other)) continue;
             bool inHole = false;
             for (const std::vector<map_model::Point>& hole : otherHoles) {
-                if (map_model::PointInPolygon(midpoint, hole)) {
+                if (InsideOrTouches(midpoint, hole)) {
                     inHole = true;
                     break;
                 }

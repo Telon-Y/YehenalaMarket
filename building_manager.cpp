@@ -85,17 +85,67 @@ bool BuildingManager::setBuildingCountForSetup(int typeIdx, int count,
     return true;
 }
 
+bool BuildingManager::setFinancialBuildingLevelsForSetup(
+    int centralBank, int finance, int industrialBank, int savingsBank,
+    Money savingsPool) {
+    if (centralBank < 0 || finance < 0 || industrialBank < 0 ||
+        savingsBank < 0 || finance > maxFinances ||
+        !isfinite(savingsPool) || savingsPool < Money(0)) {
+        return false;
+    }
+
+    const Money levelCapacity(BANK_LOAN_CAPACITY_PER_LEVEL);
+    const int derivedSavings = savingsPool <= Money(0)
+        ? 0
+        : static_cast<int>(std::ceil(
+              (savingsPool / levelCapacity).toDouble()));
+    if (derivedSavings != savingsBank) return false;
+
+    cashPools[BANK] = Money(centralBank) * levelCapacity;
+    cashPools[INDUSTRIAL_BANK] = Money(industrialBank) * levelCapacity;
+    cashPools[SAVINGS_BANK] = Money(0);
+    // Explicit capital is the equity that backs each institution and drives its
+    // level. It is seeded here and afterwards only moves through retained profit
+    // and loan losses; it is never derived from the cash the institution holds.
+    // It must be set before syncBankLevels(), which reads it.
+    financialCapital[BANK] = Money(centralBank) * levelCapacity;
+    financialCapital[INDUSTRIAL_BANK] = Money(industrialBank) * levelCapacity;
+    financialCapital[SAVINGS_BANK] = Money(savingsBank) * levelCapacity;
+    financialCapital[FINANCE] = Money(finance) * levelCapacity;
+    baselineFinanceLevel = finance;
+    setFinanceLevelFromSecurities(0);
+    syncBankLevels(savingsPool);
+    // The central and commercial banks and the savings bank are public
+    // institutions held by the government. The financial district keeps its own
+    // ownership, which setFinanceLevelFromSecurities() established above.
+    for (const int type : {BANK, INDUSTRIAL_BANK, SAVINGS_BANK}) {
+        ownedBuildings[type].fill(0);
+        ownedBuildings[type][OWNER_GOVERNMENT] = buildingCounts[type];
+    }
+    return buildingCounts[BANK] == centralBank &&
+           buildingCounts[FINANCE] == finance &&
+           buildingCounts[INDUSTRIAL_BANK] == industrialBank &&
+           buildingCounts[SAVINGS_BANK] == savingsBank;
+}
+
 void BuildingManager::setBankLevelFromPool(int typeIdx, Money pool) {
     pool = std::max(Money(0), pool);
-    int level = std::max(1, static_cast<int>(std::ceil(
-        (pool / Money(BANK_LOAN_CAPACITY_PER_LEVEL)).toDouble())));
+    const int level = pool <= Money(0)
+        ? 0
+        : static_cast<int>(std::ceil(
+              (pool / Money(BANK_LOAN_CAPACITY_PER_LEVEL)).toDouble()));
     buildingCounts[typeIdx] = level;
-    ownedBuildings[typeIdx].fill(0);
+    // Ownership is deliberately NOT reset here. Resynchronising a level every
+    // cycle used to clear the owner list, which left the institutions unowned
+    // and made their profit distribution a no-op.
 }
 
 void BuildingManager::syncBankLevels(Money savingsPool) {
-    setBankLevelFromPool(BANK, cashPools[BANK]);
-    setBankLevelFromPool(INDUSTRIAL_BANK, cashPools[INDUSTRIAL_BANK]);
+    // The central bank and the commercial bank scale with their own capital, so
+    // the level-based credit limit is an independent constraint on lending.
+    setBankLevelFromPool(BANK, financialCapital[BANK]);
+    setBankLevelFromPool(INDUSTRIAL_BANK, financialCapital[INDUSTRIAL_BANK]);
+    // The savings bank's scale follows the savings it intermediates.
     setBankLevelFromPool(SAVINGS_BANK, savingsPool);
 }
 

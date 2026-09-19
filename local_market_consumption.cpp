@@ -151,4 +151,5 @@ void LocalMarket::processWagePayment(std::array<Money, TYPE_COUNT>& laborCostByB
         classCash[c] += wageIncome[c];
         clampMoney(classCash[c]);
     }
+    laborerWageInflow += wageIncome[LABORER];
 }

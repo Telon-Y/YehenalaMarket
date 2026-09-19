@@ -14,6 +14,7 @@ using namespace std;
 
 LocalMarket::LocalMarket(int id, const std::string& name)
     : marketId(id), marketName(name), warehouse(id) {
+    resourceCaps.fill(-1);
     for (int i = 0; i < NUM_GOODS; ++i)
         goodIndex[commodityNames[i]] = i;
 
@@ -25,6 +26,8 @@ LocalMarket::LocalMarket(int id, const std::string& name)
     smoothedWarehouseDemand.fill(Money(0));
     latestPlannedConsumerDemand.fill(Money(0));
     latestConsumerActual.fill(Money(0));
+    for (auto& classConsumption : latestClassConsumerActual)
+        classConsumption.fill(Money(0));
     latestPotentialIn.fill(Money(0));
     latestRealOut.fill(Money(0));
     latestBuildingOutput.fill(Money(0));
@@ -97,27 +100,46 @@ LocalMarket::LocalMarket(int id, const std::string& name)
     syncWarehouseProducers();
 }
 
-Money LocalMarket::getGDPAtCycle(int cycle) const {
-    if (cycle <= 0 || gdpHist.empty()) return Money(0);
+namespace {
+// Rolling 52-week annualization shared by the published and the unfloored GDP
+// series. The two series are recorded in lockstep, so they share one window
+// definition and can never disagree about which cycles they cover.
+Money RollingAnnualizedGDP(const std::vector<Money>& history, int cycle,
+                           int historyFirstCycle) {
+    if (cycle <= 0 || history.empty()) return Money(0);
     std::size_t end = 1;
     if (cycle >= historyFirstCycle) {
         end = std::min(
-            gdpHist.size(),
+            history.size(),
             static_cast<std::size_t>(cycle - historyFirstCycle + 1));
     }
     const std::size_t begin = end > 52 ? end - 52 : 0;
     Money total = Money(0);
     for (std::size_t index = begin; index < end; ++index)
-        total += gdpHist[index];
+        total += history[index];
     const std::size_t count = end - begin;
     return count == 0
         ? Money(0)
         : total * Money(52) / Money(static_cast<int>(count));
 }
+}  // namespace
+
+Money LocalMarket::getGDPAtCycle(int cycle) const {
+    return RollingAnnualizedGDP(gdpHist, cycle, historyFirstCycle);
+}
 
 Money LocalMarket::getGDP() const {
     if (gdpHist.empty()) return Money(0);
     return getGDPAtCycle(stepCount);
+}
+
+Money LocalMarket::getRawGDPAtCycle(int cycle) const {
+    return RollingAnnualizedGDP(rawGdpHist, cycle, historyFirstCycle);
+}
+
+Money LocalMarket::getRawGDP() const {
+    if (rawGdpHist.empty()) return Money(0);
+    return getRawGDPAtCycle(stepCount);
 }
 
 double LocalMarket::getPopulationAtCycle(int cycle) const {

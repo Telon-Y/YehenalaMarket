@@ -1,6 +1,7 @@
 #include "debug_ui_internal.h"
 
 #include "building_template.h"
+#include "building_icons.h"
 
 #include <algorithm>
 #include <array>
@@ -30,9 +31,265 @@ std::string BuildingInputSummary(const LocalMarket& market, int type) {
     return "输入就绪";
 }
 
+EmbeddedBuildingGeometry MakeEmbeddedBuildingGeometry(
+    const DebugLayout& layout) {
+    EmbeddedBuildingGeometry geometry;
+    geometry.rowsY = layout.contentY + 44.0f;
+    geometry.rowHeight = 52.0f;
+    const float detailReserve = std::clamp(
+        layout.contentHeight * 0.34f, 170.0f, 214.0f);
+    const float available = std::max(
+        geometry.rowHeight,
+        layout.contentHeight - 44.0f - detailReserve - 12.0f);
+    geometry.visibleRows = std::clamp(
+        static_cast<int>(available / geometry.rowHeight),
+        1, TYPE_COUNT);
+    geometry.detailY =
+        geometry.rowsY + geometry.visibleRows * geometry.rowHeight + 12.0f;
+    geometry.scrollTrack = {
+        layout.contentX + layout.contentWidth - 4.0f,
+        geometry.rowsY,
+        3.0f,
+        std::max(1.0f, geometry.visibleRows * geometry.rowHeight - 2.0f)};
+    return geometry;
+}
+
+Rectangle EmbeddedBuildingRow(
+    const DebugLayout& layout,
+    const EmbeddedBuildingGeometry& geometry,
+    int visibleRow) {
+    return {
+        layout.contentX,
+        geometry.rowsY + visibleRow * geometry.rowHeight,
+        std::max(1.0f, layout.contentWidth - 10.0f),
+        geometry.rowHeight - 1.0f};
+}
+
+namespace {
+
+void DrawEmbeddedScrollBar(const EmbeddedBuildingGeometry& geometry,
+                           int scroll, int visibleRows) {
+    if (visibleRows >= TYPE_COUNT) return;
+    DrawRectangleRec(geometry.scrollTrack, Color{224, 228, 225, 255});
+    const float thumbHeight = std::max(
+        34.0f,
+        geometry.scrollTrack.height *
+            static_cast<float>(visibleRows) /
+            static_cast<float>(TYPE_COUNT));
+    const int maxScroll = std::max(1, TYPE_COUNT - visibleRows);
+    const float travel =
+        std::max(0.0f, geometry.scrollTrack.height - thumbHeight);
+    const Rectangle thumb = {
+        geometry.scrollTrack.x,
+        geometry.scrollTrack.y +
+            travel * static_cast<float>(scroll) /
+                static_cast<float>(maxScroll),
+        geometry.scrollTrack.width,
+        thumbHeight};
+    DrawRectangleRec(thumb, kBlue);
+}
+
+void DrawEmbeddedBuildingsPanel(DebugUIState* state, World& world,
+                                Font font, const DebugLayout& layout) {
+    const LocalMarket& market = world.getMarket(state->selectedMarket);
+    const ProvinceSnapshot province =
+        world.getProvinceSnapshot(market.getProvinceId());
+    const WarehouseNetwork& network = world.getWarehouseNetwork();
+    const float x = layout.contentX;
+    const float y = layout.contentY;
+    const float width = layout.contentWidth;
+    const EmbeddedBuildingGeometry geometry =
+        MakeEmbeddedBuildingGeometry(layout);
+    const int maxScroll =
+        std::max(0, TYPE_COUNT - geometry.visibleRows);
+    state->buildingScroll =
+        std::clamp(state->buildingScroll, 0, maxScroll);
+    state->selectedBuilding =
+        std::clamp(state->selectedBuilding, 0, TYPE_COUNT - 1);
+
+    DrawTextAt(font, "建筑与生产输入", x, y,
+               kDebugPageTitleFontSize, kText);
+    const Rectangle addButton = BuildingAddButton(layout);
+    const float statusX = x + 190.0f;
+    const float statusWidth =
+        std::max(1.0f, addButton.x - statusX - 8.0f);
+    const std::string headingDetail =
+        state->constructionMessage.empty()
+            ? market.getMarketName()
+            : state->constructionMessage;
+    DrawFittedText(
+        font, headingDetail,
+        {statusX, y + 3.0f, statusWidth, 30.0f},
+        kDebugBodyFontSize,
+        state->constructionMessage.empty()
+            ? kMuted
+            : (state->constructionSucceeded ? kGreen : kRed));
+    const bool editable = CanEditBuilding(state->selectedBuilding);
+    DrawButton(font, BuildingAddButton(layout), "+1",
+               false, editable ? kGreen : kMuted);
+    DrawButton(font, BuildingRemoveButton(layout), "-1",
+               false, editable && market.canPlayerDemolish(state->selectedBuilding)
+                          ? kRed : kMuted);
+
+    for (int visibleRow = 0;
+         visibleRow < geometry.visibleRows; ++visibleRow) {
+        const int type = state->buildingScroll + visibleRow;
+        if (type >= TYPE_COUNT) break;
+        const Rectangle row =
+            EmbeddedBuildingRow(layout, geometry, visibleRow);
+        const bool selected = type == state->selectedBuilding;
+        const int count = market.getBuildingCounts()[type];
+        const int constructionPending =
+            type < static_cast<int>(province.buildings.size())
+                ? province.buildings[static_cast<std::size_t>(type)].pending
+                : 0;
+        const BuildingTemplate& building =
+            market.getBuildingTemplates()[type];
+        const Money pending = building.outputGood < 0
+            ? Money(0)
+            : network.pendingProduction(market.getMarketId(), type,
+                                        building.outputGood);
+        const double supply = market.getCurrentSupplyRatio()[type];
+        const double utilization =
+            market.getCapacityUtilization()[type];
+
+        DrawRectangleRec(
+            row, selected ? kBlueSoft :
+                 (type % 2 == 0 ? kSurface : kBackground));
+        if (selected) {
+            DrawRectangle(
+                static_cast<int>(row.x), static_cast<int>(row.y),
+                3, static_cast<int>(row.height), kBlue);
+        }
+        const Rectangle icon = {row.x + 8.0f, row.y + 5.0f, 42.0f, 42.0f};
+        building_icons::DrawBuildingProductionIcon(
+            icon, type, building.outputGood, count > 0);
+        DrawFittedText(
+            font, buildingTypeNames[type],
+            {row.x + 58.0f, row.y + 3.0f,
+             row.width * 0.56f, 22.0f},
+            kDebugBodyFontSize, kText);
+        DrawFittedText(
+            font,
+            std::to_string(count) + " 座  ·  " +
+                std::to_string(constructionPending) + " 在建",
+            {row.x + row.width * 0.58f, row.y + 3.0f,
+             row.width * 0.39f, 22.0f},
+            kDebugCaptionFontSize, count > 0 ? kText : kMuted);
+        const std::string operating =
+            "在岗 " +
+            PercentText(market.getActualEmploymentRate()[type]) +
+            "  原料 " + PercentText(supply) +
+            "  利用 " + PercentText(utilization);
+        DrawFittedText(
+            font, operating,
+            {row.x + 58.0f, row.y + 27.0f,
+             row.width * 0.56f, 20.0f},
+            kDebugCaptionFontSize,
+            count > 0 && supply < 0.999 ? kRed : kMuted);
+        const std::string output =
+            "产出 " + NumberText(market.getLatestBuildingOutput()[type]) +
+            "  待产 " + NumberText(pending) +
+            "  " + BuildingInputSummary(market, type);
+        DrawFittedText(
+            font, output,
+            {row.x + row.width * 0.58f, row.y + 27.0f,
+             row.width * 0.39f, 20.0f},
+            kDebugCaptionFontSize,
+            output.find("缺") != std::string::npos ? kOrange : kMuted);
+        DrawLineEx(
+            {row.x, row.y + row.height},
+            {row.x + row.width, row.y + row.height},
+            1.0f, kBorder);
+    }
+    DrawEmbeddedScrollBar(
+        geometry, state->buildingScroll, geometry.visibleRows);
+
+    const int type = state->selectedBuilding;
+    const BuildingTemplate& building =
+        market.getBuildingTemplates()[type];
+    const Money pending = building.outputGood < 0
+        ? Money(0)
+        : network.pendingProduction(market.getMarketId(), type,
+                                    building.outputGood);
+    const std::string outputText = building.outputGood >= 0
+        ? commodityNames[building.outputGood] : "无商品产出";
+    DrawSectionTitle(
+        font, buildingTypeNames[type] + " 输入缓冲",
+        x, geometry.detailY, width,
+        "产出 " + outputText + "  ·  计划 " +
+            NumberText(market.getProductionTarget()[type]) +
+            "  ·  待产 " + NumberText(pending));
+
+    std::vector<int> inputGoods;
+    for (int good = 0; good < NUM_GOODS; ++good) {
+        if (building.inputs[good] > 0.0) inputGoods.push_back(good);
+    }
+    const float bodyY = geometry.detailY + 39.0f;
+    if (inputGoods.empty()) {
+        DrawTextAt(
+            font, "该建筑没有中间商品投入。订单需求可直接转为生产。",
+            x, bodyY + 4.0f, kDebugBodyFontSize, kMuted);
+        return;
+    }
+
+    const int columns = std::min(2, static_cast<int>(inputGoods.size()));
+    const int rows = (static_cast<int>(inputGoods.size()) + columns - 1) /
+                     columns;
+    const float gap = 8.0f;
+    const float cardWidth =
+        (width - gap * (columns - 1)) / static_cast<float>(columns);
+    const float availableHeight = std::max(
+        1.0f, layout.contentY + layout.contentHeight - bodyY);
+    const float cardHeight = std::max(
+        44.0f,
+        (availableHeight - gap * (rows - 1)) /
+            static_cast<float>(rows));
+    for (int index = 0;
+         index < static_cast<int>(inputGoods.size()); ++index) {
+        const int good = inputGoods[index];
+        const InventoryState& input =
+            market.getWarehouse().buildingInput(type, good);
+        const int rowIndex = index / columns;
+        const int column = index % columns;
+        const Rectangle bounds = {
+            x + column * (cardWidth + gap),
+            bodyY + rowIndex * (cardHeight + gap),
+            cardWidth, cardHeight};
+        DrawRectangleRec(bounds, kSurface);
+        DrawRectangleLinesEx(
+            bounds, 1.0f,
+            input.backlog > Money(1e-7) ? kOrange : kBorder);
+        DrawTextAt(font, commodityNames[good],
+                   bounds.x + 9.0f, bounds.y + 6.0f,
+                   kDebugBodyFontSize, kText);
+        const std::string detail =
+            "现存 " + NumberText(input.onHand) +
+            "  目标 " + NumberText(input.policy.targetStock) +
+            "  补货点 " + NumberText(input.policy.reorderPoint) +
+            "  在途 " + NumberText(input.physicalInTransit) +
+            "  缺口 " + NumberText(input.backlog);
+        DrawFittedText(
+            font, detail,
+            {bounds.x + 9.0f, bounds.y + 25.0f,
+             bounds.width - 18.0f,
+             std::max(18.0f, bounds.height - 28.0f)},
+            kDebugCaptionFontSize,
+            input.backlog > Money(1e-7) ? kOrange : kMuted);
+    }
+}
+
+}  // namespace
+
 void DrawBuildingsPanel(DebugUIState* state, World& world, Font font,
                         const DebugLayout& layout) {
+    if (layout.mode == DebugUIMode::EmbeddedLocalMarket) {
+        DrawEmbeddedBuildingsPanel(state, world, font, layout);
+        return;
+    }
     const LocalMarket& market = world.getMarket(state->selectedMarket);
+    const ProvinceSnapshot province =
+        world.getProvinceSnapshot(market.getProvinceId());
     const WarehouseNetwork& network = world.getWarehouseNetwork();
     const float x = layout.contentX;
     const float y = layout.contentY;
@@ -40,13 +297,27 @@ void DrawBuildingsPanel(DebugUIState* state, World& world, Font font,
 
     DrawTextAt(font, "建筑与生产输入", x, y,
                kDebugPageTitleFontSize, kText);
-    DrawTextAt(font, market.getMarketName(), x + 220.0f, y + 7.0f,
-               kDebugBodyFontSize, kMuted);
+    const Rectangle addButton = BuildingAddButton(layout);
+    const float statusX = x + 220.0f;
+    const float statusWidth = std::max(
+        1.0f, addButton.x - statusX - 8.0f);
+    const std::string headingDetail =
+        state->constructionMessage.empty()
+            ? market.getMarketName()
+            : state->constructionMessage;
+    DrawFittedText(
+        font, headingDetail,
+        {statusX, y + 3.0f, statusWidth, 30.0f},
+        kDebugBodyFontSize,
+        state->constructionMessage.empty()
+            ? kMuted
+            : (state->constructionSucceeded ? kGreen : kRed));
     const bool editable = CanEditBuilding(state->selectedBuilding);
     DrawButton(font, BuildingAddButton(layout), "+1",
                false, editable ? kGreen : kMuted);
     DrawButton(font, BuildingRemoveButton(layout), "-1",
-               false, editable ? kRed : kMuted);
+               false, editable && market.canPlayerDemolish(state->selectedBuilding)
+                          ? kRed : kMuted);
 
     const float headerY = y + 38.0f;
     const float headerHeight = 28.0f;
@@ -74,6 +345,10 @@ void DrawBuildingsPanel(DebugUIState* state, World& world, Font font,
         const Rectangle row = BuildingRow(layout, type);
         const bool selected = type == state->selectedBuilding;
         const int count = market.getBuildingCounts()[type];
+        const int constructionPending =
+            type < static_cast<int>(province.buildings.size())
+                ? province.buildings[static_cast<std::size_t>(type)].pending
+                : 0;
         const BuildingTemplate& building =
             market.getBuildingTemplates()[type];
         const Money pending = building.outputGood < 0
@@ -101,9 +376,15 @@ void DrawBuildingsPanel(DebugUIState* state, World& world, Font font,
                           static_cast<int>(row.y), 3,
                           static_cast<int>(row.height), kBlue);
         }
+        // Keep the compact table visually consistent with the full building
+        // page while preserving its 24px row height and hit geometry.
+        building_icons::DrawBuildingProductionIcon(
+            {row.x + 4.0f, row.y + 2.0f, 20.0f, 20.0f}, type,
+            building.outputGood, count > 0);
         const std::array<std::string, 11> cells = {
             buildingTypeNames[type],
-            std::to_string(count),
+            std::to_string(count) + " / " +
+                std::to_string(constructionPending),
             PercentText(market.getActualEmploymentRate()[type]),
             PercentText(recruitmentSatisfaction),
             PercentText(supply),
@@ -122,10 +403,13 @@ void DrawBuildingsPanel(DebugUIState* state, World& world, Font font,
             if (column == 10 &&
                 cells[column].find("缺") != std::string::npos)
                 color = kOrange;
+            const float cellX = x + width * fractions[column] +
+                (column == 0 ? 29.0f : 5.0f);
+            const float cellWidth = width * (fractions[column + 1] -
+                                             fractions[column]) -
+                (column == 0 ? 32.0f : 8.0f);
             DrawFittedText(font, cells[column],
-                           {x + width * fractions[column] + 5.0f, row.y,
-                            width * (fractions[column + 1] -
-                                     fractions[column]) - 8.0f,
+                           {cellX, row.y, cellWidth,
                             row.height},
                             kDebugTableFontSize, color);
         }

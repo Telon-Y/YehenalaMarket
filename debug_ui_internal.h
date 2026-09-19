@@ -61,11 +61,24 @@ struct DebugLayout {
     std::array<Rectangle, 4> panelButtons{};
 };
 
+struct EmbeddedBuildingGeometry {
+    float rowsY = 0.0f;
+    float rowHeight = 52.0f;
+    int visibleRows = 1;
+    float detailY = 0.0f;
+    Rectangle scrollTrack{};
+};
+
 DebugLayout MakeLayout();
 DebugLayout MakeLayout(DebugUIMode mode, Rectangle bounds);
 Rectangle MarketButton(const DebugLayout& layout, int index, int count);
 Rectangle GoodButton(const DebugLayout& layout, int good);
 Rectangle BuildingRow(const DebugLayout& layout, int type);
+EmbeddedBuildingGeometry MakeEmbeddedBuildingGeometry(
+    const DebugLayout& layout);
+Rectangle EmbeddedBuildingRow(const DebugLayout& layout,
+                              const EmbeddedBuildingGeometry& geometry,
+                              int visibleRow);
 Rectangle BuildingAddButton(const DebugLayout& layout);
 Rectangle BuildingRemoveButton(const DebugLayout& layout);
 Rectangle ConstructionDepartmentButton(const DebugLayout& layout);
@@ -114,6 +127,8 @@ void DrawGoodsPanel(DebugUIState* state, World& world, Font font,
                     const TransportationSnapshot& transport);
 void DrawBuildingsPanel(DebugUIState* state, World& world, Font font,
                         const DebugLayout& layout);
+bool HandleConstructionPanelInput(DebugUIState* state, World& world,
+                                  const DebugLayout& layout);
 void DrawConstructionPanel(DebugUIState* state, World& world, Font font,
                            const DebugLayout& layout);
 void DrawMacroPanel(DebugUIState* state, World& world, Font font,

@@ -7,23 +7,6 @@
 #include <cmath>
 #include <functional>
 
-struct ConstructionOrder {
-    int typeIndex;
-    Money totalCost;
-    Money remainingCost;
-    OwnerType owner = OWNER_INITIAL;
-    std::string payerCountryTag;
-    Money reservedBudget = Money(0);
-    bool hasReservedBudget = false;
-};
-
-struct ConstructionSettlement {
-    Money totalUsed = Money(0);
-    Money privatePayment = Money(0);
-    Money governmentPayment = Money(0);
-    Money governmentBudgetReleased = Money(0);
-};
-
 struct AIExpansionCandidate {
     int typeIndex = -1;
     int maxUnits = 0;
@@ -36,7 +19,6 @@ public:
     BuildingManager();
 
     const std::array<int, TYPE_COUNT>& getBuildingCounts() const { return buildingCounts; }
-    const std::vector<ConstructionOrder>& getQueue() const { return constructionQueue; }
     const std::array<double, TYPE_COUNT>& getEmploymentRatio() const { return employmentRatio; }
     const std::array<double, TYPE_COUNT>& getAvgProfitRates() const { return avgProfitRates; }
     const std::array<double, TYPE_COUNT>& getSmoothedProfitRate() const { return smoothedProfitRate; }
@@ -64,55 +46,37 @@ public:
     Money transferOwnership(int typeIdx, int count, OwnerType from, OwnerType to,
                             Money& investmentPool, std::array<Money, CLASS_COUNT>& classCash);
 
-    void placeOrder(int typeIdx, OwnerType owner = OWNER_INITIAL,
-                    const std::string& payerCountryTag = {},
-                    Money reservedBudget = Money(0));
-    int placeOrders(int typeIdx, int count, OwnerType owner,
-                    const std::string& payerCountryTag = {},
-                    Money reservedBudgetPerOrder = Money(0));
-    void placePlayerOrder(int typeIdx, int count, bool top);
     void addCompletedBuildings(int typeIdx, int count,
                                OwnerType owner = OWNER_GOVERNMENT);
     bool setBuildingCountForSetup(int typeIdx, int count,
                                   OwnerType owner = OWNER_INITIAL);
+    bool setFinancialBuildingLevelsForSetup(
+        int centralBank, int finance, int industrialBank, int savingsBank,
+        Money savingsPool);
+    // Manual demolition affects government/player ownership only, immediately.
+    // stepCount is retained for existing callers and the demolition record.
     bool canDemolish(int typeIdx, int stepCount) const;
     int demolishBuildings(int typeIdx, int count, int stepCount, Money& investmentPool);
-
-    void aiBuild(double aiProfitThreshold,
-                 const std::array<Money, NUM_GOODS>& prices,
-                 const std::array<Money, TYPE_COUNT>& wages,
-                 double availableLabor,
-                 const std::array<double, TYPE_COUNT>& actualEmploymentRate,
-                 OwnerType automaticOwner = OWNER_FINANCE,
-                 Money* investmentPool = nullptr);
 
     std::vector<AIExpansionCandidate> collectAIExpansionCandidates(
         double aiProfitThreshold,
         const std::array<Money, NUM_GOODS>& prices,
         const std::array<Money, TYPE_COUNT>& wages,
         double availableLabor,
-        const std::array<double, TYPE_COUNT>& actualEmploymentRate) const;
+        const std::array<double, TYPE_COUNT>& actualEmploymentRate,
+        const std::array<int, TYPE_COUNT>& pendingCounts,
+        Money totalRemainingConstruction) const;
 
     void setAllowAutoConstExpansion(bool allow) { allowAutoConstExpansion = allow; }
     bool getAllowAutoConstExpansion() const { return allowAutoConstExpansion; }
-    void tagGovernmentOrders(const std::string& payerCountryTag);
 
     std::array<double, TYPE_COUNT> calculateBaseOutputRates(double maxLabor) const;
-
-    Money getWeeklyPrivateConstructionDemand(Money availableConstr) const;
-    ConstructionSettlement processConstruction(Money availableConstr,
-                                               Money constrPrice,
-                                               Money& investmentPool,
-                                               Money& governmentCash,
-                                               bool applyCash = true,
-                                               bool transferPrivatePayment = true);
 
     void updateActualProfitRates(const std::array<double, TYPE_COUNT>& actualRates);
     void updateActualUnitProfits(const std::array<Money, TYPE_COUNT>& actualProfits);
 
     void adjustEmployment();
     void checkDecay(int stepCount, Money& investmentPool, std::array<Money, CLASS_COUNT>& classCash);
-    std::array<int, TYPE_COUNT> getInQueueCounts() const;
 
     void setCurrentSupplyRatio(const std::array<double, TYPE_COUNT>& ratio) { currentSupplyRatio = ratio; }
     void setProductionMetrics(
@@ -158,6 +122,24 @@ public:
     }
 
     void syncBankLevels(Money savingsPool);
+    // Financial institutions are backed by explicit capital rather than by
+    // whatever cash they happen to be holding. Deriving a level from cash made
+    // the level-based credit limit tautological, because a bank's cash and its
+    // level moved together. Capital is seeded at setup and then only changes
+    // through retained profit and loan losses.
+    Money getFinancialCapital(int typeIdx) const {
+        if (typeIdx < 0 || typeIdx >= TYPE_COUNT) return Money(0);
+        return financialCapital[typeIdx];
+    }
+    void addFinancialCapital(int typeIdx, Money amount) {
+        if (typeIdx < 0 || typeIdx >= TYPE_COUNT || !isfinite(amount)) return;
+        financialCapital[typeIdx] = clamp(
+            financialCapital[typeIdx] + amount, Money(0), MONEY_SUPPLY_MAX_MONEY);
+    }
+    void setFinancialCapitalForSetup(int typeIdx, Money capital) {
+        if (typeIdx < 0 || typeIdx >= TYPE_COUNT || !isfinite(capital)) return;
+        financialCapital[typeIdx] = clamp(capital, Money(0), MONEY_SUPPLY_MAX_MONEY);
+    }
     // Development buildings are public work.  The caller supplies the
     // government's available cash and receives the amount that was actually
     // paid (which may be lower than the requested payroll when funds run out).
@@ -182,13 +164,12 @@ private:
 
     void resetDecayCounters();
     void setBankLevelFromPool(int typeIdx, Money pool);
-    void syncFinanceCount();   // 已废弃，保留空实现
     void cleanupDeadBuilding(int typeIdx, Money& investmentPool);
 
     std::vector<BuildingTemplate> templates;
     std::array<int, TYPE_COUNT> buildingCounts;
-    std::vector<ConstructionOrder> constructionQueue;
     std::array<Money, TYPE_COUNT> cashPools;
+    std::array<Money, TYPE_COUNT> financialCapital;
     std::array<double, TYPE_COUNT> employmentRatio;
     std::array<double, TYPE_COUNT> avgProfitRates;
     std::array<double, TYPE_COUNT> smoothedProfitRate;
@@ -214,4 +195,5 @@ private:
 
     bool profitInitialized = false;
     bool allowAutoConstExpansion = true;
+    int baselineFinanceLevel = 0;
 };

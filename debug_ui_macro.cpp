@@ -25,10 +25,10 @@ void DrawMacroPanel(DebugUIState* state, World& world, Font font,
     const float metricGap = 12.0f;
     const float metricWidth = (width - metricGap * 3.0f) / 4.0f;
     DrawMetric(font, {x, metricY, metricWidth, 72.0f},
-               "52 周折算 GDP", NumberText(market.getGDP()), kGreen);
+               "52 周折算国内生产总值", NumberText(market.getGDP()), kGreen);
     DrawMetric(font, {x + metricWidth + metricGap, metricY,
                        metricWidth, 72.0f},
-               "本周 GDP", NumberText(market.getWeeklyGDP()),
+               "本周国内生产总值", NumberText(market.getWeeklyGDP()),
                market.getWeeklyGDP() > Money(0) ? kBlue : kOrange);
     DrawMetric(font, {x + (metricWidth + metricGap) * 2.0f, metricY,
                        metricWidth, 72.0f},
@@ -49,7 +49,7 @@ void DrawMacroPanel(DebugUIState* state, World& world, Font font,
     const std::string tableTitle = layout.mode == DebugUIMode::EmbeddedLocalMarket
         ? "关联市场宏观对照" : "五市场宏观对照";
     DrawSectionTitle(font, tableTitle, x, marketSectionY, width,
-                     "GDP 使用 52 周折算口径");
+                     "国内生产总值使用 52 周折算口径");
     const float tableY = marketSectionY + 35.0f;
     const float tableHeaderHeight = 28.0f;
     const float marketRowHeight = 30.0f;
@@ -58,7 +58,7 @@ void DrawMacroPanel(DebugUIState* state, World& world, Font font,
         0.55f, 0.69f, 0.84f, 1.00f
     };
     const char* headers[7] = {
-        "市场", "本周 GDP", "年化 GDP", "产出价值",
+        "市场", "本周国内生产总值", "年化国内生产总值", "产出价值",
         "中间投入", "人口", "满意度"
     };
     DrawRectangle(static_cast<int>(x), static_cast<int>(tableY),
@@ -133,7 +133,7 @@ void DrawMacroPanel(DebugUIState* state, World& world, Font font,
     if (!compact) {
         DrawMoneySeries(font, market.getGDPHistory(),
                         {x, chartY, chartWidth, chartHeight},
-                        kBlue, "GDP 历史（最近 260 周）");
+                        kBlue, "国内生产总值历史（最近 260 周）");
         DrawDoubleSeries(font, market.getPopulationHistory(),
                          {x + chartWidth + chartGap, chartY,
                           chartWidth, chartHeight},
@@ -168,20 +168,20 @@ void DrawMacroPanel(DebugUIState* state, World& world, Font font,
         }
     }
     Money localRailwayRevenue = Money(0);
-    Money localWarehouseProfit = Money(0);
     for (const RouteSnapshot& route : transport.routes) {
         if (route.sourceWarehouseId == market.getMarketId() ||
             route.destinationWarehouseId == market.getMarketId()) {
             localRailwayRevenue += route.railwayRevenue;
-            localWarehouseProfit += route.warehouseProfit;
         }
     }
+    // Warehouse profit is deliberately not shown: the warehouse margin share is
+    // pinned to zero by design (see warehouse_audit.cpp), so the value is always
+    // zero and displaying it implies a margin that does not exist.
     DrawSectionTitle(font, "当前市场物流活动", x, logisticsY, width,
                      auditText + "  |  " +
                      std::to_string(localOrderCount) + " 活动订单  " +
                      std::to_string(localShipmentCount) + " 在途  铁路收入 " +
-                     NumberText(localRailwayRevenue) + "  仓库利润 " +
-                     NumberText(localWarehouseProfit));
+                     NumberText(localRailwayRevenue));
     if (!healthy) {
         DrawRectangle(static_cast<int>(x),
                       static_cast<int>(logisticsY + 31.0f),
@@ -234,8 +234,8 @@ void DrawMacroPanel(DebugUIState* state, World& world, Font font,
             MarketCode(route.sourceWarehouseId) + " > " +
             MarketCode(route.destinationWarehouseId) + "  " +
             commodityNames[route.goodIndex] + "  " +
-            NumberText(route.distanceKm, 0) + "km  铁 " +
-            NumberText(route.railwayCapacityPricePerUnit) + " /货物 " +
+            NumberText(route.distanceKm, 0) + " 千米  运力 " +
+            NumberText(route.railwayCapacityPricePerUnit) + " / 货物 " +
             NumberText(route.transportCostPerUnit);
         DrawFittedText(font, label,
                        {x, rowsY + activityRow * 24.0f,

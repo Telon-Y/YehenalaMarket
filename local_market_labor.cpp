@@ -10,7 +10,7 @@ using namespace std;
 
 void LocalMarket::processLaborAllocation(std::array<double, TYPE_COUNT>& idealEmployment,
                                          bool& laborShortage) {
-    auto inQueueCount = bld.getInQueueCounts();
+    const auto inQueueCount = getPendingConstructionCounts();
     int usedFarms = bld.getBuildingCounts()[FARM_GRAIN] + bld.getBuildingCounts()[COTTON]
                     + inQueueCount[FARM_GRAIN] + inQueueCount[COTTON];
     int idleLand = max(0, 10000 - usedFarms);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "constants.h"
+#include "construction.h"
 #include "national_market.h"
 
 #include <cstdint>
@@ -8,6 +9,8 @@
 #include <vector>
 
 class World;
+class ConstructionService;
+class ConstructionSystem;
 
 struct TransactionTaxPolicy {
     Money rate = Money(0.01);
@@ -21,60 +24,6 @@ struct TransactionTaxPolicy {
         return rate > Money(0) && step >= startStep &&
                (endStep < 0 || step < endStep);
     }
-};
-
-// A national project is the authoritative identity for every player-issued
-// construction command. The target market may execute the work, but the
-// payer, reservation and lifecycle stay with the country.
-enum class ConstructionProjectStatus {
-    Queued,
-    Active,
-    Completed,
-    Cancelled,
-    Blocked
-};
-
-struct NationalConstructionProject {
-    std::uint64_t id = 0;
-    int payerCountryId = -1;
-    std::string payerCountryTag;
-    int targetProvinceId = -1;
-    int typeIndex = -1;
-    int quantity = 0;
-    Money totalBudget = Money(0);
-    Money unitPrice = Money(0);
-    Money reservedBudget = Money(0);
-    Money paidBudget = Money(0);
-    Money totalConstruction = Money(0);
-    Money remainingConstruction = Money(0);
-    double expectedProfitPriority = 0.0;
-    int createdStep = 0;
-    int lastSettledStep = -1;
-    ConstructionProjectStatus status = ConstructionProjectStatus::Queued;
-
-    bool active() const {
-        return status == ConstructionProjectStatus::Queued ||
-               status == ConstructionProjectStatus::Active;
-    }
-};
-
-struct NationalConstructionPoolSource {
-    int provinceId = -1;
-    Money available = Money(0);
-    Money used = Money(0);
-};
-
-// This is rebuilt once per world cycle. Industrial capacity is backed by
-// produced construction goods; the base supplement is a non-storable national
-// capacity floor and therefore has no provincial warehouse source.
-struct NationalConstructionPoolState {
-    Money industrialCapacity = Money(0);
-    Money industrialAvailable = Money(0);
-    Money baseSupplement = Money(0);
-    Money industrialUsed = Money(0);
-    Money baseUsed = Money(0);
-    Money baseExpenditure = Money(0);
-    std::vector<NationalConstructionPoolSource> industrialSources;
 };
 
 class Country {
@@ -95,29 +44,23 @@ public:
 
 
     const std::vector<NationalConstructionProject>&
-    getConstructionQueue() const { return constructionQueue; }
+    getConstructionQueue() const { return constructionState.projects; }
     const std::vector<NationalConstructionProject>&
-    getConstructionProjects() const { return constructionQueue; }
-    const NationalConstructionPoolState& getConstructionPoolState() const {
-        return constructionPoolState;
+    getConstructionProjects() const { return constructionState.projects; }
+    const std::vector<ConstructionProject>& getConstructionHistory() const {
+        return constructionState.history;
     }
-    bool hasActiveConstructionForProvince(int provinceId) const;
+    const std::vector<ConstructionLedgerEntry>& getConstructionLedger() const {
+        return constructionState.ledger;
+    }
+    const NationalConstructionPoolState& getConstructionPoolState() const {
+        return constructionState.pool;
+    }
     bool hasActiveConstruction() const;
     const NationalConstructionProject* findConstructionProject(
         std::uint64_t projectId) const;
     void pruneFinishedConstructionProjects();
-    void setTreasuryForSetup(Money amount) {
-        // Setup resets may replace the ledger, but never leave active
-        // projects pointing at a reservation that was discarded.
-        for (NationalConstructionProject& project : constructionQueue) {
-            if (!project.active()) continue;
-            project.status = ConstructionProjectStatus::Cancelled;
-            project.reservedBudget = Money(0);
-        }
-        treasury = clamp(amount, Money(0), MONEY_SUPPLY_MAX_MONEY);
-        initialTreasury = treasury;
-        reservedConstructionBudget = Money(0);
-    }
+    void setTreasuryForSetup(Money amount);
     Money quoteTransactionTax(Money taxableAmount, int step) const;
     Money getTreasury() const { return treasury; }
     Money getInitialTreasury() const { return initialTreasury; }
@@ -148,6 +91,8 @@ public:
 
 private:
     friend class World;
+    friend class ConstructionService;
+    friend class ConstructionSystem;
 
     void addProvince(int provinceId);
     void removeProvince(int provinceId);
@@ -166,6 +111,5 @@ private:
     Money reservedConstructionBudget = Money(0);
     Money collectedTax = Money(0);
     TransactionTaxPolicy transactionTax;
-    std::vector<NationalConstructionProject> constructionQueue;
-    NationalConstructionPoolState constructionPoolState;
+    CountryConstructionState constructionState;
 };

@@ -13,6 +13,7 @@
 #include "debug_ui.h"
 #include "font_codepoints.h"
 #include "ui_text_catalog.h"
+#include "ui_text_runtime.h"
 #include "world_data.h"
 #include "debug_report.h"
 
@@ -24,6 +25,7 @@ namespace {
 
 enum class LaunchView {
     WorldMap,
+    CommodityMarket,
     ProvinceDetail,
     CountryOverview
 };
@@ -31,6 +33,7 @@ enum class LaunchView {
 struct LaunchOptions {
     std::string screenshotPath;
     std::string provinceKey;
+    std::string countryKey;
     float mapScrollX = 0.0f;
     float mapZoom = 1.0f;
     int framesBeforeScreenshot = 3;
@@ -50,6 +53,7 @@ struct LaunchOptions {
     int debugPanel = 0;
     int debugMarket = 0;
     int debugGood = 0;
+    int commodityGood = -1;
     int debugBuilding = 0;
     std::string dumpDebugStatePath;
 };
@@ -64,10 +68,14 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv) {
             options.provinceKey = argv[++i];
             if (!options.viewExplicit)
                 options.view = LaunchView::ProvinceDetail;
+        } else if (argument == "--country" && i + 1 < argc) {
+            options.countryKey = argv[++i];
         } else if (argument == "--view" && i + 1 < argc) {
             const std::string view = argv[++i];
             options.viewExplicit = true;
-            if (view == "province")
+            if (view == "goods" || view == "commodities")
+                options.view = LaunchView::CommodityMarket;
+            else if (view == "province")
                 options.view = LaunchView::ProvinceDetail;
             else if (view == "country")
                 options.view = LaunchView::CountryOverview;
@@ -145,6 +153,9 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv) {
         } else if (argument == "--debug-good" && i + 1 < argc) {
             options.debugGood =
                 std::clamp(std::atoi(argv[++i]), 0, NUM_GOODS - 1);
+        } else if (argument == "--good" && i + 1 < argc) {
+            options.commodityGood =
+                std::clamp(std::atoi(argv[++i]), 0, NUM_GOODS - 1);
         } else if (argument == "--debug-building" && i + 1 < argc) {
             options.debugBuilding =
                 std::clamp(std::atoi(argv[++i]), 0, TYPE_COUNT - 1);
@@ -153,6 +164,14 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv) {
         }
     }
     return options;
+}
+
+const Country* ResolveLaunchCountry(const World& world,
+                                    const std::string& keyOrTag) {
+    if (keyOrTag.empty()) return nullptr;
+    const Country* country = world.findCountryByKey(keyOrTag);
+    if (country == nullptr) country = world.findCountryByTag(keyOrTag);
+    return country;
 }
 
 bool ExportLogicalScreenshot(const std::string& path) {
@@ -212,16 +231,11 @@ int main(int argc, char** argv) {
     SetExitKey(KEY_NULL);
 
     std::vector<std::string> uiTexts = BuildUiTextCatalog();
-    uiTexts.insert(uiTexts.end(), commodityNames.begin(), commodityNames.end());
-    uiTexts.insert(uiTexts.end(), buildingTypeNames.begin(), buildingTypeNames.end());
-    for (const auto& item : WorldData::continents())
-        uiTexts.emplace_back(item.name);
-    for (const auto& item : WorldData::regions())
-        uiTexts.emplace_back(item.name);
-    for (const auto& item : WorldData::countries())
-        uiTexts.emplace_back(item.name);
-    for (const auto& item : WorldData::provinces())
-        uiTexts.emplace_back(item.name);
+    // The catalog only contains compile-time literals. Entity names come from
+    // WorldData at runtime, so the set that must be covered by the font is the
+    // union of both; ui_text_runtime.cpp owns that union.
+    const std::vector<std::string> runtimeTexts = BuildRuntimeUiTexts();
+    uiTexts.insert(uiTexts.end(), runtimeTexts.begin(), runtimeTexts.end());
     Font font{};
     const std::string bundledFontPath =
         std::string(GetApplicationDirectory()) + "MingChinese.ttf";
@@ -283,13 +297,51 @@ int main(int argc, char** argv) {
     uiState.mapZoom = launchOptions.mapZoom;
     uiState.mapMode = launchOptions.mapMode;
     uiState.constructionPanelOpen = launchOptions.constructionPanelOpen;
-    if (launchOptions.view != LaunchView::WorldMap) {
+    const Country* launchCountry =
+        ResolveLaunchCountry(world, launchOptions.countryKey);
+    if (launchCountry != nullptr) {
+        uiState.playerCountryId = launchCountry->getId();
+        uiState.selectedCountryId = launchCountry->getId();
+        if (!launchCountry->getProvinceIds().empty()) {
+            const int provinceId = launchCountry->getProvinceIds().front();
+            world.switchProvinceById(provinceId);
+            uiState.selectedProvinceId = provinceId;
+            uiState.countrySelectedProvinceId = provinceId;
+        }
+    }
+    if (launchOptions.view == LaunchView::CommodityMarket) {
+        if (uiState.playerCountryId < 0 && world.getCountryCount() > 0) {
+            const Country& country = world.getCountry(0);
+            uiState.playerCountryId = country.getId();
+            uiState.selectedCountryId = country.getId();
+            if (!country.getProvinceIds().empty()) {
+                const int provinceId = country.getProvinceIds().front();
+                world.switchProvinceById(provinceId);
+                uiState.selectedProvinceId = provinceId;
+                uiState.countrySelectedProvinceId = provinceId;
+            }
+        }
+        uiState.view = UIView::CommodityMarket;
+        uiState.selectedGood = launchOptions.commodityGood;
+        uiState.panelConsumesInput = true;
+    } else if (launchOptions.view != LaunchView::WorldMap) {
         const Province* province = launchOptions.provinceKey.empty()
             ? &world.getProvince(0)
             : world.findProvinceByKey(launchOptions.provinceKey);
         if (province != nullptr && world.switchProvinceById(province->getId())) {
+            if (uiState.playerCountryId < 0) {
+                uiState.playerCountryId = province->getCountryId();
+                uiState.selectedCountryId = uiState.playerCountryId;
+            }
+            if (province->getCountryId() != uiState.playerCountryId &&
+                launchCountry != nullptr &&
+                !launchCountry->getProvinceIds().empty()) {
+                province = &world.getProvinceById(
+                    launchCountry->getProvinceIds().front());
+                world.switchProvinceById(province->getId());
+            }
             if (launchOptions.view == LaunchView::CountryOverview) {
-                NavigateToCountry(&uiState, province->getCountryId(),
+                NavigateToCountry(&uiState, uiState.playerCountryId,
                                   province->getId());
                 // 2.0 exposes the national overview and construction queue.
                 // Older command-line tab names remain accepted as aliases.
@@ -299,7 +351,7 @@ int main(int argc, char** argv) {
                     ? UIView::TransportLogistics
                     : UIView::CountryOverview;
             } else {
-                uiState.selectedCountryId = province->getCountryId();
+                uiState.selectedCountryId = uiState.playerCountryId;
                 NavigateToProvince(&uiState, province->getId());
             }
             uiState.selectedTransportRouteId = launchOptions.transportRouteId;
@@ -404,9 +456,12 @@ int main(int argc, char** argv) {
                     debugUIState.currentPanel);
             } else {
                 std::printf(
-                    "Screenshot UI state: view=%s provinceId=%d scrollX=%.3f\n",
+                    "Screenshot UI state: view=%s playerCountryId=%d "
+                    "provinceId=%d scrollX=%.3f\n",
                     uiState.view == UIView::WorldMap
                         ? "WorldMap"
+                        : uiState.view == UIView::CommodityMarket
+                              ? "CommodityMarket"
                         : uiState.view == UIView::CountryOverview
                               ? "CountryOverview"
                               : uiState.view == UIView::NationalMarket
@@ -415,7 +470,8 @@ int main(int argc, char** argv) {
                                               UIView::TransportLogistics
                                           ? "TransportLogistics"
                                           : "ProvinceDetail",
-                    uiState.selectedProvinceId, uiState.mapScrollX);
+                    uiState.playerCountryId, uiState.selectedProvinceId,
+                    uiState.mapScrollX);
             }
             break;
         }

@@ -12,6 +12,7 @@
 using namespace std;
 
 void LocalMarket::step() {
+    laborerCycleStartCash = classCash[LABORER];
     if (!flowTraceActive) {
         const int cycle = logisticsNetwork == nullptr
             ? stepCount : logisticsNetwork->currentCycle();
@@ -91,7 +92,7 @@ void LocalMarket::step() {
 
     // Bank lending.
     Money weeklyPrivateConstrDemand =
-        bld.getWeeklyPrivateConstructionDemand(formalOut[constrIdx]);
+        getWeeklyPrivateConstructionDemand(formalOut[constrIdx]);
     processBankLoans(weeklyPrivateConstrDemand, priceState.prices[constrIdx]);
 
     // Price ODE update.
@@ -120,6 +121,7 @@ void LocalMarket::step() {
 
     // Consumer payments.
     std::array<Money, CLASS_COUNT> classBeforeSpending = classCash;
+    std::array<double, CLASS_COUNT> consumerClassShares{};
     {
         std::array<Money, CLASS_COUNT> positiveCash;
         Money positiveTotal = Money(0);
@@ -128,6 +130,10 @@ void LocalMarket::step() {
             positiveTotal += positiveCash[c];
         }
         if (positiveTotal > Money(0)) {
+            for (int c = 0; c < CLASS_COUNT; ++c) {
+                consumerClassShares[c] =
+                    (positiveCash[c] / positiveTotal).toDouble();
+            }
             Money actualCost = Money(0);
             for (int i = 0; i < NUM_GOODS; ++i)
                 actualCost += consumerSpending[i];
@@ -152,10 +158,32 @@ void LocalMarket::step() {
             }
             consumerTax = quoteTransactionTax(actualCost);
             totalCost = actualCost + consumerTax;
+            // Taking from inventory can push the basket back above what the
+            // households hold, because stock availability and affordability are
+            // two independent limits. Credit only the money that actually
+            // changes hands: returning the unaffordable remainder to the
+            // warehouse keeps the suppliers' revenue, the tax and the payment
+            // the same amount instead of creating the difference.
+            if (totalCost > positiveTotal && totalCost > Money(0)) {
+                const Money paidRatio = positiveTotal / totalCost;
+                for (int i = 0; i < NUM_GOODS; ++i) {
+                    const Money keep = consumerActual[i] * paidRatio;
+                    const Money returned = consumerActual[i] - keep;
+                    if (returned > Money(0)) addToInventory(i, returned);
+                    consumerActual[i] = keep;
+                    consumerSpending[i] = keep * priceState.prices[i];
+                }
+                actualCost = Money(0);
+                for (int i = 0; i < NUM_GOODS; ++i)
+                    actualCost += consumerSpending[i];
+                consumerTax = quoteTransactionTax(actualCost);
+                totalCost = actualCost + consumerTax;
+            }
             Money consume = std::min(totalCost, positiveTotal);
             Money scalePay = consume / positiveTotal;
             for (int c = 0; c < CLASS_COUNT; ++c)
                 classCash[c] -= positiveCash[c] * scalePay;
+            laborerSpendingOutflow += positiveCash[LABORER] * scalePay;
             collectTransactionTax(actualCost);
         } else {
             consumerActual.fill(Money(0));
@@ -163,6 +191,12 @@ void LocalMarket::step() {
         }
     }
     latestConsumerActual = consumerActual;
+    for (int c = 0; c < CLASS_COUNT; ++c) {
+        for (int good = 0; good < NUM_GOODS; ++good) {
+            latestClassConsumerActual[c][good] =
+                consumerActual[good] * Money(consumerClassShares[c]);
+        }
+    }
     latestFlow.consumerUse = consumerActual;
     latestFlow.consumerValue = Money(0);
     for (int good = 0; good < NUM_GOODS; ++good)
@@ -213,17 +247,19 @@ void LocalMarket::step() {
         if (bld.getBuildingCounts()[t] == 0) continue;
         const auto& bt = bld.getTemplates()[t];
         double cr = activityRate[t];
+        std::array<Money, NUM_GOODS> buildingInputPayment{};
         Money cost = Money(0);
         for (int g = 0; g < NUM_GOODS; ++g) {
             Money amt = Money(bld.getBuildingCounts()[t]) * Money(bt.inputs[g]) * Money(cr);
             Money pay = amt * priceState.prices[g];
             cost += pay;
-            intermediatePayment[g] += pay;
+            buildingInputPayment[g] = pay;
         }
         const Money inputTax = quoteTransactionTax(cost);
-        inputCostByBuilding[t] = cost;
+        Money paidCost = cost;
         if (t == CONST_DEPT) {
             if (fiscalCountry == nullptr) {
+                paidCost = std::min(std::max(Money(0), playerCash), cost);
                 playerCash -= cost + inputTax;
             } else {
                 // A government construction department is still an
@@ -241,9 +277,23 @@ void LocalMarket::step() {
                 const Money payable = std::min(
                     fiscalCountry->getAvailableTreasury(), subsidy);
                 if (payable > Money(0)) fiscalCountry->spendTreasury(payable);
+                // Only money that actually changed hands may reach the
+                // suppliers. Crediting the full unfunded input plan would
+                // create the shortfall out of nothing.
+                const Money paid = departmentPayment + payable;
+                paidCost = totalCost > Money(0)
+                    ? cost * (paid / totalCost) : Money(0);
             }
         } else bld.addCash(t, -(cost + inputTax));
-        collectTransactionTax(cost);
+        // Suppliers are credited with exactly what the buyer paid.
+        const Money paymentRatio = cost > Money(0)
+            ? paidCost / cost : Money(0);
+        for (int g = 0; g < NUM_GOODS; ++g) {
+            if (buildingInputPayment[g] == Money(0)) continue;
+            intermediatePayment[g] += buildingInputPayment[g] * paymentRatio;
+        }
+        inputCostByBuilding[t] = paidCost;
+        collectTransactionTax(paidCost);
     }
 
     // Construction borrowing.
@@ -277,10 +327,14 @@ void LocalMarket::step() {
     // Issuance is recorded as central-bank revenue.
     // Profit distribution remits the issued amount to government.
     const auto& cbBt = bld.getTemplates()[BANK];
+    seigniorageThisCycle = Money(0);
     if (bld.getBuildingCounts()[BANK] > 0) {
         Money goldConsumed = Money(bld.getBuildingCounts()[BANK]) *
                              Money(cbBt.inputs[goldIdx]) * Money(activityRate[BANK]);
-        Money goldBackedCapacity = goldConsumed * Money(GOLD_FIXED_PRICE) * Money(2.0);
+        // Gold backing uses the template's money multiplier rather than a
+        // hard-coded factor, so the template is the single source of truth.
+        Money goldBackedCapacity = goldConsumed * Money(GOLD_FIXED_PRICE) *
+                                   Money(cbBt.moneyMultiplier);
         Money populationScale = Money(std::clamp(laborPopulation / 10000000.0, 0.25, 4.0));
         Money targetMoneySupply = moneySupplyBaseline() * populationScale;
         Money supplyGap = std::max(Money(0), targetMoneySupply - totalMoneySupply);
@@ -289,6 +343,7 @@ void LocalMarket::step() {
                                             supplyGap * Money(0.02),
                                             weeklyAdjustmentLimit});
         revenueByBuilding[BANK] += totalMoneyCreated;
+        seigniorageThisCycle = totalMoneyCreated;
     }
     // Industrial and savings banks do not issue currency.
 
@@ -316,6 +371,22 @@ void LocalMarket::step() {
     for (int t = 0; t < TYPE_COUNT; ++t) {
         if (bld.getBuildingCounts()[t] == 0) continue;
         const BuildingTemplate& building = bld.getTemplates()[t];
+        if (building.isFinancial) {
+            // Financial intermediation is a service: it has no output good, so
+            // it was previously invisible to GDP even though it pays wages and
+            // consumes inputs. Value added is measured on the income side, using
+            // labour cost plus positive operating profit. Central-bank
+            // seigniorage is excluded so GDP does not rise merely because money
+            // was created.
+            Money revenue = revenueByBuilding[t];
+            if (t == BANK) revenue -= seigniorageThisCycle;
+            if (t == FINANCE) revenue += financeFeeThisCycle;
+            const Money labor = laborCostByBuilding[t];
+            const Money intermediate = inputCostByBuilding[t];
+            gdp += labor + std::max(Money(0), revenue - intermediate - labor);
+            productiveIntermediateCost += intermediate;
+            continue;
+        }
         if (building.outputGood < 0) continue;
         gdp += buildingOutput[t] *
             priceState.prices[building.outputGood];
@@ -325,7 +396,10 @@ void LocalMarket::step() {
     // A negative intermediate-cost residual is an accounting loss, not
     // negative production.  Keep the published GDP flow non-negative so a
     // market that has real output cannot fail the macro health gate merely
-    // because a low-margin batch was priced below its inputs.
+    // because a low-margin batch was priced below its inputs.  The unfloored
+    // production-approach result is preserved in rawGdp so the macro panel and
+    // the headless health report can still observe a negative value added.
+    const Money rawGdp = gdp;
     bool hasProductiveBuilding = false;
     for (int type = 0; type < TYPE_COUNT; ++type) {
         const BuildingTemplate& building = bld.getTemplates()[type];
@@ -343,6 +417,7 @@ void LocalMarket::step() {
     latestFlow.intermediateCost = productiveIntermediateCost;
     latestFlow.constructionValue = constrRevenue;
     latestFlow.gdp = gdp;
+    latestFlow.rawGdp = rawGdp;
 
     // Inventory history.
     {
@@ -369,8 +444,14 @@ void LocalMarket::step() {
     bld.clampAllCash();
     bld.syncBankLevels(investmentPool);
 
-    // History.
-    recordHistory(realOut, buildingOutput, gdp);
+    // History. Demand is actual purchased/used quantity, not the unfilled
+    // target signal used by price formation.
+    std::array<Money, NUM_GOODS> demandForHistory = realIn;
+    for (int good = 0; good < NUM_GOODS; ++good) {
+        demandForHistory[good] += consumerActual[good] +
+                                  latestFlow.constructionUse[good];
+    }
+    recordHistory(realOut, demandForHistory, buildingOutput, gdp, rawGdp);
     if (!externalLogistics && logisticsNetwork != nullptr) {
         logisticsNetwork->advanceTransit();
         logisticsNetwork->finishCycle();
@@ -378,4 +459,7 @@ void LocalMarket::step() {
         finalizeFlowTrace(
             logisticsNetwork->lastCompletedFlow(marketId));
     }
+
+    cumulativeSeigniorage += seigniorageThisCycle;
+    laborerPoolDelta += classCash[LABORER] - laborerCycleStartCash;
 }

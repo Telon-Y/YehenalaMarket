@@ -108,6 +108,61 @@ float AdvanceScrollX(float scrollX, float velocity, float deltaTime,
     return NormalizeScrollX(static_cast<float>(advanced), worldWidth);
 }
 
+float AdvanceScrollY(float scrollY, float velocity, float deltaTime,
+                     float maxWorldOffset) {
+    const float normalized = std::isfinite(scrollY)
+        ? std::clamp(scrollY, 0.0f, 1.0f) : 0.5f;
+    if (!std::isfinite(velocity) || !std::isfinite(deltaTime) ||
+        deltaTime <= 0.0f || !std::isfinite(maxWorldOffset) ||
+        maxWorldOffset <= 0.0f) {
+        return normalized;
+    }
+    const double advanced = static_cast<double>(normalized) * maxWorldOffset +
+                            static_cast<double>(velocity) * deltaTime;
+    if (!std::isfinite(advanced)) return normalized;
+    return static_cast<float>(std::clamp(
+        advanced / maxWorldOffset, 0.0, 1.0));
+}
+
+Point DragScrollByScreenDelta(const MapView& view, float scrollY,
+                              Point screenDelta) {
+    Point result = {
+        NormalizeScrollX(view.scrollX, view.worldWidth),
+        std::isfinite(scrollY)
+            ? std::clamp(scrollY, 0.0f, 1.0f) : 0.5f};
+    const float scale = ViewScale(view);
+    if (scale <= 0.0f || !std::isfinite(screenDelta.x) ||
+        !std::isfinite(screenDelta.y)) {
+        return result;
+    }
+
+    // Subtracting the pointer delta makes the world follow the grabbed point.
+    result.x = NormalizeScrollX(
+        result.x - screenDelta.x / scale, view.worldWidth);
+    const float maxWorldOffset = std::max(
+        0.0f, view.worldHeight - view.viewport.height / scale);
+    if (maxWorldOffset <= 0.0f) return result;
+    const double offset =
+        static_cast<double>(result.y) * maxWorldOffset -
+        static_cast<double>(screenDelta.y) / scale;
+    result.y = static_cast<float>(std::clamp(
+        offset / maxWorldOffset, 0.0, 1.0));
+    return result;
+}
+
+Point LimitPanVelocity(Point velocity, float maxSpeed) {
+    if (!std::isfinite(velocity.x) || !std::isfinite(velocity.y) ||
+        !std::isfinite(maxSpeed) || maxSpeed <= 0.0f) {
+        return {};
+    }
+    const double length = std::hypot(
+        static_cast<double>(velocity.x),
+        static_cast<double>(velocity.y));
+    if (!std::isfinite(length) || length <= maxSpeed) return velocity;
+    const float scale = static_cast<float>(maxSpeed / length);
+    return {velocity.x * scale, velocity.y * scale};
+}
+
 float ViewScale(const MapView& view) {
     if (view.viewport.height <= 0.0f || view.viewport.width <= 0.0f ||
         view.worldWidth <= 0.0f || view.worldHeight <= 0.0f ||
@@ -119,6 +174,30 @@ float ViewScale(const MapView& view) {
                                      view.viewport.height / view.worldHeight);
     const float zoom = std::isfinite(view.zoom) ? std::clamp(view.zoom, 0.5f, 4.0f) : 1.0f;
     return baseScale * zoom;
+}
+
+MapView FitWorldView(const Rect& bounds, float worldWidth,
+                     float worldHeight) {
+    MapView view;
+    view.worldWidth = worldWidth;
+    view.worldHeight = worldHeight;
+    if (!std::isfinite(bounds.x) || !std::isfinite(bounds.y) ||
+        !std::isfinite(bounds.width) || !std::isfinite(bounds.height) ||
+        bounds.width <= 0.0f || bounds.height <= 0.0f ||
+        !std::isfinite(worldWidth) || !std::isfinite(worldHeight) ||
+        worldWidth <= 0.0f || worldHeight <= 0.0f) {
+        view.viewport = {bounds.x, bounds.y, 0.0f, 0.0f};
+        return view;
+    }
+    const float scale = std::min(bounds.width / worldWidth,
+                                 bounds.height / worldHeight);
+    const float fittedWidth = worldWidth * scale;
+    const float fittedHeight = worldHeight * scale;
+    view.viewport = {
+        bounds.x + (bounds.width - fittedWidth) * 0.5f,
+        bounds.y + (bounds.height - fittedHeight) * 0.5f,
+        fittedWidth, fittedHeight};
+    return view;
 }
 
 bool Contains(const Rect& rect, Point point) {

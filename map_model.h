@@ -55,8 +55,20 @@ float EdgeScrollVelocity(float cursorScreenX, const Rect& viewport,
                          const EdgeScrollConfig& config = {});
 float AdvanceScrollX(float scrollX, float velocity, float deltaTime,
                      float worldWidth = kWorldWidth);
+// scrollY is normalized from the top (0) to the bottom (1) of the available
+// vertical camera range. velocity remains in world units per second.
+float AdvanceScrollY(float scrollY, float velocity, float deltaTime,
+                     float maxWorldOffset);
+// Converts a screen-space grab movement into horizontal world scroll and
+// normalized vertical scroll. The returned Point stores {scrollX, scrollY}.
+Point DragScrollByScreenDelta(const MapView& view, float scrollY,
+                              Point screenDelta);
+Point LimitPanVelocity(Point velocity, float maxSpeed);
 
 float ViewScale(const MapView& view);
+MapView FitWorldView(const Rect& bounds,
+                     float worldWidth = kWorldWidth,
+                     float worldHeight = kWorldHeight);
 bool Contains(const Rect& rect, Point point);
 std::optional<Point> ScreenToWorld(const MapView& view, Point screenPoint);
 Point WorldToScreen(const MapView& view, Point worldPoint, int repeatIndex = 0);

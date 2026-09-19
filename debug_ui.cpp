@@ -1,8 +1,33 @@
 #include "debug_ui_internal.h"
+#include "construction_ui_text.h"
 
 #include <algorithm>
 
 using namespace debug_ui;
+
+namespace {
+void RecordConstructionResult(DebugUIState* state,
+                              const ConstructionCommandResult& result) {
+    if (state == nullptr) return;
+    state->constructionSucceeded = static_cast<bool>(result);
+    if (result) {
+        state->constructionMessage =
+            "已加入建设项目 #" +
+            std::to_string(result.projectId);
+    } else {
+        state->constructionMessage =
+            ConstructionCommandErrorText(result.error);
+    }
+}
+
+void RecordDemolitionResult(DebugUIState* state, int removed) {
+    if (state == nullptr) return;
+    state->constructionSucceeded = removed > 0;
+    state->constructionMessage = removed > 0
+        ? "已拆除 " + std::to_string(removed) + " 座政府建筑"
+        : "只能拆除政府（玩家）所有的建筑";
+}
+}  // namespace
 
 void InitDebugUIState(DebugUIState* state) {
     if (state == nullptr) return;
@@ -43,6 +68,7 @@ void HandleDebugUIInput(DebugUIState* state, World& world) {
             world.switchMarket(index);
             const Country* country = world.getMarket(index).getFiscalCountry();
             state->selectedCountryId = country != nullptr ? country->getId() : -1;
+            state->buildingScroll = 0;
             state->constructionScroll = 0;
             state->orderScroll = 0;
         }
@@ -51,9 +77,14 @@ void HandleDebugUIInput(DebugUIState* state, World& world) {
         if (pressed &&
             CheckCollisionPointRec(mouse, layout.panelButtons[panel])) {
             state->currentPanel = panel;
+            state->buildingScroll = 0;
         }
     }
 
+    if (state->currentPanel == 2 &&
+        HandleConstructionPanelInput(state, world, layout)) {
+        return;
+    }
     if (state->currentPanel == 0) {
         for (int good = 0; good < NUM_GOODS; ++good) {
             if (pressed &&
@@ -71,33 +102,15 @@ void HandleDebugUIInput(DebugUIState* state, World& world) {
         LocalMarket& market = world.getMarket(state->selectedMarket);
         if (CanEditBuilding(state->selectedBuilding) && pressed &&
             CheckCollisionPointRec(mouse, BuildingAddButton(layout))) {
-            const Country* country = market.getFiscalCountry();
-            if (country != nullptr && market.getOwnerWorld() != nullptr) {
-                world.queueNationalConstruction(country->getId(),
-                                                market.getProvinceId(),
-                                                state->selectedBuilding, 1);
-            } else {
-                market.playerBuild(state->selectedBuilding, 1);
-            }
+            RecordConstructionResult(
+                state, market.playerBuildCommand(
+                    state->selectedBuilding, 1));
         }
         if (CanEditBuilding(state->selectedBuilding) &&
-            market.getBuildingCounts()[state->selectedBuilding] > 0 &&
             pressed &&
             CheckCollisionPointRec(mouse, BuildingRemoveButton(layout))) {
-            market.playerDemolish(state->selectedBuilding, 1);
-        }
-    } else if (state->currentPanel == 2) {
-        if (pressed && CheckCollisionPointRec(
-                mouse, ConstructionDepartmentButton(layout))) {
-            LocalMarket& market = world.getMarket(state->selectedMarket);
-            const Country* country = market.getFiscalCountry();
-            if (country != nullptr && market.getOwnerWorld() != nullptr) {
-                world.queueNationalConstruction(country->getId(),
-                                                market.getProvinceId(),
-                                                CONST_DEPT, 1);
-            } else {
-                market.playerBuild(CONST_DEPT, 1);
-            }
+            RecordDemolitionResult(state,
+                market.playerDemolish(state->selectedBuilding, 1));
         }
     }
 
@@ -153,7 +166,7 @@ void DrawDebugUI(DebugUIState* state, World& world, Font font,
         state->selectedMarket, 0, world.getMarketCount() - 1);
     const DebugLayout layout = MakeLayout();
     RefreshAudit(state, world);
-    const TransportationSnapshot transport =
+    const TransportationSnapshot& transport =
         world.getTransportationSnapshot();
     DrawShell(state, world, font, layout, elapsedSeconds, transport);
 
@@ -186,19 +199,6 @@ int FindMarketIndex(const World& world, int marketId) {
     return -1;
 }
 
-void CancelNewestNationalProject(World& world, const Country& country,
-                                 int provinceId, int type) {
-    const CountrySnapshot snapshot = world.getCountrySnapshot(country.getId());
-    for (auto it = snapshot.constructionProjects.rbegin();
-         it != snapshot.constructionProjects.rend(); ++it) {
-        if ((it->status == static_cast<int>(ConstructionProjectStatus::Queued) ||
-             it->status == static_cast<int>(ConstructionProjectStatus::Active)) &&
-            it->targetProvinceId == provinceId && it->typeIndex == type) {
-            world.cancelNationalConstructionProject(country.getId(), it->id);
-            return;
-        }
-    }
-}
 }  // namespace
 
 void SetDebugMarketForProvince(DebugUIState* state, const World& world,
@@ -213,6 +213,7 @@ void SetDebugMarketForProvince(DebugUIState* state, const World& world,
     if (state->selectedMarket != marketIndex) {
         state->selectedMarket = marketIndex;
         state->goodsScroll = 0;
+        state->buildingScroll = 0;
         state->constructionScroll = 0;
         state->orderScroll = 0;
     }
@@ -237,12 +238,17 @@ bool HandleEmbeddedLocalMarketInput(DebugUIState* state, World& world,
         if (pressed && CheckCollisionPointRec(mouse, layout.panelButtons[panel])) {
             state->currentPanel = panel;
             state->goodsScroll = 0;
+            state->buildingScroll = 0;
             state->constructionScroll = 0;
             state->orderScroll = 0;
             return true;
         }
     }
 
+    if (state->currentPanel == 2 &&
+        HandleConstructionPanelInput(state, world, layout)) {
+        return true;
+    }
     if (state->currentPanel == 0) {
         for (int good = 0; good < NUM_GOODS; ++good) {
             if (pressed && CheckCollisionPointRec(mouse, GoodButton(layout, good))) {
@@ -251,48 +257,58 @@ bool HandleEmbeddedLocalMarketInput(DebugUIState* state, World& world,
             }
         }
     } else if (state->currentPanel == 1) {
-        for (int type = 0; type < TYPE_COUNT; ++type) {
+        const EmbeddedBuildingGeometry geometry =
+            MakeEmbeddedBuildingGeometry(layout);
+        const int maxScroll =
+            std::max(0, TYPE_COUNT - geometry.visibleRows);
+        state->buildingScroll = std::clamp(
+            state->buildingScroll, 0, maxScroll);
+        for (int rowIndex = 0;
+             rowIndex < geometry.visibleRows; ++rowIndex) {
+            const int type = state->buildingScroll + rowIndex;
+            if (type >= TYPE_COUNT) break;
             if (pressed &&
-                CheckCollisionPointRec(mouse, BuildingRow(layout, type))) {
+                CheckCollisionPointRec(
+                    mouse,
+                    EmbeddedBuildingRow(layout, geometry, rowIndex))) {
                 state->selectedBuilding = type;
                 return true;
             }
         }
         LocalMarket& market = world.getMarket(state->selectedMarket);
-        const Country* country = market.getFiscalCountry();
         if (CanEditBuilding(state->selectedBuilding) && pressed &&
             CheckCollisionPointRec(mouse, BuildingAddButton(layout))) {
-            if (country != nullptr && market.getOwnerWorld() != nullptr) {
-                world.queueNationalConstruction(country->getId(),
-                                                market.getProvinceId(),
-                                                state->selectedBuilding, 1);
-            } else {
-                market.playerBuild(state->selectedBuilding, 1);
-            }
+            RecordConstructionResult(
+                state, market.playerBuildCommand(
+                    state->selectedBuilding, 1));
             return true;
         }
         if (CanEditBuilding(state->selectedBuilding) &&
-            market.getBuildingCounts()[state->selectedBuilding] > 0 &&
             pressed && CheckCollisionPointRec(mouse, BuildingRemoveButton(layout))) {
-            if (country != nullptr && market.getOwnerWorld() != nullptr)
-                CancelNewestNationalProject(*market.getOwnerWorld(), *country,
-                                             market.getProvinceId(),
-                                             state->selectedBuilding);
-            else
-                market.playerDemolish(state->selectedBuilding, 1);
+            RecordDemolitionResult(state,
+                market.playerDemolish(state->selectedBuilding, 1));
             return true;
         }
-    } else if (state->currentPanel == 2 && pressed &&
-               CheckCollisionPointRec(mouse,
-                                      ConstructionDepartmentButton(layout))) {
-        LocalMarket& market = world.getMarket(state->selectedMarket);
-        const Country* country = market.getFiscalCountry();
-        if (country != nullptr && market.getOwnerWorld() != nullptr)
-            world.queueNationalConstruction(country->getId(),
-                                            market.getProvinceId(), CONST_DEPT, 1);
-        else
-            market.playerBuild(CONST_DEPT, 1);
-        return true;
+    }
+
+    if (state->currentPanel == 1 &&
+        CheckCollisionPointRec(
+            mouse, {layout.contentX, layout.contentY,
+                    layout.contentWidth, layout.contentHeight})) {
+        int scrollDelta = 0;
+        if (IsKeyPressed(KEY_UP)) --scrollDelta;
+        if (IsKeyPressed(KEY_DOWN)) ++scrollDelta;
+        if (IsKeyPressed(KEY_PAGE_UP)) scrollDelta -= 5;
+        if (IsKeyPressed(KEY_PAGE_DOWN)) scrollDelta += 5;
+        if (scrollDelta != 0) {
+            const EmbeddedBuildingGeometry geometry =
+                MakeEmbeddedBuildingGeometry(layout);
+            const int maxScroll =
+                std::max(0, TYPE_COUNT - geometry.visibleRows);
+            state->buildingScroll = std::clamp(
+                state->buildingScroll + scrollDelta, 0, maxScroll);
+            return true;
+        }
     }
 
     const float wheel = GetMouseWheelMove();
@@ -311,6 +327,15 @@ bool HandleEmbeddedLocalMarketInput(DebugUIState* state, World& world,
         else if (state->currentPanel == 0)
             state->goodsScroll = std::max(
                 0, state->goodsScroll - static_cast<int>(wheel * 3.0f));
+        else if (state->currentPanel == 1) {
+            const EmbeddedBuildingGeometry geometry =
+                MakeEmbeddedBuildingGeometry(layout);
+            const int maxScroll =
+                std::max(0, TYPE_COUNT - geometry.visibleRows);
+            state->buildingScroll = std::clamp(
+                state->buildingScroll - static_cast<int>(wheel * 2.0f),
+                0, maxScroll);
+        }
         return true;
     }
     return true;
@@ -323,8 +348,8 @@ void DrawEmbeddedLocalMarketUI(DebugUIState* state, World& world, Font font,
     SetDebugMarketForProvince(state, world, provinceId);
     const DebugLayout layout =
         MakeLayout(DebugUIMode::EmbeddedLocalMarket, bounds);
-    RefreshAudit(state, world);
-    const TransportationSnapshot transport = world.getTransportationSnapshot();
+    const TransportationSnapshot& transport =
+        world.getTransportationSnapshot();
     DrawShell(state, world, font, layout, elapsedSeconds, transport);
     BeginScissorMode(static_cast<int>(layout.contentX - 2.0f),
                      static_cast<int>(layout.contentY - 3.0f),

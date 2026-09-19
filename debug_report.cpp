@@ -129,7 +129,7 @@ MarketRegressionMetrics CalculateRegressionMetrics(
 
 bool WriteDebugStateReport(std::ostream& output, const World& world) {
     const WarehouseAudit audit = world.getWarehouseNetwork().audit();
-    const TransportationSnapshot transport =
+    const TransportationSnapshot& transport =
         world.getTransportationSnapshot();
     const bool topologyComplete = HasCompleteDomesticTopology(world);
     bool inventoryBalanced = true;
@@ -172,9 +172,13 @@ bool WriteDebugStateReport(std::ostream& output, const World& world) {
         inventoryBalanced =
             inventoryBalanced && market.getLatestFlow().inventoryBalanced;
         allGdpFinite =
-            allGdpFinite && isfinite(market.getGDP());
+            allGdpFinite && isfinite(market.getGDP()) &&
+            isfinite(market.getRawGDP());
+        // Gate on the unfloored series. The published GDP is floored at a small
+        // positive value for any market that owns a productive building, so a
+        // check against it can never detect value added at or below zero.
         allGdpPositive =
-            allGdpPositive && market.getGDP() > Money(0);
+            allGdpPositive && market.getRawGDP() > Money(0);
         const MarketRegressionMetrics metrics =
             CalculateRegressionMetrics(market);
         regressionMetrics.push_back(metrics);
@@ -235,11 +239,20 @@ bool WriteDebugStateReport(std::ostream& output, const World& world) {
         remoteTradeProfitable && remoteTradeObserved &&
         constructionPoolHealthy;
 
-    // GDP volatility, idle weeks, and population retention remain visible as
-    // diagnostics. The documented report gate is topology, accounting,
-    // finite/positive 52-week GDP, and the logistics contract itself.
-    const bool healthy = logisticsHealthy && allGdpFinite &&
-        (cycle == 0 || allGdpPositive);
+    // Money conservation: every pool plus creation must account for every
+    // change in the total. A residual means money moved without a receiver.
+    const Money moneyTotal = world.totalMoneyInSystem();
+    const Money moneyResidual = world.getMoneyResidual();
+    const Money moneyTolerance =
+        Money(1.0e-6) + world.getMoneyOpeningTotal().abs() * Money(1.0e-12);
+    const bool moneyConserved = moneyResidual.abs() <= moneyTolerance;
+
+    // The report gate is topology, warehouse accounting, the logistics contract,
+    // finite and positive *unfloored* 52-week GDP, GDP stability, and money
+    // conservation. Idle-GDP weeks and population retention stay visible as
+    // diagnostics only.
+    const bool healthy = logisticsHealthy && allGdpFinite && moneyConserved &&
+        (cycle == 0 || (allGdpPositive && gdpStable));
 
     output << "{\n";
     output << "  \"scenario\": "
@@ -282,7 +295,55 @@ bool WriteDebugStateReport(std::ostream& output, const World& world) {
            << (audit.valid ? "true" : "false") << ",\n";
     output << "    \"warehouseAuditMessage\": ";
     WriteString(output, audit.message);
-    output << "\n  },\n";
+    output << ",\n    \"moneyConserved\": "
+           << (moneyConserved ? "true" : "false") << "\n  },\n";
+    output << "  \"money\": {\n";
+    output << "    \"openingTotal\": ";
+    WriteMoney(output, world.getMoneyOpeningTotal());
+    output << ",\n    \"totalInSystem\": ";
+    WriteMoney(output, moneyTotal);
+    output << ",\n    \"createdBySeigniorage\": ";
+    WriteMoney(output, world.getMoneyCreatedTotal());
+    output << ",\n    \"residual\": ";
+    WriteMoney(output, moneyResidual);
+    output << ",\n    \"lastCycleResidual\": ";
+    WriteMoney(output, world.getMoneyLastCycleResidual());
+    output << ",\n    \"worstCycleResidual\": ";
+    WriteMoney(output, world.getMoneyWorstCycleResidual());
+    output << ",\n    \"worstCycle\": " << world.getMoneyWorstCycle();
+    output << ",\n    \"escrow\": ";
+    WriteMoney(output, world.getMoneyEscrow());
+    output << ",\n    \"laborerCash\": ";
+    WriteMoney(output, world.getLaborerCashTotal());
+    Money wageIn = Money(0), spendingOut = Money(0), depositIn = Money(0),
+           delta = Money(0), transferIn = Money(0), poolReturned = Money(0);
+    for (int marketIndex = 0; marketIndex < world.getMarketCount();
+         ++marketIndex) {
+        const LocalMarket& market = world.getMarket(marketIndex);
+        wageIn += market.getLaborerWageInflow();
+        spendingOut += market.getLaborerSpendingOutflow();
+        depositIn += market.getLaborerDepositInflow();
+        delta += market.getLaborerPoolDelta();
+        transferIn += market.getHouseholdTransferInflow(LABORER);
+        poolReturned += market.getInvestmentPoolReturned();
+    }
+    output << ",\n    \"investmentPoolReturned\": ";
+    WriteMoney(output, poolReturned);
+    output << ",\n    \"laborer\": {\n";
+    output << "      \"wageInflow\": ";
+    WriteMoney(output, wageIn);
+    output << ",\n      \"depositInterestInflow\": ";
+    WriteMoney(output, depositIn);
+    output << ",\n      \"capitalReturnInflow\": ";
+    WriteMoney(output, transferIn);
+    output << ",\n      \"consumptionOutflow\": ";
+    WriteMoney(output, spendingOut);
+    output << ",\n      \"poolDelta\": ";
+    WriteMoney(output, delta);
+    output << ",\n      \"unexplained\": ";
+    WriteMoney(output,
+               delta - (wageIn + depositIn + transferIn - spendingOut));
+    output << "\n    }\n  },\n";
     output << "  \"transport\": {\n";
     output << "    \"routes\": " << transport.routes.size() << ",\n";
     output << "    \"activeOrders\": " << transport.orders.size() << ",\n";
@@ -301,6 +362,9 @@ bool WriteDebugStateReport(std::ostream& output, const World& world) {
            << transport.railwayBlockedRoutes;
     output << ",\n    \"railwayRevenue\": ";
     WriteMoney(output, transport.totalRailwayRevenue);
+    // Invariant, not a measurement: the warehouse margin share is pinned to
+    // zero by design, so this field is always 0. It is kept in the report so
+    // tooling can assert the invariant rather than infer it.
     output << ",\n    \"warehouseProfit\": ";
     WriteMoney(output, transport.totalWarehouseProfit);
     output << ",\n    \"remoteOrders\": " << remoteOrderCount;
@@ -439,6 +503,13 @@ bool WriteDebugStateReport(std::ostream& output, const World& world) {
         WriteMoney(output, market.getWeeklyGDP());
         output << ",\n      \"annualizedGdp\": ";
         WriteMoney(output, market.getGDP());
+        // Unfloored production-approach GDP. weeklyGdp/annualizedGdp are the
+        // published values and are floored for productive markets; these two
+        // stay raw so a negative value added remains observable.
+        output << ",\n      \"rawWeeklyGdp\": ";
+        WriteMoney(output, flow.rawGdp);
+        output << ",\n      \"rawAnnualizedGdp\": ";
+        WriteMoney(output, market.getRawGDP());
         const MarketRegressionMetrics& metrics =
             regressionMetrics[static_cast<std::size_t>(marketIndex)];
         output << ",\n      \"gdpCv104\": "

@@ -1,6 +1,7 @@
 // ==================== local_market.h ====================
 #pragma once
 #include "constants.h"
+#include "construction.h"
 #include "building_manager.h"
 #include "price_engine.h"
 #include "sim_types.h"
@@ -12,6 +13,7 @@
 #include <vector>
 class Country;
 class World;
+class ConstructionSystem;
 
 
 class LocalMarket {
@@ -19,27 +21,37 @@ public:
     LocalMarket(int id, const std::string& name);
     void step();
     void aiBuild();
-    bool payAIExpansionStartup(int typeIndex);
-    std::vector<AIExpansionCandidate> getAIExpansionCandidates() const;
-    int placeGovernmentExpansion(int typeIndex, int count,
-                                 Money reservedBudgetPerOrder);
+    std::vector<AIExpansionCandidate> getAIExpansionCandidates(
+        const std::array<int, TYPE_COUNT>& pendingCounts,
+        Money totalRemainingConstruction) const;
 
-    // ===== 市场标识 =====
+
+    // Market identity.
     int getMarketId() const { return marketId; }
     const std::string& getMarketName() const { return marketName; }
 
-    // ===== 价格访问器（委托 PriceState） =====
+    // Price accessors delegated to PriceState.
     const std::array<Money, NUM_GOODS>& getPrices() const { return priceState.prices; }
     void setPriceForSetup(int goodIdx, Money price);
     bool setBuildingCountForSetup(int typeIdx, int count,
                                   OwnerType owner = OWNER_INITIAL);
+    bool configureProvinceScenarioForSetup(
+        double population,
+        const std::array<int, TYPE_COUNT>& buildings,
+        const std::array<int, TYPE_COUNT>& resourceCaps);
     void finalizeDebugSetup();
     void finalizeStandardSetup();
+    // Opening-state helpers, run once by the world setup after every market has
+    // been configured: the first publishes the initial consumer demand into the
+    // requirement graph, the second sizes the opening warehouse policy and stock
+    // on the requirement that graph implies rather than on installed capacity.
+    void publishInitialFinalDemand();
+    void reconcileInitialWarehouseDemand();
     Money getPriceLevel() const { return priceState.priceLevel; }
     const std::array<Money, NUM_GOODS>& getBaseReferencePrice() const { return priceState.baseRef; }
     const PriceState& getPriceState() const { return priceState; }
 
-    // ===== 库存系统（2.0 准备） =====
+    // Inventory system.
     std::array<Money, NUM_GOODS> getInventory() const {
         return warehouse.onHandSnapshot();
     }
@@ -86,15 +98,41 @@ public:
     const std::array<Money, NUM_GOODS>& getTradeBalance() const { return tradeBalance; }
     void addTradeBalance(int goodIdx, Money amount);
 
-    // ===== 市场快照 =====
+    // Market snapshots.
     MarketSnapshot getSnapshot() const;
     const MarketFlowSnapshot& getLatestFlow() const { return latestFlow; }
 
-    // ===== 原有接口 =====
+    // Public market interfaces.
     int getStepCount() const { return stepCount; }
     const std::vector<BuildingTemplate>& getBuildingTemplates() const { return bld.getTemplates(); }
     const std::array<int, TYPE_COUNT>& getBuildingCounts() const { return bld.getBuildingCounts(); }
-    const std::vector<ConstructionOrder>& getConstructionQueue() const { return bld.getQueue(); }
+    const std::array<int, TYPE_COUNT>& getResourceCaps() const {
+        return resourceCaps;
+    }
+    int getResourceCap(int typeIdx) const {
+        return typeIdx >= 0 && typeIdx < TYPE_COUNT
+            ? resourceCaps[typeIdx] : -1;
+    }
+    const std::vector<ConstructionProject>& getConstructionQueue() const;
+    const std::vector<ConstructionProject>& getConstructionHistory() const;
+    const std::vector<ConstructionLedgerEntry>&
+    getConstructionLedger() const;
+    ConstructionQuote quoteConstruction(
+        const ConstructionRequest& request) const;
+    ConstructionCommandResult submitConstruction(
+        const ConstructionRequest& request);
+    bool cancelConstructionProject(ConstructionProjectId projectId);
+    bool pauseConstructionProject(ConstructionProjectId projectId);
+    bool resumeConstructionProject(ConstructionProjectId projectId);
+    bool setConstructionProjectPriority(
+        ConstructionProjectId projectId, int priority);
+    bool moveConstructionProject(ConstructionProjectId projectId,
+                                 bool up, bool toEdge = false);
+    bool addConstructionProjectBudget(
+        ConstructionProjectId projectId, Money amount);
+    std::array<int, TYPE_COUNT> getPendingConstructionCounts() const;
+    Money getWeeklyPrivateConstructionDemand(
+        Money availableConstruction) const;
     const std::array<double, TYPE_COUNT>& getEmploymentRatio() const { return bld.getEmploymentRatio(); }
     const std::array<double, TYPE_COUNT>& getAvgProfitRates() const { return bld.getAvgProfitRates(); }
     const std::array<double, TYPE_COUNT>& getSmoothedProfitRate() const { return bld.getSmoothedProfitRate(); }
@@ -119,7 +157,17 @@ public:
         return bld.getProductionTarget();
     }
     const std::vector<std::array<Money, NUM_GOODS>>& getPriceHistory() const { return priceHist; }
+    const std::vector<std::array<Money, NUM_GOODS>>& getOutputHistory() const {
+        return outputHist;
+    }
+    const std::vector<std::array<Money, NUM_GOODS>>& getDemandHistory() const {
+        return demandHist;
+    }
     const std::vector<Money>& getGDPHistory() const { return gdpHist; }
+    // Unfloored production-approach GDP. Unlike gdpHist this series may contain
+    // negative entries, so health checks and diagnostics can observe a market
+    // whose value added fell below its intermediate input cost.
+    const std::vector<Money>& getRawGDPHistory() const { return rawGdpHist; }
     const std::vector<double>& getPopulationHistory() const { return populationHist; }
     const std::array<Money, NUM_GOODS>& getLatestRawConsumerTarget() const {
         return latestRawConsumerTarget;
@@ -129,6 +177,10 @@ public:
         return smoothedConsumerDemand;
     }
     const std::array<Money, NUM_GOODS>& getLatestConsumerActual() const { return latestConsumerActual; }
+    const std::array<std::array<Money, NUM_GOODS>, CLASS_COUNT>&
+    getLatestClassConsumerActual() const {
+        return latestClassConsumerActual;
+    }
     const std::array<Money, CLASS_COUNT>& getClassLastSpending() const {
         return classLastSpending;
     }
@@ -167,9 +219,39 @@ public:
     }
     Money getGDP() const;
     Money getGDPAtCycle(int cycle) const;
+    Money getRawGDP() const;
+    Money getRawGDPAtCycle(int cycle) const;
     double getPopulationAtCycle(int cycle) const;
     Money getTotalMoneySupply() const { return totalMoneySupply; }
     Money getInvestmentPool() const { return investmentPool; }
+    // ---- Money audit -------------------------------------------------------
+    // Every pool this market holds, including money that has already left a
+    // pool but has not been credited to one yet (the pending* accumulators).
+    // The world sums these with the country treasuries and the warehouse escrow
+    // to check that money is conserved.
+    Money moneyPoolsTotal() const;
+    // Seigniorage is the only path that creates money.
+    Money getSeigniorageThisCycle() const { return seigniorageThisCycle; }
+    Money getSeigniorageCreated() const { return cumulativeSeigniorage; }
+    // Labor-pool flow ledger, cumulative since setup. The channels are recorded
+    // where the money actually moves, so an unexplained remainder means a
+    // channel exists that this ledger does not know about.
+    Money getLaborerWageInflow() const { return laborerWageInflow; }
+    Money getLaborerSpendingOutflow() const { return laborerSpendingOutflow; }
+    Money getLaborerDepositInflow() const { return laborerDepositInflow; }
+    Money getLaborerPoolDelta() const { return laborerPoolDelta; }
+    // Surplus investment capital returned to households, and the share each
+    // class received. The labor pool is the terminal destination.
+    Money getInvestmentPoolReturned() const { return investmentPoolReturned; }
+    Money getHouseholdTransferInflow(int classIndex) const {
+        return classIndex >= 0 && classIndex < CLASS_COUNT
+            ? householdTransferInflow[static_cast<std::size_t>(classIndex)]
+            : Money(0);
+    }
+    void recordLaborerDepositInterest(Money amount) {
+        if (isfinite(amount) && amount > Money(0))
+            laborerDepositInflow += amount;
+    }
     Money getClassCash(int idx) const {
         if (idx < 0 || idx >= CLASS_COUNT) throw std::out_of_range("class index out of range");
         return classCash[idx];
@@ -210,16 +292,18 @@ public:
     int   getInvestmentLoanDueStep() const { return investmentLoanDueStep; }
     int   getInvestmentLoanDelinquentWeeks() const { return investmentLoanDelinquentWeeks; }
 
-    // ===== 玩家操作 =====
+    // Player operations.
+    ConstructionCommandResult playerBuildCommand(int typeIdx, int count);
     void playerBuild(int typeIdx, int count);
-    void playerDemolish(int typeIdx, int count);
+    bool canPlayerDemolish(int typeIdx) const;
+    int playerDemolish(int typeIdx, int count);
     void setAIProfitThreshold(double v) { aiProfitThreshold = v; }
     double getAIProfitThreshold() const { return aiProfitThreshold; }
     BuildingManager& getBuildingManager() { return bld; }
     const BuildingManager& getBuildingManager() const { return bld; }
     bool performOwnershipTransfer(int typeIdx, int count, OwnerType from, OwnerType to);
 
-    // ===== 玩家记账账户 =====
+    // Player accounting.
     Money getPlayerCash() const {
         return (fiscalCountry != nullptr ||
                 (ownerWorld != nullptr && !legacyDebugControls))
@@ -233,18 +317,40 @@ public:
         }
         playerCash = clamp(v, -CLASS_CASH_MAX_MONEY, CLASS_CASH_MAX_MONEY);
     }
+    Money getReservedSandboxConstructionBudget() const {
+        return reservedSandboxConstructionBudget;
+    }
+    Money getAvailableSandboxConstructionBudget() const {
+        return std::max(
+            Money(0), playerCash - reservedSandboxConstructionBudget);
+    }
+    bool reserveSandboxConstructionBudget(Money amount);
+    bool settleSandboxConstructionPayment(Money amount);
+    void releaseSandboxConstructionBudget(Money amount);
 
-    // ===== 建造划转累计（记账） =====
+    // Construction transfer ledger.
     Money getBuildTransferTotal() const { return buildTransferTotal; }
 
-    // ===== 贸易支付接口（2.0预留） =====
+    // Trade payment API.
     void addTradePayment(int goodIdx, Money quantity, Money amount);
     void addLogisticsRevenue(Money railwayRevenue,
                              Money warehouseProfit);
     bool tryTradePayment(Money amount);
     void refundTradePayment(int goodIdx, Money quantity, Money amount);
+    Money getReservedInvestmentConstructionBudget() const {
+        return reservedInvestmentConstructionBudget;
+    }
+    Money getAvailableInvestmentForConstruction() const {
+        return std::max(
+            Money(0), investmentPool - reservedInvestmentConstructionBudget);
+    }
+    bool reserveInvestmentConstructionBudget(Money amount);
+    bool settleInvestmentConstructionPayment(Money amount);
+    void releaseInvestmentConstructionBudget(Money amount);
+    bool capitalizePrivateConstruction(int typeIndex, Money amount);
     void setInvestmentPoolForSetup(Money amount) {
         investmentPool = clamp(amount, Money(0), INVEST_POOL_MAX_MONEY);
+        reservedInvestmentConstructionBudget = Money(0);
         bld.syncBankLevels(investmentPool);
     }
     void setInvestmentLoanForSetup(Money balance, int dueStep,
@@ -254,21 +360,22 @@ public:
         processBankLoans(weeklyConstrDemand, constrPrice);
     }
 
-    // ===== 证券系统 =====
+    // Securities.
     void issueSecurities(int typeIdx, int count, OwnerType owner);
     bool transferSecurities(int typeIdx, int count, OwnerType from, OwnerType to);
     const std::vector<Security>& getSecurities() const { return securities; }
 
-    // ===== 贷款结算辅助 =====
+    // Loan settlement helpers.
     void settleLoansBeforeDemolish(int typeIdx, int removeCount);
 
 private:
     friend class World;
-    // ===== 标识 =====
+    friend class ConstructionSystem;
+    // Identity.
     int marketId;
     std::string marketName;
 
-    // ===== 核心模块 =====
+    // Core modules.
     PriceState priceState;
     BuildingManager bld;
     Warehouse warehouse;
@@ -280,13 +387,13 @@ private:
     Country* fiscalCountry = nullptr;
     bool legacyDebugControls = false;
 
-    // ===== 库存与贸易 =====
+    // Inventory and trade.
     std::array<Money, NUM_GOODS> tradeBalance;
     std::array<Money, NUM_GOODS> pendingTradeRevenue;
     Money pendingRailwayRevenue = Money(0);
     Money pendingWarehouseProfit = Money(0);
 
-    // ===== 劳动力/人口 =====
+    // Labor and population.
     double laborPopulation = 10'000'000.0;
     double initialLaborPopulation = 10'000'000.0;
     double maxLabor = 2'500'000.0;
@@ -304,36 +411,63 @@ private:
     std::array<double, TYPE_COUNT> targetEmployment{};
     std::array<Money, TYPE_COUNT> buildingWages;
     std::array<Money, TYPE_COUNT> buildingBonuses;
+    std::array<int, TYPE_COUNT> resourceCaps{};
 
-    // ===== 金融 =====
+    // Finance.
     std::array<Money, CLASS_COUNT> classCash;
     std::array<Money, CLASS_COUNT> classLastSpending;
     Money investmentPool = Money(200000000.0);
+    Money reservedInvestmentConstructionBudget = Money(0);
     Money totalMoneySupply = Money(0);
     Money initialTotalMoneySupply = Money(0);
+    // Money audit: seigniorage created this cycle and cumulative, plus the
+    // labor-pool channel ledger used to attribute its long-run drift.
+    Money seigniorageThisCycle = Money(0);
+    Money cumulativeSeigniorage = Money(0);
+    Money laborerWageInflow = Money(0);
+    Money laborerSpendingOutflow = Money(0);
+    Money laborerDepositInflow = Money(0);
+    Money laborerPoolDelta = Money(0);
+    Money laborerCycleStartCash = Money(0);
+    Money investmentPoolReturned = Money(0);
+    std::array<Money, CLASS_COUNT> householdTransferInflow{};
     Money totalDebt = Money(0);
     Money playerCash = Money(0);                    // standalone compatibility only; country markets keep zero
-    Money buildTransferTotal = Money(0);            // 建造累计划转金额
+    Money reservedSandboxConstructionBudget = Money(0);
+    CountryConstructionState standaloneConstructionState;
+    ConstructionProjectId nextStandaloneConstructionProjectId = 1;
+    Money buildTransferTotal = Money(0);            // Cumulative construction transfers.
     std::array<Money, TYPE_COUNT> loanBalance;
     std::array<int, TYPE_COUNT> buildingLoanCount{};
     std::array<int, TYPE_COUNT> loanDelinquentWeeks{};
     Money bankLoanCapacity = Money(0);
+    // Intermediation fee earned by the financial district during the current
+    // cycle. It is reported as FINANCE revenue (and therefore enters the profit
+    // rate and GDP) although the cash is credited directly to the district when
+    // the borrower pays interest.
+    Money financeFeeThisCycle = Money(0);
+    // Interest income the commercial bank retained this cycle. The savings bank
+    // pays household deposit interest out of this spread, which keeps the
+    // payment bounded by income actually earned.
+    Money bankSpreadThisCycle = Money(0);
+    // Part of the deposit spread the savings bank keeps after paying households.
+    Money savingsBankIncomeThisCycle = Money(0);
     Money investmentLoanBalance = Money(0);
     int   investmentLoanDueStep = -1;
     int   investmentLoanDelinquentWeeks = 0;
 
-    // ===== 证券 =====
+    // Securities.
     std::vector<Security> securities;
     int nextSecurityId = 0;
 
-    // ===== 模拟参数 =====
+    // Simulation parameters.
     double averageWage = 6.75;
     double dt = 0.2;
     double aiProfitThreshold = 0.1;
     int stepCount = 0;
     int subsistenceFarms = 0;
 
-    // ===== 统计信息 =====
+    // Statistics.
     Money lastConstrProduced = Money(0);
     Money plannedConstructionOutput = Money(0);
     Money plannedConstructionInputOutput = Money(0);
@@ -352,24 +486,28 @@ private:
         warehouseDemandFilters{};
     std::array<Money, NUM_GOODS> latestPlannedConsumerDemand;
     std::array<Money, NUM_GOODS> latestConsumerActual;
+    std::array<std::array<Money, NUM_GOODS>, CLASS_COUNT>
+        latestClassConsumerActual{};
     std::array<Money, NUM_GOODS> latestPotentialIn;
     std::array<Money, NUM_GOODS> latestRealOut;
     std::array<Money, TYPE_COUNT> latestBuildingOutput;
     MarketFlowSnapshot latestFlow;
     bool flowTraceActive = false;
 
-    // ===== 历史记录 =====
+    // History.
     std::vector<std::array<Money, NUM_GOODS>> priceHist;
     std::vector<std::array<Money, NUM_GOODS>> outputHist;
+    std::vector<std::array<Money, NUM_GOODS>> demandHist;
     std::vector<std::array<int, TYPE_COUNT>> buildingHist;
     std::vector<Money> gdpHist;
+    std::vector<Money> rawGdpHist;
     std::vector<std::array<Money, TYPE_COUNT>> cashPoolHist;
     std::vector<double> populationHist;
     int historyFirstCycle = 1;
 
     std::unordered_map<std::string, int> goodIndex;
 
-    // ===== 内部流程 =====
+    // Internal workflow.
     void processPriceLevelUpdate();
     Money fiscalTreasuryShare(bool initial) const;
     Money moneySupplyBaseline() const;
@@ -408,14 +546,20 @@ private:
                                    std::array<double, TYPE_COUNT>& actualProfitRates);
     void processBuildingRepayment(int typeIdx, Money& curCash, Money targetCash);
     void recalculateTotalDebt();
+    // Returns surplus investment capital to households. Money the market's own
+    // construction demand cannot absorb must not accumulate in the pool
+    // forever; the class pools - the labor pool first - are its terminal
+    // destination.
+    void distributeExcessInvestmentPool();
     void processMoneySupply();
     void processPopulationGrowth();
     void reconcileSecurities();
     void processSecurityMarket();
     void syncFinanceLevelFromSecurities();
     void recordHistory(const std::array<Money, NUM_GOODS>& realOut,
+                       const std::array<Money, NUM_GOODS>& demand,
                        const std::array<Money, TYPE_COUNT>& buildingOutput,
-                       Money gdp);
+                       Money gdp, Money rawGdp);
     void recordInventoryChange(const std::array<Money, NUM_GOODS>& supply,
                                const std::array<Money, NUM_GOODS>& demand);
     void initializeWarehousePolicies();

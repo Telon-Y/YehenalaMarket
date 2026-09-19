@@ -124,7 +124,21 @@ void LocalMarket::processBuildingRepayment(int typeIdx, Money& curCash, Money ta
     Money interest = loanBalance[typeIdx] * Money(LOAN_INTEREST_PER_WEEK);
     Money payInterest = std::min(interest, repayBudget);
     bld.addCash(typeIdx, -payInterest);
-    bld.addCash(INDUSTRIAL_BANK, payInterest);
+    // The financial district is paid an intermediation fee out of interest the
+    // borrower has already handed over, so the split moves existing income
+    // between two institutions instead of creating any.
+    Money intermediationFee = Money(0);
+    if (bld.getBuildingCounts()[FINANCE] > 0)
+        intermediationFee = payInterest * Money(FINANCE_INTERMEDIATION_FEE_SHARE);
+    if (intermediationFee > Money(0)) {
+        bld.addCash(FINANCE, intermediationFee);
+        bld.addCash(INDUSTRIAL_BANK, payInterest - intermediationFee);
+        financeFeeThisCycle += intermediationFee;
+        bankSpreadThisCycle += payInterest - intermediationFee;
+    } else {
+        bld.addCash(INDUSTRIAL_BANK, payInterest);
+        bankSpreadThisCycle += payInterest;
+    }
     repayBudget -= payInterest;
 
     Money unpaidInterest = interest - payInterest;
@@ -156,6 +170,9 @@ void LocalMarket::processBuildingRepayment(int typeIdx, Money& curCash, Money ta
             const Money loss = -borrowerCash;
             bld.addCash(typeIdx, loss);
             bld.addCash(INDUSTRIAL_BANK, -loss);
+            // A written-off loan also destroys the capital that backed it, so
+            // the bank's level-based credit limit contracts with its losses.
+            bld.addFinancialCapital(INDUSTRIAL_BANK, -loss);
         }
         loanBalance[typeIdx] = Money(0);
         buildingLoanCount[typeIdx] = 0;
@@ -182,6 +199,11 @@ void LocalMarket::processProfitDistribution(
     actualProfitRates.fill(0.0);
     for (int t = 0; t < TYPE_COUNT; ++t)
         bld.setActualUnitProfit(t, Money(0));
+
+    // Rebuilt by processBuildingRepayment() below for this cycle.
+    financeFeeThisCycle = Money(0);
+    bankSpreadThisCycle = Money(0);
+    savingsBankIncomeThisCycle = Money(0);
 
     for (int t = 0; t < TYPE_COUNT; ++t) {
         if (bld.getBuildingCounts()[t] == 0 ||
@@ -242,9 +264,11 @@ void LocalMarket::processProfitDistribution(
 
     // ==========================================
     // Transfer all financial-district cash to the industrial bank.
+    // The district's revenue is the intermediation fee collected above, so this
+    // branch is now reachable instead of being dead code.
     // ==========================================
     if (bld.getBuildingCounts()[FINANCE] > 0) {
-        Money revenue = revenueByBuilding[FINANCE];
+        Money revenue = revenueByBuilding[FINANCE] + financeFeeThisCycle;
         Money cost = inputCostByBuilding[FINANCE] + laborCostByBuilding[FINANCE];
         Money net = revenue - cost;
         if (net > Money(0)) {
@@ -286,6 +310,95 @@ void LocalMarket::processProfitDistribution(
     }
 
     // ==========================================
+    // Savings bank: intermediates savings and pays a deposit rate.
+    // Its scale comes from the savings pool, its payout is bounded by the
+    // spread the commercial bank actually earned this cycle, and the part it
+    // keeps becomes bank capital. Every step moves existing money.
+    // ==========================================
+    if (bld.getBuildingCounts()[SAVINGS_BANK] > 0) {
+        const Money levelCapacity =
+            Money(bld.getBuildingCounts()[SAVINGS_BANK]) *
+            Money(BANK_LOAN_CAPACITY_PER_LEVEL);
+        const Money intermediated =
+            std::min(std::max(Money(0), investmentPool), levelCapacity);
+        const Money depositInterest =
+            intermediated * Money(SAVINGS_DEPOSIT_RATE_PER_WEEK);
+        const Money payable = std::min(
+            depositInterest,
+            bankSpreadThisCycle * Money(SAVINGS_PASS_THROUGH_SHARE));
+        if (payable > Money(0)) {
+            bld.addCash(INDUSTRIAL_BANK, -payable);
+            const Money toHouseholds = payable * Money(SAVINGS_PASS_THROUGH_SHARE);
+            const Money retained = payable - toHouseholds;
+            bld.addCash(SAVINGS_BANK, retained);
+            bld.addFinancialCapital(SAVINGS_BANK, retained);
+            savingsBankIncomeThisCycle = retained;
+            if (toHouseholds > Money(0)) {
+                Money weight = Money(0);
+                for (int c = 0; c < CLASS_COUNT; ++c)
+                    weight += std::max(Money(0), classCash[c]);
+                if (weight > Money(0)) {
+                    for (int c = 0; c < CLASS_COUNT; ++c) {
+                        const Money share = std::max(Money(0), classCash[c]);
+                        if (share <= Money(0)) continue;
+                        const Money credit = toHouseholds * share / weight;
+                        classCash[c] += credit;
+                        if (c == LABORER) recordLaborerDepositInterest(credit);
+                        clampMoney(classCash[c]);
+                    }
+                } else {
+                    classCash[LABORER] += toHouseholds;
+                    recordLaborerDepositInterest(toHouseholds);
+                    clampMoney(classCash[LABORER]);
+                }
+            }
+        }
+    }
+
+    // Financial institutions collect most of their income as cash credits made
+    // while loans are serviced rather than through revenueByBuilding. Reporting
+    // and capital retention must both use the same, complete revenue figure, or
+    // a profitable bank would look loss-making and bleed capital.
+    const auto effectiveRevenue = [&](int t) {
+        Money revenue = revenueByBuilding[t];
+        if (t == FINANCE) revenue += financeFeeThisCycle;
+        else if (t == INDUSTRIAL_BANK) revenue += bankSpreadThisCycle;
+        else if (t == SAVINGS_BANK) revenue += savingsBankIncomeThisCycle;
+        return revenue;
+    };
+
+    // ==========================================
+    // Retained earnings build bank capital and operating losses consume it.
+    // Capital, not cash, is what sets an institution's level and therefore its
+    // credit limit, so profit lets a bank grow and a persistent loss makes it
+    // contract instead of persisting at a size it can no longer support.
+    // ==========================================
+    for (const int type : {BANK, INDUSTRIAL_BANK, SAVINGS_BANK}) {
+        if (bld.getBuildingCounts()[type] == 0) continue;
+        const Money net = effectiveRevenue(type) -
+                          inputCostByBuilding[type] -
+                          laborCostByBuilding[type];
+        if (net > Money(0)) {
+            Money retained = net * Money(0.1);
+            retained =
+                std::min(retained, std::max(Money(0), bld.getCashPools()[type]));
+            if (retained <= Money(0)) continue;
+            // Retention is a claim on cash the institution already holds, not a
+            // second payment: the cash stays in the pool and only the capital
+            // counter moves. Debiting the pool here would leave that money with
+            // no receiver at all, which is exactly what a money audit reports as
+            // a black hole.
+            bld.addFinancialCapital(type, retained);
+        } else if (net < Money(0)) {
+            // The operating loss has already reduced cash, so charging it to
+            // capital is the balancing entry and needs no second cash movement.
+            const Money loss =
+                std::min(-net, bld.getFinancialCapital(type));
+            if (loss > Money(0)) bld.addFinancialCapital(type, -loss);
+        }
+    }
+
+    // ==========================================
     // Move industrial-bank cash above the cap into the investment pool.
     // ==========================================
     if (bld.getBuildingCounts()[INDUSTRIAL_BANK] > 0 && bld.getCashPools()[INDUSTRIAL_BANK] > Money(1e12L)) {
@@ -299,17 +412,86 @@ void LocalMarket::processProfitDistribution(
     // The savings-bank cash pool is the investment pool itself.
     // ==========================================
 
+    // Working capital the market's own construction demand cannot absorb is
+    // returned to households instead of accumulating in the pool forever.
+    distributeExcessInvestmentPool();
+
     // Actual profit rates.
     for (int t = 0; t < TYPE_COUNT; ++t) {
         if (bld.getBuildingCounts()[t] == 0) continue;
         Money totalCost = inputCostByBuilding[t] + laborCostByBuilding[t];
-        Money totalRevenue = revenueByBuilding[t];
+        // Same complete revenue figure the capital-retention step uses, so the
+        // reported profit rate and the capital decision cannot disagree.
+        Money totalRevenue = effectiveRevenue(t);
         if (buildingOutput[t] < Money(1e-6) && !bld.getTemplates()[t].isFinancial) {
             actualProfitRates[t] = 0.0;
         } else if (totalCost.abs() > Money(1e-6)) {
             actualProfitRates[t] = ((totalRevenue - totalCost) / totalCost).toDouble();
         }
     }
+}
+
+void LocalMarket::distributeExcessInvestmentPool() {
+    if (investmentPool <= Money(0)) return;
+    // Working requirement: what this market's own investment-funded
+    // construction actually buys over the coming year, at the current
+    // construction price.
+    const Money weeklyConstructionSpend =
+        getWeeklyPrivateConstructionDemand(std::max(Money(0), lastConstrProduced)) *
+        priceState.prices[CONSTR_GOOD_INDEX];
+    const Money ceiling = std::max(
+        INVESTMENT_POOL_MIN_WORKING_MONEY,
+        weeklyConstructionSpend * Money(INVESTMENT_POOL_WORKING_WEEKS));
+    const Money surplus = investmentPool - ceiling;
+    if (surplus <= Money(0)) return;
+    const Money payout = surplus * Money(INVESTMENT_POOL_RETURN_SHARE);
+    if (payout <= Money(0)) return;
+
+    investmentPool -= payout;
+    bld.syncBankLevels(investmentPool);
+
+    // Households are the terminal pool, distributed by population. The labor
+    // pool holds the overwhelming majority of the population, so it is the
+    // destination; the other classes receive their proportional share, which
+    // keeps their own demand alive instead of draining them to zero.
+    const double weight = totalLaborers + totalEngineers + totalCapitalists;
+    if (!(weight > 0.0)) {
+        classCash[LABORER] += payout;
+        householdTransferInflow[LABORER] += payout;
+        clampMoney(classCash[LABORER]);
+        investmentPoolReturned += payout;
+        return;
+    }
+    Money distributed = Money(0);
+    for (int c = 0; c < CLASS_COUNT; ++c) {
+        const double population = c == LABORER ? totalLaborers
+            : c == ENGINEER ? totalEngineers : totalCapitalists;
+        Money share = payout * Money(population / weight);
+        if (c + 1 == CLASS_COUNT) share = payout - distributed;
+        if (share <= Money(0)) continue;
+        classCash[c] += share;
+        householdTransferInflow[c] += share;
+        distributed += share;
+        clampMoney(classCash[c]);
+    }
+    investmentPoolReturned += distributed;
+}
+
+Money LocalMarket::moneyPoolsTotal() const {
+    Money total = investmentPool + playerCash;
+    for (const Money cash : classCash) total += cash;
+    for (const Money cash : bld.getCashPools()) total += cash;
+    // Money that has left a pool but has not been credited to one yet. These
+    // accumulators are cleared as the cycle allocates them, so counting them
+    // here keeps the world total continuous inside a cycle instead of dipping
+    // whenever a payment is in flight.
+    //
+    // pendingNationalConstructionRevenue is deliberately excluded: the sale is
+    // credited to the construction department's cash pool at the same moment it
+    // is recorded here, so the accumulator is a note, not a second pool.
+    for (const Money pending : pendingTradeRevenue) total += pending;
+    total += pendingRailwayRevenue + pendingWarehouseProfit;
+    return total;
 }
 
 void LocalMarket::processMoneySupply() {

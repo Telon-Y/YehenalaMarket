@@ -156,10 +156,23 @@ void LocalMarket::updateWarehouseDemandPolicies(
             Money(0), plannedConsumerDemand[good]) +
             std::max(Money(0), plannedIntermediateDemand[good]) +
             std::max(Money(0), exportDemand);
-        const Money weeklyDemand =
+        const Money observed =
             warehouseDemandFilters[good].update(rawDemand, 1.0);
+        // A mean of realized flows is supply-limited in both directions: it
+        // falls when production falls, and it rises when the chain fills its own
+        // pipeline. Using it to size the inventory target therefore feeds every
+        // excursion back into the next target. Plan the target on the
+        // requirement implied by final demand instead; realized flow still
+        // reaches production through the order arrivals and the backlog.
+        const Money required = logisticsNetwork == nullptr
+            ? Money(0)
+            : logisticsNetwork->requiredDemand(marketId, good);
+        const Money weeklyDemand =
+            required > Money(0) ? required : observed;
         smoothedWarehouseDemand[good] = weeklyDemand;
         InventoryPolicy& policy = warehouse.stock(good).policy;
+        policy.plannedFinalDemand =
+            std::max(Money(0), smoothedConsumerDemand[good]);
         policy.weeklyDemand = weeklyDemand;
         policy.targetStock =
             weeklyDemand * Money(INVENTORY_TARGET_COVERAGE_WEEKS);
@@ -329,6 +342,62 @@ bool LocalMarket::setBuildingCountForSetup(int typeIdx, int count,
     return true;
 }
 
+bool LocalMarket::configureProvinceScenarioForSetup(
+    double population,
+    const std::array<int, TYPE_COUNT>& buildings,
+    const std::array<int, TYPE_COUNT>& configuredResourceCaps) {
+    if (!std::isfinite(population) || population < 1000.0) return false;
+
+    const auto isResourceBuilding = [](int type) {
+        return type == FARM_GRAIN || type == COTTON ||
+               type == COAL_MINE || type == IRON_MINE ||
+               type == GOLD_MINE;
+    };
+    for (int type = 0; type < TYPE_COUNT; ++type) {
+        if (buildings[type] < 0 || configuredResourceCaps[type] < -1)
+            return false;
+        if (isResourceBuilding(type)) {
+            if (configuredResourceCaps[type] < buildings[type]) return false;
+        } else if (configuredResourceCaps[type] != -1) {
+            return false;
+        }
+    }
+
+    laborPopulation = population;
+    initialLaborPopulation = population;
+    maxLabor = population * LABOR_FORCE_PARTICIPATION;
+    dependentPopulation = population - maxLabor;
+    populationHist.clear();
+    historyFirstCycle = 1;
+
+    const Money populationScale(population / 10'000'000.0);
+    const Money initialClassMoney = Money(500'000'000.0) * populationScale;
+    classCash[LABORER] = initialClassMoney * Money(0.4);
+    classCash[ENGINEER] = initialClassMoney * Money(0.4);
+    classCash[CAPITALIST] = initialClassMoney * Money(0.2);
+
+    for (int type = 0; type < TYPE_COUNT; ++type) {
+        if (bld.getTemplates()[type].isFinancial) continue;
+        const OwnerType owner = type == CONST_DEPT
+            ? OWNER_GOVERNMENT : OWNER_INITIAL;
+        if (!setBuildingCountForSetup(type, buildings[type], owner))
+            return false;
+    }
+
+    investmentPool = Money(buildings[SAVINGS_BANK]) *
+                     Money(BANK_LOAN_CAPACITY_PER_LEVEL);
+    reservedInvestmentConstructionBudget = Money(0);
+    if (!bld.setFinancialBuildingLevelsForSetup(
+            buildings[BANK], buildings[FINANCE],
+            buildings[INDUSTRIAL_BANK], buildings[SAVINGS_BANK],
+            investmentPool)) {
+        return false;
+    }
+
+    resourceCaps = configuredResourceCaps;
+    return true;
+}
+
 void LocalMarket::finalizeDebugSetup() {
     legacyDebugControls = true;
     playerCash = Money(50000000.0);
@@ -414,10 +483,84 @@ void LocalMarket::setInvestmentLoanForSetup(Money balance, int dueStep,
     recalculateTotalDebt();
 }
 
+void LocalMarket::publishInitialFinalDemand() {
+    // Before the first cycle the only final demand that exists is consumer
+    // demand, and it is what the whole requirement graph hangs from. Evaluate it
+    // once here so the opening inventories can be sized on the requirement it
+    // implies instead of on installed capacity.
+    std::array<Money, NUM_GOODS> noFlow{};
+    std::array<Money, NUM_GOODS> consumerTarget{};
+    std::array<Money, NUM_GOODS> consumerPlanned{};
+    std::array<Money, NUM_GOODS> consumerActual{};
+    std::array<Money, NUM_GOODS> consumerSpending{};
+    processConsumption(noFlow, noFlow, consumerTarget, consumerPlanned,
+                       consumerActual, consumerSpending);
+    for (int good = 0; good < NUM_GOODS; ++good) {
+        if (good == CONSTR_GOOD_INDEX ||
+            good == TRANSPORT_CAPACITY_GOOD_INDEX) {
+            continue;
+        }
+        warehouse.stock(good).policy.plannedFinalDemand =
+            std::max(Money(0), smoothedConsumerDemand[good]);
+    }
+}
+
+void LocalMarket::reconcileInitialWarehouseDemand() {
+    if (logisticsNetwork == nullptr) return;
+    syncWarehouseProducers();
+    for (int good = 0; good < NUM_GOODS; ++good) {
+        if (good == CONSTR_GOOD_INDEX ||
+            good == TRANSPORT_CAPACITY_GOOD_INDEX) {
+            warehouse.stock(good) = InventoryState{};
+            continue;
+        }
+        // Size the opening policy and stock on the requirement implied by final
+        // demand. A stock sized on installed capacity instead leaves every
+        // producer holding many weeks of surplus, and the first inventory
+        // correction then reads that surplus as a reason to stop producing -
+        // which costs nothing while demand keeps drawing the stock down, but
+        // permanently stalls the chain once its consumers have stopped for the
+        // same reason.
+        const Money required = logisticsNetwork->requiredDemand(marketId, good);
+        // A good nobody requires opens empty. Opening it on an arbitrary floor
+        // instead would hand its producer a demand signal the economy never
+        // asked for, and the resulting one-off output is pure startup noise.
+        const Money weekly = required;
+        InventoryState& stock = warehouse.stock(good);
+        InventoryPolicy& policy = stock.policy;
+        policy.weeklyDemand = weekly;
+        policy.targetStock = std::max(
+            Money(100),
+            weekly * Money(INVENTORY_TARGET_COVERAGE_WEEKS));
+        const int leadCycles =
+            logisticsNetwork->inboundLeadCycles(marketId, good);
+        const int reorderWeeks = std::min(
+            INVENTORY_TARGET_COVERAGE_WEEKS,
+            leadCycles + INVENTORY_REVIEW_INTERVAL_WEEKS +
+                INVENTORY_SAFETY_WEEKS);
+        policy.reorderPoint = weekly * Money(reorderWeeks);
+        // Open exactly on target. Opening below it makes every producer fill its
+        // own buffer at once, and the resulting chain-wide overshoot is what the
+        // inventory correction later reads as a reason to stop.
+        stock.onHand = policy.targetStock;
+        stock.reserved = Money(0);
+        stock.confirmedInbound = Money(0);
+        stock.physicalInTransit = Money(0);
+        stock.backlog = Money(0);
+        stock.lastRawReplenishment = Money(0);
+        stock.lastPlannedReplenishment = Money(0);
+    }
+}
+
 void LocalMarket::finalizeStandardSetup() {
     legacyDebugControls = false;
     playerCash = Money(0);
 
+    maxLabor = laborPopulation * LABOR_FORCE_PARTICIPATION;
+    dependentPopulation = laborPopulation - maxLabor;
+    initialLaborPopulation = laborPopulation;
+
+    double employedTotal = 0.0;
     for (int type = 0; type < TYPE_COUNT; ++type) {
         const double fullEmployment =
             bld.getBuildingCounts()[type] *
@@ -425,7 +568,20 @@ void LocalMarket::finalizeStandardSetup() {
         actualEmployment[type] = fullEmployment;
         targetEmployment[type] = fullEmployment;
         actualEmploymentRate[type] = fullEmployment > 0.0 ? 1.0 : 0.0;
+        employedTotal += fullEmployment;
     }
+    const auto employedClasses = calculateEmployedClasses(
+        bld.getTemplates(), actualEmployment);
+    const double laborPool = std::max(0.0, maxLabor - employedTotal);
+    totalLaborers = employedClasses[LABORER] + laborPool +
+                    dependentPopulation;
+    totalEngineers = employedClasses[ENGINEER];
+    totalCapitalists = employedClasses[CAPITALIST];
+    subsistenceFarms = std::max(
+        0, 10000 - bld.getBuildingCounts()[FARM_GRAIN] -
+                         bld.getBuildingCounts()[COTTON]);
+    subsistencePop = std::min(
+        laborPool, static_cast<double>(subsistenceFarms) * 5000.0);
 
     setConstructionOutputPlan(Money(0), Money(0), false);
     initializeWarehousePolicies();

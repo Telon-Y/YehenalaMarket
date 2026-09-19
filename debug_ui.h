@@ -10,6 +10,7 @@ struct DebugUIState {
     int selectedGood = 0;
     int selectedBuilding = 0;
     int goodsScroll = 0;
+    int buildingScroll = 0;
     int constructionScroll = 0;
     int orderScroll = 0;
     bool paused = false;
@@ -18,6 +19,10 @@ struct DebugUIState {
     int frameCounter = 0;
     WarehouseAudit cachedAudit{};
     bool cachedInventoryBalanced = true;
+    std::string constructionMessage;
+    bool constructionSucceeded = false;
+    bool constructionHistoryVisible = false;
+    std::uint64_t selectedConstructionProjectId = 0;
 };
 
 enum class DebugUIMode {

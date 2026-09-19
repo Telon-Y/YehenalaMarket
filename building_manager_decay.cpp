@@ -72,7 +72,6 @@ void BuildingManager::checkDecay(int stepCount, Money& investmentPool,
                 cleanupDeadBuilding(t, investmentPool);
             }
             consecutiveLowEmpWeeks[t] = 0;
-            syncFinanceCount();
             clampCash(t);
             clampCash(FINANCE);
             if (!isfinite(investmentPool)) investmentPool = Money(0);

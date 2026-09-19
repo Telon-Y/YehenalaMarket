@@ -5,15 +5,20 @@
 #include <cmath>
 
 bool BuildingManager::canDemolish(int typeIdx, int stepCount) const {
+    (void)stepCount;
+    // Government (player) orders take effect immediately. Private levels are
+    // never eligible for this command; autonomous bankruptcy is handled by
+    // checkDecay separately.
     return typeIdx >= 0 && typeIdx < TYPE_COUNT && buildingCounts[typeIdx] > 0 &&
            !templates[typeIdx].isFinancial &&
-           stepCount - lastDemolishStep[typeIdx] >= demolishCooldownPeriod;
+           ownedBuildings[typeIdx][OWNER_GOVERNMENT] > 0;
 }
 
 int BuildingManager::demolishBuildings(int typeIdx, int count, int stepCount,
                                        Money& investmentPool) {
     if (!canDemolish(typeIdx, stepCount)) return 0;
-    int actual = std::min(count, buildingCounts[typeIdx]);
+    const int actual = std::min({count, buildingCounts[typeIdx],
+                                ownedBuildings[typeIdx][OWNER_GOVERNMENT]});
     if (actual <= 0) return 0;
 
     Money totalCash = cashPools[typeIdx];
@@ -21,23 +26,10 @@ int BuildingManager::demolishBuildings(int typeIdx, int count, int stepCount,
     if (buildingCounts[typeIdx] > 0 && totalCash > Money(0)) {
         cashPerLevel = totalCash / Money(buildingCounts[typeIdx]);
     }
-    std::array<int, OWNER_COUNT> local = ownedBuildings[typeIdx];
-    int remaining = actual;
-    for (int o = 0; o < OWNER_COUNT && remaining > 0; ++o) {
-        int take = std::min(remaining, local[o]);
-        if (take == 0) continue;
-        Money cashTrans = cashPerLevel * Money(take);
-        cashPools[typeIdx] -= cashTrans;
-        // 所有返还统一进入投资池
-        if (o == OWNER_GOVERNMENT || o == OWNER_INITIAL) {
-            investmentPool += cashTrans;
-        } else if (o == OWNER_FINANCE) {
-            cashPools[FINANCE] += cashTrans;
-        }
-        local[o] -= take;
-        remaining -= take;
-    }
-    ownedBuildings[typeIdx] = local;
+    const Money cashTrans = cashPerLevel * Money(actual);
+    cashPools[typeIdx] -= cashTrans;
+    investmentPool += cashTrans;
+    ownedBuildings[typeIdx][OWNER_GOVERNMENT] -= actual;
     buildingCounts[typeIdx] -= actual;
     lastDemolishStep[typeIdx] = stepCount;
 
@@ -49,7 +41,6 @@ int BuildingManager::demolishBuildings(int typeIdx, int count, int stepCount,
     if (buildingCounts[typeIdx] == 0) {
         cleanupDeadBuilding(typeIdx, investmentPool);
     }
-    syncFinanceCount();
     return actual;
 }
 
@@ -91,19 +82,14 @@ Money BuildingManager::transferOwnership(int typeIdx, int count, OwnerType from,
 
     ownedBuildings[typeIdx][from] -= count;
     ownedBuildings[typeIdx][to]   += count;
-    syncFinanceCount();
     if (!isfinite(investmentPool)) investmentPool = Money(0);
     investmentPool = clamp(investmentPool, -INVEST_POOL_MAX_MONEY, INVEST_POOL_MAX_MONEY);
     return totalPrice;
 }
 
-void BuildingManager::syncFinanceCount() {
-    // 金融区等级不再自动同步，由外部证券逻辑控制
-    // 保留空实现
-}
-
 void BuildingManager::setFinanceLevelFromSecurities(int level) {
-    level = std::clamp(level, 0, maxFinances);
+    level = std::clamp(std::max(level, baselineFinanceLevel),
+                       0, maxFinances);
     buildingCounts[FINANCE] = level;
     ownedBuildings[FINANCE].fill(0);
     ownedBuildings[FINANCE][OWNER_FINANCE] = level;

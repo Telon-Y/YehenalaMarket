@@ -1,6 +1,7 @@
 // ==================== local_market_market.cpp ====================
 // Price level, construction settlement, and income distribution.
 #include "local_market.h"
+#include "construction_service.h"
 #include "country.h"
 #include "local_market_internal.h"
 #include <algorithm>
@@ -42,56 +43,14 @@ void LocalMarket::processPriceLevelUpdate() {
 
 void LocalMarket::processConstruction(Money constrPrice, Money availConstr,
                                       Money& soldConstr, Money& constrRevenue) {
-    const Money taxRate = quoteTransactionTax(Money(1));
-    Money privateCash = std::max(Money(0), investmentPool);
-    if (taxRate > Money(0))
-        privateCash /= Money(1) + taxRate;
-    // BuildingManager mutates these local ledgers while it walks the queue.
-    // They are shadow accounts: the real investment pool/treasury is updated
-    // exactly once from the returned settlement below. For country-owned
-    // markets, limit legacy government orders to the amount that is actually
-    // covered by country construction reservations so several orders cannot
-    // oversubscribe the same treasury in one pass.
-    Money governmentCash = fiscalCountry == nullptr
-        ? playerCash
-        : std::min(fiscalCountry->getTreasury(),
-                   fiscalCountry->getReservedConstructionBudget());
-    const bool transferPrivatePayment = fiscalCountry == nullptr;
-    ConstructionSettlement settlement = bld.processConstruction(
-        availConstr, constrPrice, privateCash, governmentCash, true,
-        transferPrivatePayment);
-    // Private construction is a market purchase: the investor pays the base
-    // amount from the investment pool and the owning country collects the
-    // temporary transaction tax. Government construction is an internal
-    // transfer and remains tax-exempt.
-    const Money privateTax = quoteTransactionTax(settlement.privatePayment);
-    const Money privateDebit = settlement.privatePayment + privateTax;
-    if (privateDebit > Money(0) &&
-        privateDebit > investmentPool + Money(1e-6))
-        throw std::logic_error("construction settlement exceeded private funds");
-    investmentPool -= privateDebit;
-    if (fiscalCountry != nullptr) {
-        if (settlement.privatePayment > Money(0)) {
-            fiscalCountry->creditTreasury(settlement.privatePayment);
-            collectTransactionTax(settlement.privatePayment);
-        }
-        if (settlement.governmentPayment > Money(0) &&
-            !fiscalCountry->settleConstructionPayment(
-                settlement.governmentPayment)) {
-            throw std::logic_error("country construction settlement failed");
-        }
-        if (settlement.governmentBudgetReleased > Money(0))
-            fiscalCountry->releaseConstructionBudget(
-                settlement.governmentBudgetReleased);
-    } else {
-        playerCash += settlement.privatePayment - settlement.governmentPayment;
+    if (ownerWorld != nullptr && fiscalCountry != nullptr) {
+        soldConstr = Money(0);
+        constrRevenue = Money(0);
+        return;
     }
-    const Money constructionRevenue = settlement.privatePayment +
-                                      settlement.governmentPayment;
-    if (constructionRevenue > Money(0))
-        bld.addCash(CONST_DEPT, constructionRevenue);
-    soldConstr = settlement.totalUsed;
-    constrRevenue = constructionRevenue;
+    StandaloneConstructionService::processCycle(
+        *this, standaloneConstructionState, availConstr, constrPrice,
+        soldConstr, constrRevenue);
 }
 
 void LocalMarket::processRevenueAllocation(
@@ -124,10 +83,13 @@ void LocalMarket::processRevenueAllocation(
     for (int g = 0; g < NUM_GOODS; ++g) {
         if (totalSalesValue[g] <= Money(0)) continue;
         if (g == constrIdx) {
-            if (bld.getBuildingCounts()[CONST_DEPT] > 0)
-                revenueByBuilding[CONST_DEPT] += totalSalesValue[g];
-            else
-                merchantRevenue += totalSalesValue[g];
+            // Construction power settles before this point: the buyer's payment
+            // was already credited to the construction department's cash in
+            // recordNationalConstructionSale/Base. Posting it to the statement
+            // here only feeds GDP and profit reporting - the credit loop below
+            // skips the department - so it must never be re-routed to merchant
+            // revenue, which would credit the same money twice.
+            revenueByBuilding[CONST_DEPT] += totalSalesValue[g];
             continue;
         }
 

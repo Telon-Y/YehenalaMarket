@@ -1,4 +1,5 @@
 #include "debug_ui_internal.h"
+#include "number_format.h"
 
 #include <algorithm>
 #include <cmath>
@@ -204,19 +205,7 @@ bool DrawButton(Font font, Rectangle bounds, const std::string& label,
 }
 
 std::string NumberText(double value, int precision) {
-    if (!std::isfinite(value)) return "NaN";
-    const double magnitude = std::fabs(value);
-    char buffer[64];
-    if (magnitude >= 100000000.0) {
-        std::snprintf(buffer, sizeof(buffer), "%.*f亿", precision,
-                      value / 100000000.0);
-    } else if (magnitude >= 10000.0) {
-        std::snprintf(buffer, sizeof(buffer), "%.*f万", precision,
-                      value / 10000.0);
-    } else {
-        std::snprintf(buffer, sizeof(buffer), "%.*f", precision, value);
-    }
-    return buffer;
+    return FormatChineseNumber(value, precision);
 }
 
 std::string NumberText(Money value, int precision) {
@@ -224,7 +213,7 @@ std::string NumberText(Money value, int precision) {
 }
 
 std::string PercentText(double value) {
-    if (!std::isfinite(value)) return "NaN";
+    if (!std::isfinite(value)) return "无数据";
     char buffer[32];
     std::snprintf(buffer, sizeof(buffer), "%.1f%%", value * 100.0);
     return buffer;
@@ -232,8 +221,8 @@ std::string PercentText(double value) {
 
 std::string MarketCode(int marketId) {
     return marketId >= 0 && marketId < 26
-        ? std::string("M") + static_cast<char>('A' + marketId)
-        : std::string("M") + std::to_string(marketId);
+        ? std::string("市场") + static_cast<char>('A' + marketId)
+        : std::string("市场") + std::to_string(marketId);
 }
 
 const char* OrderKindText(WarehouseOrderKind kind) {
@@ -281,18 +270,30 @@ Color OrderStatusColor(WarehouseOrderStatus status) {
 bool CanEditBuilding(int type) {
     return type >= 0 && type < TYPE_COUNT &&
            type != BANK && type != FINANCE &&
-           type != INDUSTRIAL_BANK && type != SAVINGS_BANK &&
-           type != CONST_DEPT;
+           type != INDUSTRIAL_BANK && type != SAVINGS_BANK;
 }
 
 void DrawSectionTitle(Font font, const std::string& title, float x, float y,
                       float width, const std::string& trailing) {
-    DrawTextAt(font, title, x, y, kDebugSectionFontSize, kText);
-    if (!trailing.empty()) {
-        const Vector2 size = MeasureTextEx(
-            font, trailing.c_str(), kDebugBodyFontSize, 0.0f);
-        DrawTextAt(font, trailing, x + width - size.x, y + 3.0f,
-                   kDebugBodyFontSize, kMuted);
+    if (trailing.empty()) {
+        DrawFittedText(
+            font, title, {x, y, width, 26.0f},
+            kDebugSectionFontSize, kText);
+    } else {
+        const float trailingWidth = std::min(
+            width * 0.55f,
+            MeasureTextEx(font, trailing.c_str(),
+                          kDebugBodyFontSize, 0.0f).x);
+        const float titleWidth =
+            std::max(1.0f, width - trailingWidth - 12.0f);
+        DrawFittedText(
+            font, title, {x, y, titleWidth, 26.0f},
+            kDebugSectionFontSize, kText);
+        DrawFittedText(
+            font, trailing,
+            {x + titleWidth + 12.0f, y + 2.0f,
+             trailingWidth, 22.0f},
+            kDebugBodyFontSize, kMuted);
     }
     DrawLineEx({x, y + 30.0f}, {x + width, y + 30.0f}, 1.0f, kBorder);
 }
@@ -433,7 +434,7 @@ void DrawShell(DebugUIState* state, World& world, Font font,
                        22.0f, kText, 0.0f);
         DrawFittedText(font,
                        "周期 " + std::to_string(market.getStepCount()) +
-                           "  GDP " + NumberText(market.getGDP()),
+                           "  国内生产总值 " + NumberText(market.getGDP()),
                        {ox + 14.0f, oy + 36.0f,
                         std::max(1.0f, layout.width - 116.0f), 17.0f},
                        kDebugCaptionFontSize, kMuted, 0.0f);
@@ -494,8 +495,7 @@ void DrawShell(DebugUIState* state, World& world, Font font,
                                layout.compact ? 2.0f : 8.0f);
             }
         }
-        const bool healthy =
-            state->cachedAudit.valid && state->cachedInventoryBalanced;
+        const bool healthy = market.getLatestFlow().inventoryBalanced;
         if (!layout.compact) {
             const float statusY =
                 std::max(oy + layout.height - 76.0f, layout.goodListY +
@@ -506,7 +506,7 @@ void DrawShell(DebugUIState* state, World& world, Font font,
             DrawCircle(static_cast<int>(ox + 20.0f),
                        static_cast<int>(statusY + 6.0f), 5.0f,
                        healthy ? kGreen : kRed);
-            DrawFittedText(font, healthy ? "库存审计通过" : "库存审计异常",
+            DrawFittedText(font, healthy ? "本周期库存平衡" : "本周期库存异常",
                            {ox + 32.0f, statusY - 4.0f,
                             layout.sidebarWidth - 44.0f, 20.0f},
                            kDebugCaptionFontSize, WHITE);
@@ -520,8 +520,8 @@ void DrawShell(DebugUIState* state, World& world, Font font,
              static_cast<int>(layout.width),
              static_cast<int>(layout.headerHeight - 1.0f), kBorder);
 
-    DrawTextAt(font, "Yehenala 2.0", 16.0f, 7.0f, 22.0f, kText);
-    DrawTextAt(font, "DEBUG", 16.0f, 34.0f,
+    DrawTextAt(font, "叶赫那拉 2.0", 16.0f, 7.0f, 22.0f, kText);
+    DrawTextAt(font, "调试", 16.0f, 34.0f,
                kDebugMinimumFontSize, kRed);
     DrawTextAt(font, "五市场供应链", 70.0f, 33.0f,
                kDebugCaptionFontSize, kMuted);
@@ -530,7 +530,7 @@ void DrawShell(DebugUIState* state, World& world, Font font,
     if (layout.width >= 1320.0f) {
         const double speed = elapsedSeconds > 0.0
             ? market.getStepCount() / elapsedSeconds : 0.0;
-        DrawTextAt(font, "年化 GDP " + NumberText(market.getGDP()) +
+        DrawTextAt(font, "年化国内生产总值 " + NumberText(market.getGDP()) +
                          "  |  " + NumberText(speed) + " 周/秒",
                    350.0f, 17.0f, kDebugBodyFontSize, kMuted);
     }
@@ -541,7 +541,7 @@ void DrawShell(DebugUIState* state, World& world, Font font,
     const int speeds[3] = {1, 2, 5};
     for (int index = 0; index < 3; ++index) {
         DrawButton(font, layout.speedButtons[index],
-                   std::to_string(speeds[index]) + "x",
+                   std::to_string(speeds[index]) + " 倍",
                    !state->paused && state->simulationSpeed == speeds[index],
                    kGreen);
     }
@@ -558,7 +558,7 @@ void DrawShell(DebugUIState* state, World& world, Font font,
                    {button.x + button.width, button.y + button.height - 1.0f},
                    selected ? 3.0f : 1.0f, selected ? kGreen : kBorder);
         const LocalMarket& tabMarket = world.getMarket(index);
-        const std::string tab = tabMarket.getMarketName() + "  GDP " +
+        const std::string tab = tabMarket.getMarketName() + "  国内生产总值 " +
                                 NumberText(tabMarket.getGDP());
         DrawFittedText(font, tab, button, kDebugBodyFontSize,
                        selected ? kGreen : kText, 10.0f);

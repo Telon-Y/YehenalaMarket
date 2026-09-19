@@ -1,6 +1,8 @@
 #include "country.h"
+#include "construction_accounting.h"
 
 #include <algorithm>
+#include <iterator>
 #include <utility>
 
 Country::Country(int id, std::string name, int nationalMarketId,
@@ -19,36 +21,32 @@ bool Country::containsProvince(int provinceId) const {
 }
 
 bool Country::hasActiveConstruction() const {
-    return std::any_of(constructionQueue.begin(), constructionQueue.end(),
+    return std::any_of(constructionState.projects.begin(),
+                       constructionState.projects.end(),
                        [](const NationalConstructionProject& project) {
         return project.active();
     });
 }
 
-bool Country::hasActiveConstructionForProvince(int provinceId) const {
-    for (const NationalConstructionProject& project : constructionQueue) {
-        if (project.active() && project.targetProvinceId == provinceId)
-            return true;
-    }
-    return false;
-}
-
 const NationalConstructionProject* Country::findConstructionProject(
     std::uint64_t projectId) const {
-    for (const NationalConstructionProject& project : constructionQueue) {
+    for (const NationalConstructionProject& project :
+         constructionState.projects) {
         if (project.id == projectId) return &project;
     }
     return nullptr;
 }
 
 void Country::pruneFinishedConstructionProjects() {
-    constructionQueue.erase(
-        std::remove_if(
-            constructionQueue.begin(), constructionQueue.end(),
-            [](const NationalConstructionProject& project) {
-                return !project.active();
-            }),
-        constructionQueue.end());
+    std::vector<ConstructionProject>& projects = constructionState.projects;
+    auto firstTerminal = std::stable_partition(
+        projects.begin(), projects.end(),
+        [](const ConstructionProject& project) { return project.live(); });
+    constructionState.history.insert(
+        constructionState.history.end(),
+        std::make_move_iterator(firstTerminal),
+        std::make_move_iterator(projects.end()));
+    projects.erase(firstTerminal, projects.end());
 }
 
 bool Country::enqueueConstructionProject(NationalConstructionProject project) {
@@ -56,16 +54,31 @@ bool Country::enqueueConstructionProject(NationalConstructionProject project) {
         project.targetProvinceId < 0 || project.quantity <= 0 ||
         project.totalBudget <= Money(0) ||
         project.unitPrice <= Money(0) ||
-        project.reservedBudget != project.totalBudget ||
+        project.reservedBudget + project.reservedStartupCapital !=
+            project.totalBudget ||
         project.paidBudget != Money(0) ||
         project.totalConstruction <= Money(0) ||
         project.remainingConstruction != project.totalConstruction ||
         project.remainingConstruction <= Money(0) ||
-        !project.active() || findConstructionProject(project.id) != nullptr) {
+        !project.live() || findConstructionProject(project.id) != nullptr) {
         return false;
     }
-    constructionQueue.push_back(std::move(project));
+    constructionState.projects.push_back(std::move(project));
     return true;
+}
+
+void Country::setTreasuryForSetup(Money amount) {
+    for (ConstructionProject& project : constructionState.projects) {
+        if (!project.live()) continue;
+        project.status = ConstructionProjectStatus::Cancelled;
+        project.reservedBudget = Money(0);
+        project.reservedStartupCapital = Money(0);
+    }
+    pruneFinishedConstructionProjects();
+    constructionState.reservedCapacity.clear();
+    treasury = clamp(amount, Money(0), MONEY_SUPPLY_MAX_MONEY);
+    initialTreasury = treasury;
+    reservedConstructionBudget = Money(0);
 }
 
 void Country::addProvince(int provinceId) {
@@ -103,12 +116,13 @@ bool Country::reserveConstructionBudget(Money amount) {
 
 bool Country::canSettleConstructionPayment(Money amount) const {
     return isfinite(amount) && amount >= Money(0) &&
-           treasury >= amount && reservedConstructionBudget >= amount;
+           ConstructionFundsCover(treasury, amount) &&
+           ConstructionFundsCover(reservedConstructionBudget, amount);
 }
 
 bool Country::settleConstructionPayment(Money amount) {
     if (!canSettleConstructionPayment(amount)) return false;
-    treasury -= amount;
+    treasury = std::max(Money(0), treasury - amount);
     reservedConstructionBudget = std::max(
         Money(0), reservedConstructionBudget - amount);
     return true;

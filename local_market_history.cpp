@@ -16,11 +16,14 @@ void LocalMarket::recordInventoryChange(const std::array<Money, NUM_GOODS>& supp
 }
 
 void LocalMarket::recordHistory(const std::array<Money, NUM_GOODS>& realOut,
+                                const std::array<Money, NUM_GOODS>& demand,
                                 const std::array<Money, TYPE_COUNT>& buildingOutput,
-                                Money gdp) {
+                                Money gdp, Money rawGdp) {
     gdpHist.push_back(gdp);
+    rawGdpHist.push_back(rawGdp);
     buildingHist.push_back(bld.getBuildingCounts());
     outputHist.push_back(realOut);
+    demandHist.push_back(demand);
     priceHist.push_back(priceState.prices);
     cashPoolHist.push_back(bld.getCashPools());
     populationHist.push_back(laborPopulation);
@@ -30,8 +33,10 @@ void LocalMarket::recordHistory(const std::array<Money, NUM_GOODS>& realOut,
         historyFirstCycle += static_cast<int>(removeCount);
         priceHist.erase(priceHist.begin(), priceHist.begin() + removeCount);
         outputHist.erase(outputHist.begin(), outputHist.begin() + removeCount);
+        demandHist.erase(demandHist.begin(), demandHist.begin() + removeCount);
         buildingHist.erase(buildingHist.begin(), buildingHist.begin() + removeCount);
         gdpHist.erase(gdpHist.begin(), gdpHist.begin() + removeCount);
+        rawGdpHist.erase(rawGdpHist.begin(), rawGdpHist.begin() + removeCount);
         cashPoolHist.erase(cashPoolHist.begin(), cashPoolHist.begin() + removeCount);
         populationHist.erase(populationHist.begin(), populationHist.begin() + removeCount);
     }
