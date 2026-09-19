@@ -11,7 +11,7 @@ package sim
 // 每一项的修复位置：
 //
 //	审计01 货币守恒   ← book.PayWages/Consume/PayIntermediate/PowerPurchase 全部走借贷相等
-//	审计02 利润双记   ← 删除 b.Cash.Add(全额)＋政府再记一次，改为 book.ProfitSplit 划分
+//	审计02 利润双记   ← 删除 b.Cash.Add(全额)＋政府再记一次，改为 book.ProfitAllocate 划分
 //	审计03 工资未付   ← book.PayWages：借方建筑、贷方人群，同一笔交易
 //	审计04 空真通过   ← 经济不再死亡，判据不再靠"全零"通过
 //
@@ -38,7 +38,6 @@ func auditState(t *testing.T) *State {
 		Population:           10_000_000,
 		WealthTier:           10,
 		FinanceLaborPerLevel: 1000,
-		FinanceBuildCost:     400,
 		GovStartupFraction:   0.5,
 		// -1 = 保持 Params 的契约默认起始等级（5）。
 		ProductionInitLevel: -1,
@@ -94,8 +93,9 @@ func TestAudit01MoneyConservation(t *testing.T) {
 // TestAudit02ProfitSplitIsPartition 校验利润分账是【划分】而非复制。
 //
 // 修复前：Δ货币/Σ利润 ≈ 2.00（建筑池拿全额，政府/资本再各拿一份）。
-// 修复后：book.ProfitSplit 的借 = 贷 = gov + capital + retain = 利润，
-// 故单笔利润对总量的净影响恒为 0。
+// 修复后：记账走 book.ProfitAllocate（R26 前叫 book.ProfitSplit），
+// 借方 = 留池 + 政府 + 所有者 ≡ 纯利 π_i，贷方 = 同额，
+// 故单笔利润对总量的净影响恒为 0——无论三条腿怎么分。
 func TestAudit02ProfitSplitIsPartition(t *testing.T) {
 	auditEnabled(t)
 	st := auditState(t)
@@ -107,7 +107,7 @@ func TestAudit02ProfitSplitIsPartition(t *testing.T) {
 		}
 		var sumProfit float64
 		for j := range st.Buildings {
-			if !st.Buildings[j].Spec.IsFinance {
+			if !st.Buildings[j].Spec.IsNonMarket() {
 				sumProfit += st.Buildings[j].LastProfit
 			}
 		}
@@ -130,6 +130,11 @@ func TestAudit02ProfitSplitIsPartition(t *testing.T) {
 //
 // 修复前：工资只作为成本从利润里扣减，居民没有账户，钱从未付出。
 // 修复后：book.PayWages 的借方是建筑、贷方是人群，两者由同一笔交易保证相等。
+//
+// 【前值 → 后值（2026-09-19 第 15 轮）】§5.3 新增"工资结余 → 储蓄 → 投资"渠道
+// （默认 σ_save = 1.0）与 §4.5.8 的福利金，故居民池的收支恒等式多了两项：
+//
+//	Δ人群池 = 工资 + 福利金 − 消费净 − 消费税 − 储蓄
 func TestAudit03WagesArePaid(t *testing.T) {
 	auditEnabled(t)
 	st := auditState(t)
@@ -140,10 +145,10 @@ func TestAudit03WagesArePaid(t *testing.T) {
 		t.Fatalf("Step: %v", err)
 	}
 	wage := snap.Flow.WageTotal
-	// 居民本 tick：先收工资，再付出消费（含税）
-	wantHouse := prevHouse + wage - snap.SpendNet - snap.Flow.ConsumerTax
-	fmt.Printf("\n[审计03] 工资总额=%.0f  人群池 %.0f → %.0f（应 %.0f）\n",
-		wage, prevHouse, st.Houses.TotalCash(), wantHouse)
+	// 居民本 tick：先收工资（与福利金），再付出消费（含税）与储蓄
+	wantHouse := prevHouse + wage + snap.Welfare - snap.SpendNet - snap.Flow.ConsumerTax - snap.Saving
+	fmt.Printf("\n[审计03] 工资总额=%.0f  福利金=%.0f  储蓄=%.0f  人群池 %.0f → %.0f（应 %.0f）\n",
+		wage, snap.Welfare, snap.Saving, prevHouse, st.Houses.TotalCash(), wantHouse)
 
 	if got := st.Houses.TotalCash(); math.Abs(got-wantHouse) > 1e-3 {
 		t.Errorf("人群池期末 = %.4f，应为 %.4f（工资未真实划转）", got, wantHouse)

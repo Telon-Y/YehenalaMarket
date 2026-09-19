@@ -21,7 +21,8 @@
 // ============================ 与 ledger 包的分工 ============================
 //
 //	ledger  提供机制：账户、分录、Txn、校验、总账
-//	book    提供语义：工资 / 消费 / 中间投入 / 购力 / 售力 / 利润划分 / 资本注入
+//	book    提供语义：工资 / 消费 / 中间投入 / 按需购力 / 投资池入池与偿还 /
+//	                  利润归属 / 补贴 / 私有化 / 资本注入
 //
 // book 是唯一被允许调用 Aud.Post 的地方（除开局注资外）。
 package book
@@ -44,6 +45,9 @@ type Book struct {
 	PowerIdx int
 	// FinanceIdx 是金融区下标。
 	FinanceIdx int
+	// WarehouseIdx / AgentIdx 是 §4.5.6 的仓库与消费代理下标。
+	WarehouseIdx int
+	AgentIdx     int
 
 	// injected 累计注入的营运本金（唯一合法的货币创造）。
 	injected float64
@@ -62,8 +66,10 @@ func New(worksites, classes, powerIdx, financeIdx int) *Book {
 
 // ===== 账户构造 =====
 
-func (b *Book) Gov() ledger.Account     { return ledger.Gov() }
-func (b *Book) Capital() ledger.Account { return ledger.Capital() }
+func (b *Book) Gov() ledger.Account        { return ledger.Gov() }
+func (b *Book) Capital() ledger.Account    { return ledger.Capital() }
+func (b *Book) Investment() ledger.Account { return ledger.Investment() }
+func (b *Book) Savings() ledger.Account    { return ledger.Savings() }
 func (b *Book) Bld(i int) ledger.Account {
 	return ledger.Building(i)
 }
@@ -77,9 +83,11 @@ func (b *Book) House(site, class int) ledger.Account {
 
 func (b *Book) Bal(a ledger.Account) float64 { return b.Aud.Balance(a) }
 
-// BalGov / BalCapital / BalBld / BalHouse 是常用的便捷读取。
-func (b *Book) BalGov() float64     { return b.Aud.Balance(ledger.Gov()) }
-func (b *Book) BalCapital() float64 { return b.Aud.Balance(ledger.Capital()) }
+// BalGov / BalCapital / BalInvestment / BalBld / BalHouse 是常用的便捷读取。
+func (b *Book) BalGov() float64        { return b.Aud.Balance(ledger.Gov()) }
+func (b *Book) BalCapital() float64    { return b.Aud.Balance(ledger.Capital()) }
+func (b *Book) BalInvestment() float64 { return b.Aud.Balance(ledger.Investment()) }
+func (b *Book) BalSavings() float64    { return b.Aud.Balance(ledger.Savings()) }
 func (b *Book) BalBld(i int) float64 {
 	return b.Aud.Balance(ledger.Building(i))
 }
@@ -95,6 +103,13 @@ func (b *Book) TotalBuildings() float64 { return b.Aud.TotalOf(ledger.KindBuildi
 
 // TotalHouseholds 返回全部人群现金池之和。
 func (b *Book) TotalHouseholds() float64 { return b.Aud.TotalOf(ledger.KindHousehold) }
+
+// TotalInvestment 返回投资池余额（§4.5.1b）。
+func (b *Book) TotalInvestment() float64 { return b.Aud.TotalOf(ledger.KindInvestment) }
+
+// TotalSavings 返回**居民储蓄固定账户**余额（§5.3，2026-09-19 第 20 轮）。
+// 默认 σ_save = 1 时它每 tick 归零（结余当期全额转入投资池）。
+func (b *Book) TotalSavings() float64 { return b.Aud.TotalOf(ledger.KindSavings) }
 
 // ===== 开局注资（唯一不走交易构造的资金注入）=====
 
@@ -112,45 +127,75 @@ func (b *Book) Violations() []string { return b.Aud.Violations() }
 // TotalInjected 返回累计的货币注入额（§4.3 营运本金）。
 func (b *Book) TotalInjected() float64 { return b.injected }
 
-// ===== ⑦ 利润划分 =====
+// ===== ⑥ 利润归属（§4.5.1，2026-09-19 新口径）=====
 
-// ProfitSplit 按 §4.5.1 把一笔运营纯利【划分】给三个归属。
+// ProfitResult 是一次利润归属的三条腿。
+type ProfitResult struct {
+	// Retain 是补足建筑自身现金池的留池额 R_i（恒 ≥ 0）。
+	Retain float64
+	// Gov 是政府份额（盈利时 ≥ 0；亏损时 < 0 = 政府按持股承担亏损）。
+	Gov float64
+	// Owner 是所属资本建筑的私人份额（盈利时 ≥ 0；亏损时 < 0）。
+	Owner float64
+	// Profit 是参与划分的纯利 π_i 本身（留池 + 政府 + 所有者 ≡ π_i）。
+	Profit float64
+}
+
+// ProfitAllocate 按 §4.5.1 把一笔运营纯利【归属】给三条腿。
 //
-//	借 建筑[i]      利润总额
-//	贷 政府         政府份额
-//	贷 资本         资本份额
-//	贷 建筑[i]      留存份额
+//	借 建筑[i]        纯利
+//	贷 建筑[i]        补足自身现金池 R_i
+//	贷 政府           政府份额
+//	贷 所属资本建筑     私人份额
 //
-// 【借贷相等的充要条件】三份额之和恒等于利润。本方法自行按
-// govShare / retainRatio 计算三份额，调用方只提供这两个比例，
+// 【删除留存比例 r_ret】补足额不再是"私人份额的一个比例"，而是
+// R_i = min(max(π_i, 0), max(0, C*_i − B_i))：把自身现金池补到营运资金目标
+// C*_i（= 一个周期的满编营运成本）为止。补足之后的余额 π^net_i 才按**当期**
+// 持股比例 s_gov 支付：政府份额 = π^net_i·s_gov，私人份额 = π^net_i·(1−s_gov)。
+//
+// 【亏损（π_i < 0）】不补池、不分配：政府池 −|π_i|·s_gov、所属资本建筑池
+// −|π_i|·(1−s_gov)，同额贷记建筑现金池（回补本期营运支出），三条腿之和恒为 0。
+//
+// 【借贷相等的充要条件】三条腿之和恒等于纯利——本方法自行按
+// "先补池、再按持股"的顺序算出三者，调用方只提供 C*_i 与当期持股，
 // 因此"忘了把某一份额算进去"在结构上不可能发生。
 //
-// 返回实际入账的三份额，供调用方登记诊断字段。
-func (b *Book) ProfitSplit(i int, profit, govShare, retainRatio float64) (gov, capital, retain float64) {
+// 参数：
+//
+//	profit  是本期运营纯利 π_i（可为负）
+//	govShare 是**当期**政府持股比例 s_gov（调用方按 GovLevel/Level 给出）
+//	cstar   是营运资金目标 C*_i（一个周期的满编营运成本）
+//	balance 是建筑当前现金池余额 B_i
+//
+// owner 是所属资本建筑的账户（农业建筑 → 宅邸庄园；其余 → 金融区）。
+func (b *Book) ProfitAllocate(i int, profit, govShare, cstar, balance float64, owner ledger.Account) ProfitResult {
 	if govShare < 0 {
 		govShare = 0
 	}
 	if govShare > 1 {
 		govShare = 1
 	}
-	if retainRatio < 0 {
-		retainRatio = 0
+	res := ProfitResult{Profit: profit}
+	if profit >= 0 {
+		room := cstar - balance
+		if room < 0 {
+			room = 0
+		}
+		res.Retain = profit
+		if res.Retain > room {
+			res.Retain = room
+		}
+		net := profit - res.Retain
+		res.Gov = net * govShare
+		// 【残差归所有者】私人份额用减法而不是再乘一次 (1−govShare)，
+		// 保证 留池 + 政府 + 所有者 逐位等于纯利（浮点乘法不满足结合律）。
+		res.Owner = net - res.Gov
+	} else {
+		res.Gov = profit * govShare
+		res.Owner = profit - res.Gov
 	}
-	if retainRatio > 1 {
-		retainRatio = 1
-	}
-	gov = profit * govShare
-	priv := profit * (1 - govShare)
-	retain = priv * retainRatio
-	capital = priv - retain
-
-	t := &ledger.Txn{Name: "利润划分"}
-	t.Debit(ledger.Building(i), gov+capital+retain)
-	t.Credit(ledger.Gov(), gov)
-	t.Credit(ledger.Capital(), capital)
-	t.Credit(ledger.Building(i), retain)
-	b.mustPost(t)
-	return
+	b.mustPost(ledger.ProfitAllocate(i, res.Retain, res.Gov, owner, res.Owner))
+	return res
 }
 
 // ===== ⑧ 新建营运本金（唯一的货币注入）=====

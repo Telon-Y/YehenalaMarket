@@ -17,186 +17,150 @@ func newGov(t *testing.T, cash float64) (*Government, *ledger.Auditor) {
 	return gov, aud
 }
 
-// noopCredit 是 SellPower 的收款方入账回调占位（不关心卖方时使用）。
-func noopCredit(float64) {}
-
 // TestConstructionSinkIsClosed 是本包存在的理由的守门测试。
 //
-// 断言：在 G1–G6 的规则下，一个 tick 的货币总量守恒——
-// 政府采购建造力支付的货币，等于建造部门收到的货款加政府代扣的税；
-// 企业购买建造力支付的货币，全额回到政府现金池。
+// 断言：建造力的买卖闭环在 G2/G6 下是**零净支出**的——
+//
+//	G2 政府 → 建造部门（按需采购，不计税）
+//	G6 投资池 → 政府（全额偿还同一笔货款）
+//	⇒ 政府的建造力净支出恒为 0，货币总量不变
 //
 // 这正是 1.0 契约缺失的部分：§4.3 只写"建造力费用从现金池扣除"，
 // 未定义收款方，使建造力成为单向的资金漏出（量化缺口 5.1e4 倍，
-// 见 tools/construction_sink_probe.js）。
+// 见 tools/construction_sink_probe.go 的历史记录）。
+//
+// 【前值 → 后值（2026-09-19）】旧口径是"整批采购 + 转售 + 自反税腿"；
+// 现改为"按需即买即用 + 投资池偿还"，故本测试改为核对
+// ① 采购限额受产出与可动用资金裁剪；② 采购全额入建造部门；
+// ③ 投资池偿还后政府净支出为 0。
 func TestConstructionSinkIsClosed(t *testing.T) {
 	const start = 1_000_000.0
 	gov, aud := newGov(t, start)
 	gov.PowerOutput = 1000
-	gov.TaxRate = 0.10
 
 	const powerPrice = 7250.0
 	const powerOutput = 100.0
 	m0 := aud.Total()
+	_ = m0
 
-	// 政府向建造部门采购
-	bought := gov.PurchasePower(powerOutput, powerPrice)
-	t.Logf("诊断: TaxRate=%.4f bought=%.4f 余额=%.2f 税收=%.2f",
-		gov.TaxRate, bought, gov.Cash.Balance(), gov.TaxCollected)
-	if bought != powerOutput {
-		t.Fatalf("政府应买下全部 %v 单位，实际 %v", powerOutput, bought)
-	}
-	spent := bought * powerPrice
-	// 政府池净减少 = Gross − Tax = Net（税是自己收自己，留在池内）
-	net := spent / (1 + gov.TaxRate)
-	if got := gov.Cash.Balance(); math.Abs(got-(start-net)) > 1e-6 {
-		t.Fatalf("采购后政府余额 %.3f，应为 %.3f", got, start-net)
-	}
-	if got := gov.TaxCollected; math.Abs(got-(spent-net)) > 1e-6 {
-		t.Errorf("采购环节税收 %.3f，应为 %.3f", got, spent-net)
-	}
-	// 单边分录会改变总量，故此处只校验"借贷两侧已配对"：
-	// 政府池的 Net 流出必须由建造部门的 Net 流入承接（下一行模拟该入账）。
-	aud.Inject(ledger.Building(PowerGoodIndex), net)
-	if got := aud.Total(); math.Abs(got-m0) > 1e-6 {
-		t.Errorf("采购环节货币不守恒：%.3f → %.3f", m0, got)
+	// ① 采购限额：只受 AvailableCash/price 约束（产出与队列需要量由调用方再裁剪）。
+	avail := gov.PurchaseLimitQty(powerOutput, powerPrice)
+	if math.Abs(avail-(start/powerPrice)) > 1e-6 {
+		t.Fatalf("资金充足时可采购量 = %.4f，应为 现金/价格 = %.4f", avail, start/powerPrice)
 	}
 
-	// 政府把建造力卖给一个私有扩建方。
-	// 借 付款方 Gross；贷 政府 Gross——付款方的扣款由调用方完成，此处用一个
-	// 独立钱包模拟，并同样记入审计账本，以便整体校验守恒。
-	wallets := map[string]float64{"firm0": 10_000_000}
-	firmAcc := ledger.Building(0)
-	aud.SetBalance(firmAcc, wallets["firm0"])
+	// ② 采购：G2 不计税，建造部门收到全额。
+	const qty = 100.0
+	amount := qty * powerPrice
+	gov.Cash.Add(-amount)
+	aud.Inject(ledger.Building(PowerGoodIndex), amount)
+	if got := gov.Cash.Balance(); math.Abs(got-(start-amount)) > 1e-6 {
+		t.Errorf("采购后政府余额 %.3f，应为 %.3f", got, start-amount)
+	}
+	if got := aud.Balance(ledger.Building(PowerGoodIndex)); math.Abs(got-amount) > 1e-6 {
+		t.Errorf("建造部门入账 %.3f，应为全额 %.3f（不计税）", got, amount)
+	}
+
+	// ③ G6：投资池偿还同一笔货款 ⇒ 政府净支出 0。
+	//
+	// 投资池的资金来自资本建筑净额入池；本测试直接注入它（单边分录，
+	// 模拟"入池"这一来源），随后用真实的交易构造函数偿还给政府——
+	// 偿还本身是借贷相等的交易，不得改变货币总量。
+	aud.Inject(ledger.Investment(), amount)
 	m1 := aud.Total()
-
-	sales := gov.SellPower(
-		[]SaleRequest{{BuildingIndex: 0, Units: 1, PowerPerLevel: 30, Payer: "firm0"}},
-		powerPrice, 30,
-		func(payer string, _ int) float64 { return wallets[payer] / (1 + gov.TaxRate) },
-		noopCredit,
-	)
-	if len(sales) != 1 {
-		t.Fatalf("应有 1 笔成交，实际 %d", len(sales))
+	if err := aud.Post(ledger.InvestmentPayGov(amount)); err != nil {
+		t.Fatalf("投资池偿还过账失败: %v", err)
 	}
-	sold := sales[0].Granted
-	if math.Abs(sold-30) > 1e-9 {
-		t.Fatalf("§4.2 规定每工地每 tick 最多 30 建造力，实际成交 %.3f", sold)
+	if got := gov.Cash.Balance(); math.Abs(got-start) > 1e-6 {
+		t.Errorf("投资池偿还后政府余额 %.3f，应为初值 %.3f（净支出为 0）", got, start)
 	}
-	// 调用方按含税口径给付款方扣款（这是借贷相等的另一半）
-	gross := sales[0].Paid * (1 + gov.TaxRate)
-	aud.Withdraw(firmAcc, gross)
 	if got := aud.Total(); math.Abs(got-m1) > 1e-6 {
-		t.Errorf("售力环节货币不守恒：%.3f → %.3f（Δ=%.6f）", m1, got, got-m1)
-	}
-	if math.Abs(gov.PowerInventory-(powerOutput-sold)) > 1e-9 {
-		t.Fatalf("政府库存应为 %.3f，实际 %.3f", powerOutput-sold, gov.PowerInventory)
-	}
-	if err := gov.Validate(powerPrice); err != nil {
-		t.Fatalf("账目不变量被破坏: %v", err)
+		t.Errorf("投资池偿还这笔交易改变了货币总量：%.3f → %.3f", m1, got)
 	}
 }
 
-// TestSoldCannotExceedPurchased 校验建造力不会被凭空出售。
-func TestSoldCannotExceedPurchased(t *testing.T) {
-	gov, _ := newGov(t, 1e12)
+// TestPowerInventoryIsAlwaysZero 校验 §4.5.3 G2 的"即买即用"：
+// 政府不持有公共储备，故 PowerInventory 恒为 0，且 Validate 会拒绝非零值。
+func TestPowerInventoryIsAlwaysZero(t *testing.T) {
+	gov, _ := newGov(t, 1e9)
 	gov.PowerOutput = 1000
-	gov.PurchasePower(10, 1000)
-
-	wallets := map[string]float64{"firm0": 1e12}
-	gov.SellPower(
-		[]SaleRequest{
-			{BuildingIndex: 0, Units: 100, PowerPerLevel: 1, Payer: "firm0"},
-			{BuildingIndex: 0, Units: 100, PowerPerLevel: 1, Payer: "firm0"},
-		},
-		1000, 1000,
-		func(payer string, _ int) float64 { return wallets[payer] },
-		noopCredit,
-	)
-	if gov.PowerSold > gov.PowerPurchased+1e-9 {
-		t.Fatalf("售出 %.3f 超过采购 %.3f", gov.PowerSold, gov.PowerPurchased)
+	if err := gov.Validate(7250); err != nil {
+		t.Fatalf("初始状态应满足不变量: %v", err)
 	}
-	if gov.PowerInventory < -1e-9 {
-		t.Fatalf("库存为负: %.6f", gov.PowerInventory)
+	gov.PowerInventory = 1
+	if err := gov.Validate(7250); err == nil {
+		t.Error("公共储备非零时必须报错（§4.5.3 G2：政府不持有建造力）")
+	}
+	gov.PowerInventory = 0
+	if err := gov.Validate(7250); err != nil {
+		t.Errorf("恢复为 0 后应通过: %v", err)
 	}
 }
 
-// TestSitePowerLimit 校验 §4.2 的"每工地每 tick 最多 30 建造力"硬约束。
-func TestSitePowerLimit(t *testing.T) {
-	gov, _ := newGov(t, 1e12)
-	gov.PowerOutput = 1000
-	gov.PurchasePower(1000, 100)
-
-	wallets := map[string]float64{"firm0": 1e12}
-	sales := gov.SellPower(
-		[]SaleRequest{{BuildingIndex: 0, Units: 100, PowerPerLevel: 100, Payer: "firm0"}},
-		100, 30,
-		func(payer string, _ int) float64 { return wallets[payer] },
-		noopCredit,
-	)
-	if len(sales) != 1 {
-		t.Fatalf("应有 1 笔成交，实际 %d", len(sales))
+// TestPurchaseLimitQtyIsClippedByCash 校验 G2 的资金裁剪：
+// 可采购量的上限是 §4.5.4 的 AvailableCash / 价格（产出与队列需要量由调用方再取 min）。
+func TestPurchaseLimitQtyIsClippedByCash(t *testing.T) {
+	gov, _ := newGov(t, 0)
+	gov.PowerOutput = 100 // AssetBase = 100×1000 = 100_000，上限 = 200_000
+	const price = 1000.0
+	got := gov.PurchaseLimitQty(1e9, price)
+	if math.Abs(got-200) > 1e-6 {
+		t.Errorf("资金受限时可采购量 = %.4f，应为 上限/价格 = 200", got)
 	}
-	if sales[0].Granted > 30+1e-9 {
-		t.Fatalf("单笔成交 %.3f 超过每工地上限 30", sales[0].Granted)
+	// 余额充裕时上限 = 余额/价格（余额本身可能已超过债务上限，但可动用被截到上限）
+	gov.Cash.SetInitial(300_000)
+	if got := gov.PurchaseLimitQty(1e9, price); math.Abs(got-200) > 1e-6 {
+		t.Errorf("余额超过债务上限时可采购量 = %.4f，应被截到 200", got)
+	}
+	gov.Cash.SetInitial(50_000)
+	if got := gov.PurchaseLimitQty(1e9, price); math.Abs(got-50) > 1e-6 {
+		t.Errorf("余额低于上限时可采购量 = %.4f，应为 50", got)
 	}
 }
 
-// TestControlCapacityIsHardConstraint 校验 G5：金融区每级只能掌控 5 级其余建筑。
-func TestControlCapacityIsHardConstraint(t *testing.T) {
+// TestControlCapacityNote 记录 G5 在"推导口径"下不再是硬约束的事实。
+//
+// 【2026-09-19 裁决（§4.5.2）】金融区级数由掌控比**反推**
+// （N_finance = Σ非农业等级 / c_ctrl），故 ControlCapacity = N×c_ctrl
+// 恒等于其余建筑等级之和——上限恒不小于实际持有量，所以它不再是扩张的约束。
+// 资本的自我限制现在只剩**工资义务**。
+//
+// 【前值 → 后值】旧测试断言"已达上限就不能再追加"；在推导口径下
+// sim.syncFinanceLevel 每 tick 重算级数，上限随之自动抬高，故该断言不再成立。
+func TestControlCapacityNote(t *testing.T) {
 	var c Capital
 	c.UpdateControl(10, 0, 5)
 	if c.ControlCapacity != 50 {
 		t.Fatalf("掌控上限 = %.1f，应为 10×5 = 50", c.ControlCapacity)
 	}
-	for i := 0; i < 10; i++ {
-		if !c.CanControl(5) {
-			t.Fatalf("第 %d 次追加 5 级应被允许", i+1)
-		}
-		c.ControlledLevels += 5
+	// 反推口径下 ControlledLevels = ControlCapacity，CanControl(0) 恰好取等号。
+	c.ControlledLevels = c.ControlCapacity
+	if !c.CanControl(0) {
+		t.Error("在推导口径下 实际持有量 = 上限 应仍然成立（取等号）")
 	}
 	if c.CanControl(1) {
-		t.Error("已达上限 50 级，不应还能追加")
+		t.Error("超出实际持有量 1 级就不应被允许（它不再自动抬高上限）")
 	}
 }
 
-// TestProfitDistributionSplitsByOwnership 校验 G3/G4 的分账是【划分】而非复制。
+// TestConstructionSinkNotes 记录 §4.5.3 改写删除的两类流动，防止被误接回来。
 //
-// 修订说明（docs/AUDIT-1.0.md §4）：原实现让建筑现金池拿全额利润、
-// 政府/资本池再各拿一份，实测 Δ货币/Σ利润 = 2.00（重复入账）。
-// 正确语义下三个份额之和必须恰好等于利润本身。
-func TestProfitDistributionSplitsByOwnership(t *testing.T) {
-	const profit = 1000.0
-	gov, capital, retain := ShareProfit(profit, 0.70, 0.50)
-
-	if math.Abs(gov-700) > 1e-9 {
-		t.Errorf("政府份额 = %.3f，应为 1000×0.70 = 700", gov)
-	}
-	// 私有份额 300，其中一半留存于建筑、一半归资本
-	if math.Abs(retain-150) > 1e-9 {
-		t.Errorf("建筑留存 = %.3f，应为 300×0.50 = 150", retain)
-	}
-	if math.Abs(capital-150) > 1e-9 {
-		t.Errorf("资本份额 = %.3f，应为 300×0.50 = 150", capital)
-	}
-	// 核心不变量：三者之和恒等于利润
-	if sum := gov + capital + retain; math.Abs(sum-profit) > 1e-9 {
-		t.Errorf("三份额之和 = %.6f，必须恰好等于利润 %.6f（否则即为重复记账/漏记）", sum, profit)
-	}
-}
-
-// TestShareProfitSumsToProfitForAllRatios 遍历边界比例，确认"划分"语义恒成立。
-func TestShareProfitSumsToProfitForAllRatios(t *testing.T) {
-	for _, share := range []float64{-0.5, 0, 0.3, 0.7, 1.0, 1.5} {
-		for _, retain := range []float64{-1, 0, 0.25, 0.5, 1, 2} {
-			for _, profit := range []float64{-1234.5, 0, 999.99} {
-				g, c, r := ShareProfit(profit, share, retain)
-				if math.Abs((g+c+r)-profit) > 1e-9 {
-					t.Errorf("share=%.2f retain=%.2f profit=%.2f: 和 = %.9f ≠ %.9f",
-						share, retain, profit, g+c+r, profit)
-				}
-			}
-		}
+// 【已删除（2026-09-19，第 11 轮）】
+//   - fiscal.Government.SellPower / SaleRequest / SaleResult：政府不再转售建造力；
+//   - fiscal.Government.PurchasePower：整批采购改为"按需即买即用"，
+//     采购量由 sim.step 用 min(队列需要量, 产出, 可动用资金/价格) 定出；
+//   - fiscal.ShareProfit：留存比例已删除，利润归属改为 book.ProfitAllocate。
+//
+// 本测试只做编译期事实的说明性断言（这些 API 已不存在），
+// 真正的行为断言在 sim 的 R26 审计测试里。
+func TestConstructionSinkNotes(t *testing.T) {
+	// 政府在两个资本建筑之外只有一个采购限额函数，不再有"采购 + 转售"两步。
+	gov, _ := newGov(t, 1000)
+	gov.PowerOutput = 10
+	const price = 100.0
+	// 无队列时调用方传 needQty = 0，采购量必然是 0（G2 按需）。
+	if got := math.Min(0, gov.PurchaseLimitQty(10, price)); got != 0 {
+		t.Errorf("无队列时采购量应为 0，实际 %.4f", got)
 	}
 }
 
@@ -226,15 +190,19 @@ func TestTransactionSplitsIntoNetAndTax(t *testing.T) {
 	}
 }
 
-// TestTaxBaseIsTotalTransactionValue 校验 G1 的税基是"全部交易额"。
-func TestTaxBaseIsTotalTransactionValue(t *testing.T) {
-	const consumer, intermediate, power = 100, 200, 50
-	got := CollectTax(0.10, consumer, intermediate, power)
-	want := (consumer + intermediate + power) * 0.10
+// TestCollectTaxBaseExcludesPower 校验 G1 的税基口径（§4.5.3 第 11 轮裁决）：
+// 消费 + 中间投入，**不含建造力**（建造力交易不计税）。
+//
+// 【前值 → 后值】旧签名 CollectTax(rate, consumer, intermediate, power) 把
+// 建造力采购额也计入税基；定案不计税后签名去掉该参数。
+func TestCollectTaxBaseExcludesPower(t *testing.T) {
+	const consumer, intermediate = 100.0, 200.0
+	got := CollectTax(0.10, consumer, intermediate)
+	want := (consumer + intermediate) * 0.10
 	if math.Abs(got-want) > 1e-9 {
 		t.Errorf("税额 = %.4f，应为 %.4f", got, want)
 	}
-	if CollectTax(0, consumer, intermediate, power) != 0 {
+	if CollectTax(0, consumer, intermediate) != 0 {
 		t.Error("税率为 0 时不应产生税收")
 	}
 	if TaxOn(-1, 0.1) != 0 {
@@ -306,55 +274,21 @@ func TestDebtCapScalesWithPowerOutput(t *testing.T) {
 	}
 }
 
-// TestGovOwnBuildoutDoesFullDoubleEntry 校验政府自建项目的付款是【完整双边记账】。
+// TestGovernmentOwnBuildoutIsGone 记录"政府自建项目付款"在本版不存在。
 //
-// 历史缺陷：旧实现把政府自建项目当"内部转账"，只累加 BuildoutPaid
-// 而【不动任何账户余额】——工程是白得的，货币守恒审计会看到一个无人认领的差额。
-//
-// 修订后：借 政府 Gross；贷 建造力卖方 Net；贷 政府 Tax。
-// 三本账合账为零，且政府池净减少恰为 Net。
-func TestGovOwnBuildoutDoesFullDoubleEntry(t *testing.T) {
-	gov, aud := newGov(t, 1_000_000)
-	gov.PowerOutput = 1000
-	gov.TaxRate = 0.10
-	const price = 1000.0
-	gov.PurchasePower(100, price)
-
-	// 把建造部门账户挂进审计账本，使 credit 回调能真实入账
-	powerAcc := ledger.Building(PowerGoodIndex)
-	aud.SetBalance(powerAcc, 0)
-
-	cashAfterPurchase := gov.Cash.Balance()
-	taxAfterPurchase := gov.TaxCollected
-	m0 := aud.Total()
-
-	sales := gov.SellPower(
-		[]SaleRequest{{BuildingIndex: 0, Units: 1, PowerPerLevel: 10, Payer: "gov"}},
-		price, 1000,
-		func(string, int) float64 { return gov.AvailableCash(price) },
-		func(net float64) { aud.Inject(powerAcc, net) },
-	)
-	if len(sales) != 1 {
-		t.Fatalf("应有 1 笔政府自建成交，实际 %d", len(sales))
-	}
-	paid := sales[0].Paid
-
-	// 建造力卖方必须真实收到净额
-	if got := aud.Balance(powerAcc); math.Abs(got-paid) > 1e-9 {
-		t.Errorf("卖方入账 %.4f，应为净额 %.4f", got, paid)
-	}
-	// 政府按含税总额扣款、又收回自己那笔税，故净减少恰为 Net
-	if got := gov.Cash.Balance(); math.Abs(got-(cashAfterPurchase-paid)) > 1e-6 {
-		t.Errorf("政府付款后余额 %.4f，应为 %.4f（净减少 Net=%.4f）",
-			got, cashAfterPurchase-paid, paid)
-	}
-	// 税必须入库
-	if got := gov.TaxCollected; math.Abs(got-(taxAfterPurchase+paid*gov.TaxRate)) > 1e-9 {
-		t.Errorf("政府自建项目的税未入库：%.4f → %.4f", taxAfterPurchase, got)
-	}
-	// 货币总量不变（买卖双方都在审计账本内）
-	if got := aud.Total(); math.Abs(got-m0) > 1e-6 {
-		t.Errorf("政府自建项目不守恒：%.4f → %.4f（Δ=%.6f）", m0, got, got-m0)
+// 【契约依据】§4.5.3 G6 第 7 条：政府**自有项目**（如 §4.5.6 的仓库自动扩建）
+// 才由政府现金池付款；本版不实现仓库（§4.5.6 范围外），故政府恒无自有项目，
+// 这条流动与其记账函数（fiscal.SellPower 的 gov 分支 / book.GovOwnBuildout）
+// 一并删除。若将来实现仓库，应在 sim.step 的 ⑩ 段新增一条
+// "政府自有项目采购"的记账路径，而不是复活旧的转售口径。
+func TestGovernmentOwnBuildoutIsGone(t *testing.T) {
+	gov, _ := newGov(t, 1e6)
+	gov.PowerOutput = 100
+	// 政府唯一的建造力支出入口是 G2 采购（由 sim 按需调用 book.PurchasePower），
+	// fiscal 包只提供资金约束：可采购量 = min(余额, 债务上限)/价格。
+	// 此处余额 1e6 > 上限 2×100×1000 = 200,000 ⇒ 可采购量 = 200,000/1000 = 200。
+	if got := gov.PurchaseLimitQty(100, 1000); math.Abs(got-200) > 1e-9 {
+		t.Errorf("可采购量 = %.4f，应为 债务上限/价格 = 200", got)
 	}
 }
 

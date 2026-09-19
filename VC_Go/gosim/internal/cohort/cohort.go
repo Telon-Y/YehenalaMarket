@@ -5,7 +5,7 @@
 // 原契约 §5 只为每【级建筑】记一笔工资成本，§8 主循环里也没有任何一步
 // 把这笔钱记入居民账户。后果是工资只作为成本从利润里扣减，钱从未真正付出：
 // 实测工资总额 2.44e7/tick 而消费支出只有 1.93e7，差额凭空蒸发，
-// 货币总量每 tick 净损 15%~34%，5 个周期后变为负数（见 docs/AUDIT-1.0.md §3）。
+// 货币总量每 tick 净损 15%~34%，5 个周期后变为负数（见 docs/ACTIVE.md §6.5）。
 //
 // 本包建立【真实的人群】：
 //
@@ -173,7 +173,8 @@ func (l *Ledger) Targets(demandScale float64) [4]float64 {
 //
 //	budget = 池内现金 / (1 + t)
 //
-// 之所以除以 (1+t)：交易税是【价外税】（§4.5.3 修订：全过程 10%），
+// 之所以除以 (1+t)：交易税是【价外税】（§4.5.3 的 G1；§4.5.6 定案的两段税
+// ν=τ=2.5% 尚未实现，实现以单一税率 t 作替身，2026-09-19 起默认 0.05），
 // 居民支付的含税总额不得超过其现金。消费结算按税前额成交，
 // 扣款与税额拆分由 ledger 包的 ConsumerPurchase 交易完成。
 func (l *Ledger) Budgets(taxRate float64) []float64 {
@@ -243,21 +244,24 @@ func (l *Ledger) Spend(i int, net float64, taxRate float64) (paid, tax float64, 
 
 // WageShares 返回某场地每级建筑的阶级人口构成（§5）。
 //
-//   - population[c] = LaborPerLevel × CohortShares[c]
-//   - wage[c]       = population[c] × CohortWages[c]
+//   - population[c] = LaborPerLevel × st.Shares[c]
+//   - wage[c]       = population[c] × st.Wages[c]
 //
-// 两者之和 = LaborPerLevel × AverageWage()，与契约 §5 的 33750 元/级完全一致。
-func WageShares(laborPerLevel float64) (population, wage [ClassCount]float64) {
+// 两者之和 = LaborPerLevel × st.AverageWage() = model.Building.WagePerLevel()。
+//
+// 【§5 第 20 轮】结构由调用方传入（`b.Spec.StructureOf()`）：城镇类 33,750 元/级、
+// 农业类 28,250 元/级（5,000 × 5.65）、庄园 5,650 元/级（1,000 × 5.65）。
+func WageShares(laborPerLevel float64, st model.LaborStructure) (population, wage [ClassCount]float64) {
 	for c := 0; c < ClassCount; c++ {
-		population[c] = laborPerLevel * model.CohortShares[c]
-		wage[c] = population[c] * model.CohortWages[c]
+		population[c] = laborPerLevel * st.Shares[c]
+		wage[c] = population[c] * st.Wages[c]
 	}
 	return
 }
 
-// TotalWagePerLevel 校验用：每级工资总额应等于 LaborPerLevel × 6.75。
-func TotalWagePerLevel(laborPerLevel float64) float64 {
-	_, wage := WageShares(laborPerLevel)
+// TotalWagePerLevel 校验用：每级工资总额 = LaborPerLevel × 结构人均工资。
+func TotalWagePerLevel(laborPerLevel float64, st model.LaborStructure) float64 {
+	_, wage := WageShares(laborPerLevel, st)
 	var s float64
 	for c := 0; c < ClassCount; c++ {
 		s += wage[c]

@@ -55,7 +55,7 @@ func Settle(buildings []model.Building, levels, hire []float64, subsistence map[
 
 	// ① 潜在产出与投入申报
 	for i, b := range buildings {
-		if b.IsFinance {
+		if b.IsNonMarket() {
 			continue
 		}
 		eff := levels[i] * hire[i]
@@ -84,9 +84,10 @@ func Settle(buildings []model.Building, levels, hire []float64, subsistence map[
 		p.AllocRatio[good] = ratio
 	}
 
-	// ③ 实际产出：对每种投入取配给比例的最小值作为短缺惩罚
+	// ③ 实际产出：对每种投入取配给比例的最小值作为短缺惩罚，
+	//    并按 §3.3 定案设下限 model.ShortageFloor（惩罚最高 75%，即至少保留 25% 产出）。
 	for i, b := range buildings {
-		if b.IsFinance {
+		if b.IsNonMarket() {
 			continue
 		}
 		sf := 1.0
@@ -94,6 +95,9 @@ func Settle(buildings []model.Building, levels, hire []float64, subsistence map[
 			if p.AllocRatio[good] < sf {
 				sf = p.AllocRatio[good]
 			}
+		}
+		if sf < model.ShortageFloor {
+			sf = model.ShortageFloor
 		}
 		p.ShortageFactor[i] = sf
 		eff := levels[i] * hire[i]
@@ -105,7 +109,7 @@ func Settle(buildings []model.Building, levels, hire []float64, subsistence map[
 
 	// ④ 中间投入的实际取用与净供给
 	for i, b := range buildings {
-		if b.IsFinance {
+		if b.IsNonMarket() {
 			continue
 		}
 		eff := levels[i] * hire[i]
@@ -129,7 +133,7 @@ func Settle(buildings []model.Building, levels, hire []float64, subsistence map[
 func InputValue(buildings []model.Building, levels, hire, prices []float64, allocRatio []float64) []float64 {
 	out := make([]float64, len(buildings))
 	for i, b := range buildings {
-		if b.IsFinance {
+		if b.IsNonMarket() {
 			continue
 		}
 		eff := levels[i] * hire[i]
@@ -144,12 +148,14 @@ func InputValue(buildings []model.Building, levels, hire, prices []float64, allo
 
 // WageBill 返回每种建筑的工资支出（当期、实际雇佣口径）。
 //
-// §5：每级雇佣 LaborPerLevel 人，平均工资 = 阶层比例加权（0.75×5 + 0.20×10 + 0.05×20 = 6.75）。
-// 金融区每级只雇 1000 人（G5），但阶层比例不变，故均薪仍为 6.75。
+// §5：每级雇佣 LaborPerLevel 人，人均工资 = 该建筑**劳动结构**的加权平均。
+// 城镇类（默认）0.75×5 + 0.20×10 + 0.05×20 = 6.75 元；农业类（谷物 / 棉花）
+// 0.75×5 + 0.20×7 + 0.05×10 = 5.65 元（§5 第 20 轮）。故逐建筑取 WagePerLevel()，
+// 不再乘全局平均工资。
 func WageBill(buildings []model.Building, levels, hire []float64) []float64 {
 	out := make([]float64, len(buildings))
 	for i, b := range buildings {
-		out[i] = levels[i] * hire[i] * b.LaborPerLevel * model.AverageWage()
+		out[i] = levels[i] * hire[i] * b.WagePerLevel()
 	}
 	return out
 }

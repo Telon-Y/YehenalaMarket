@@ -2,17 +2,16 @@
 //
 // 用途：逐 tick 校验政府现金池的变化能否被已知资金流完全解释：
 //
-//	Δ现金 = 税收 + 经营净额 − 采购支出 + 售力收入 − 政府自建项目付款
+//	Δ现金 = 税收 + 经营净额 − 按需采购支出 + 投资池偿还 − 政府补贴
 //
-// 若出现残差，说明有未记账的资金流出。本工程的三个历史 bug 都是这样定位的：
-//  ① PowerPurchased 写成赋值而非累加（同 tick 第二次采购覆盖第一次记录）
-//  ② 流量计数器未在 tick 开头清零（跨 tick 累加成存量）
-//  ③ 政府经营净额被记两次（DistributeProfit 内部已入账，调用方又累加再入账）
+// 若出现残差，说明有未记账的资金流出。本工程的历史 bug 都是这样定位的
+// （详见 internal/sim/step.go 与 internal/fiscal 的注释）。
 //
-// 【§4.5.3 修订后的口径变化】
-// 自本次起，余额由唯一的审计账本持有（ledger.Auditor），政府现金池通过
-// st.BalanceOf(政府) 读取；资金流分解式的各项也改为"账户实际变动"计量，
-// 不再用公式推算。因此本工具报告的残差若仍非零，一定是真正的未知资金流。
+// 【§4.5.3 改写后的口径（2026-09-19，第 11 轮）】
+// 建造力交易**不计税**，且 G6 由"整批采购 + 转售"改为"按需即买即用 +
+// 投资池全额偿还"，故分解式里**没有** GovSelfTax / GovBuildoutPaid 两项——
+// 政府不再是自己收自己的税，也没有政府自有项目。政府采购与投资池偿还在
+// 本版口径下逐位相等（政府建造力净支出恒为 0）。
 //
 // 用法（在 gosim 目录下）：
 //
@@ -32,7 +31,6 @@ func main() {
 		Population:           10_000_000,
 		WealthTier:           10,
 		FinanceLaborPerLevel: 1000,
-		FinanceBuildCost:     400,
 		GovStartupFraction:   0.5,
 	})
 	if err != nil {
@@ -50,10 +48,11 @@ func main() {
 	fmt.Printf("资产基数(P_cost=7250) = %.0f\n", st.Gov.AssetBase(pcost))
 	fmt.Printf("债务上限              = %.0f\n", st.Gov.DebtCap(pcost))
 	fmt.Printf("可动用资金            = %.0f\n", st.Gov.AvailableCash(pcost))
+	fmt.Printf("投资池                = %.0f\n", st.Aud.Balance(ledger.Investment()))
 	fmt.Printf("全社会货币存量        = %.0f\n", st.Aud.Total())
 
 	fmt.Printf("\n%5s %14s %12s %12s %13s %13s %12s %12s %14s\n",
-		"tick", "Δ现金池", "税收", "经营净额", "采购支出", "售力收入", "自建付款", "残差", "货币存量")
+		"tick", "Δ现金池", "税收", "经营净额", "采购支出", "投资池偿还", "补贴", "残差", "货币存量")
 	prev := govBal()
 	m0 := st.Aud.Total()
 	for i := 0; i < 60; i++ {
@@ -64,12 +63,12 @@ func main() {
 		f := st.Flow
 		delta := cur - prev
 		explained := f.GovTax + f.GovOperating - f.GovPowerSpend +
-			f.GovPowerRevenue - f.GovBuildoutPaid
+			f.GovPowerRevenue - f.GovSubsidy + f.PrivatizePaid
 		resid := delta - explained
 		if i < 8 || i == 59 {
 			fmt.Printf("%5d %14.0f %12.0f %12.0f %13.0f %13.0f %12.0f %12.2f %14.0f\n",
 				st.Tick, delta, f.GovTax, f.GovOperating, -f.GovPowerSpend,
-				f.GovPowerRevenue, -f.GovBuildoutPaid, resid, st.Aud.Total())
+				f.GovPowerRevenue, -f.GovSubsidy, resid, st.Aud.Total())
 		}
 		prev = cur
 	}
@@ -86,4 +85,5 @@ func main() {
 	}
 	fmt.Printf("\n债务触限 tick 数 = %d / %d\n", st.Gov.DebtCapBoundTicks, st.Tick)
 	fmt.Printf("总级数 = %.1f\n", st.TotalLevels())
+	fmt.Printf("政府公共储备（应恒为 0）= %.6f\n", st.Gov.PowerInventory)
 }

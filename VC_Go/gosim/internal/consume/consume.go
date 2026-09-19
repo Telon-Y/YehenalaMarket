@@ -206,6 +206,16 @@ type PooledOutcome struct {
 	//	PoolSpend ≈ PoolTargetValue < PoolBudget  ⇒ 供给不足（缺货）
 	//	PoolSpend ≈ PoolBudget     < PoolTargetValue ⇒ 预算不足（缺钱）
 	PoolTargetValue []float64
+	// NoIncome 是"有人口但可支配预算 ≤ 0 ⇒ 无法消费"的池数（诊断，§6.5）。
+	//
+	// 【2026-09-19 第 15 轮裁决】失业人口没有工资（其资金池只可能收到福利金），
+	// 在福利金关闭时预算恒为 0 ⇒ 满足度为 0 ⇒ 拉低幸福度与人口增长。
+	// 修正前这类池被当作"满足度 = 1"（正是"人口增长条件不生效"的根因）。
+	NoIncome int
+	// SatByClass 是按阶级人口加权的四组满足度（c = 0 劳工 / 1 工程师 / 2 资本家）。
+	SatByClass [3][4]float64
+	// PopByClass 是各阶级的人口合计，用于把 SatByClass 折算为幸福度。
+	PopByClass [3]float64
 }
 
 // PoolSpec 描述参与消费的一个人群池。
@@ -219,6 +229,11 @@ type PoolSpec struct {
 	Tier float64
 	// Budget 是该池的税前消费预算（元）。
 	Budget float64
+	// Class 是该池的阶级下标（0 劳工 / 1 工程师 / 2 资本家）。
+	//
+	// 【2026-09-19 第 15 轮裁决】新增：幸福度要按阶级分别报告
+	// （失业人口算劳工，其"无收入 ⇒ 无法消费 ⇒ 幸福度 0"必须能在报告里看到）。
+	Class int
 }
 
 // PurchaseByPools 按 §5.1 的人群池逐个结算消费。
@@ -236,6 +251,20 @@ func PurchaseByPools(
 	supply, prices []float64,
 	demandScale float64,
 ) PooledOutcome {
+	return PurchaseByPoolsScaled(groups, pools, supply, prices, demandScale, 1.0)
+}
+
+// PurchaseByPoolsScaled 与 PurchaseByPools 同，但带一个**篮子系数**（§6.3 第 24 轮）。
+//
+// basketScale 把每档的目标需求量整体缩放（1.0 = 契约原表）。它用于检验
+// "§6.3 的数量篮子太小 ⇒ 消费/工资只有 0.2 ⇒ 消费品部门长期亏损"这一假设：
+// 系数调大后，同样的工资能买到更多条目，价格才可能停在覆盖成本的水平。
+func PurchaseByPoolsScaled(
+	groups []model.ConsumeGroup,
+	pools []PoolSpec,
+	supply, prices []float64,
+	demandScale, basketScale float64,
+) PooledOutcome {
 	n := len(supply)
 	out := PooledOutcome{
 		Pools:           make([]PoolOutcome, len(pools)),
@@ -250,7 +279,7 @@ func PurchaseByPools(
 	// 逐池目标需求量 → 汇总
 	targetsByPool := make([][4]float64, len(pools))
 	for pi, p := range pools {
-		d := model.DemandAt(p.Tier)
+		d := model.DemandAtScaled(p.Tier, basketScale)
 		for g := 0; g < 4; g++ {
 			t := d[g] * p.Population / 100000 * demandScale
 			targetsByPool[pi][g] = t
@@ -295,6 +324,10 @@ func PurchaseByPools(
 	for _, pi := range order {
 		p := pools[pi]
 		po := PoolOutcome{Bought: make([]float64, n)}
+		cls := p.Class
+		if cls < 0 || cls >= 3 {
+			cls = 0
+		}
 		if p.Population > 1e-12 && p.Budget > 0 {
 			bought := buyOneUnit(groups, targetsByPool[pi], stock, prices, p.Budget, 0)
 			copy(po.Bought, bought)
@@ -322,9 +355,26 @@ func PurchaseByPools(
 			if p.Population > 1e-12 {
 				for g := 0; g < 4; g++ {
 					popWeighted[g] += po.Sat[g] * p.Population
+					out.SatByClass[cls][g] += po.Sat[g] * p.Population
 				}
 				popTotal += p.Population
+				out.PopByClass[cls] += p.Population
 			}
+		} else if p.Population > 1e-12 {
+			// 【2026-09-19 第 15 轮裁决：零预算 ⇒ 无法消费 ⇒ 满足度 0】
+			//
+			// 修正前这里把"有人口但没钱"的池记为满足度 1（空真通过），
+			// 于是失业人口（无工资、福利金关闭时预算为 0）被当作"过得很好"，
+			// 人口增长条件（§6.5 由必需品满足度驱动）因此**完全不生效**——
+			// 实测人口仍以 +5%/年复利到 2.34e11（R16 缺陷 2、R34 实测）。
+			// 现在的口径：没有收入就没有消费，满足度 = 0，幸福度 = 0，
+			// 人口增长随之转为负值（§6.5 的 −20%/年锚点）。
+			for g := 0; g < 4; g++ {
+				po.Sat[g] = 0
+			}
+			popTotal += p.Population
+			out.PopByClass[cls] += p.Population
+			out.NoIncome++
 		} else {
 			for g := 0; g < 4; g++ {
 				po.Sat[g] = 1
@@ -336,6 +386,15 @@ func PurchaseByPools(
 	if popTotal > 1e-12 {
 		for g := 0; g < 4; g++ {
 			out.Sat[g] = popWeighted[g] / popTotal
+		}
+	}
+	// 阶级内的满足度按该阶级人口折算（幸福度的分母）。
+	for c := 0; c < 3; c++ {
+		if out.PopByClass[c] <= 1e-12 {
+			continue
+		}
+		for g := 0; g < 4; g++ {
+			out.SatByClass[c][g] /= out.PopByClass[c]
 		}
 	}
 	return out
@@ -457,6 +516,36 @@ func (o Outcome) NecessarySatisfaction() float64 {
 // 必须按人口加权汇总，否则人口增长会只反映某一个阶级的处境。
 func (o PooledOutcome) NecessarySatisfaction() float64 {
 	return (o.Sat[model.GroupPlainClothes] + o.Sat[model.GroupBasicFood]) / 2
+}
+
+// Happiness 返回按人口加权的**幸福度**（§6.5，2026-09-19 第 15 轮裁决）。
+//
+// 定义：四个消费组满足度的算术平均 ∈ [0,1]。
+//
+//	幸福度 = (Sat[简朴衣物] + Sat[基础食物] + Sat[标准衣物] + Sat[住宅]) / 4
+//
+// 与 §6.5 的人口增长口径的分工：
+//   - **人口增长**仍由必需品满足度（简朴衣物 + 基础食物）驱动（契约原文）；
+//   - **幸福度**是给玩家看的综合指标（1.1 UI），也是"失业 ⇒ 无收入 ⇒ 无法消费"
+//     这一后果的可观察量：失业池的幸福度恒为 0，会把总体幸福度拉下来。
+func (o PooledOutcome) Happiness() float64 {
+	var s float64
+	for g := 0; g < 4; g++ {
+		s += o.Sat[g]
+	}
+	return s / 4
+}
+
+// HappinessByClass 返回某一阶级的幸福度（四组满足度均值）。
+func (o PooledOutcome) HappinessByClass(c int) float64 {
+	if c < 0 || c >= 3 {
+		return 0
+	}
+	var s float64
+	for g := 0; g < 4; g++ {
+		s += o.SatByClass[c][g]
+	}
+	return s / 4
 }
 
 // PopulationGrowth 返回年化人口增长率（§6.5）。

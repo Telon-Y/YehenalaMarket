@@ -142,11 +142,15 @@ func TestAuditConsumptionShortfall(t *testing.T) {
 			len(seen), seen)
 	}
 
-	// 工资必须真的划入人群池：池现金总额应等于工资总额减去本 tick 消费支出。
-	wantLeft := snap.Flow.WageTotal - o.SpendNet - snap.Flow.ConsumerTax
+	// 工资必须真的划入人群池：池现金总额 = 工资 + 福利金 − 本 tick 消费支出 − 消费税 − 储蓄。
+	//
+	// 【前值 → 后值（2026-09-19 第 15 轮）】§5.3 的储蓄渠道把消费结余转入投资池
+	// （默认全部转入），故"池现金 = 工资 − 消费"不再成立；同时 §4.5.8 的福利金
+	// 是居民的净收入。恒等式现为四项。
+	wantLeft := snap.Flow.WageTotal + snap.Welfare - o.SpendNet - snap.Flow.ConsumerTax - snap.Saving
 	if got := st.Houses.TotalCash(); abs64(got-wantLeft) > 1e-3 {
-		t.Errorf("人群池现金 %.2f，应为 工资%.2f − 消费净%.2f − 消费税%.2f = %.2f",
-			got, snap.Flow.WageTotal, o.SpendNet, snap.Flow.ConsumerTax, wantLeft)
+		t.Errorf("人群池现金 %.2f，应为 工资%.2f + 福利金%.2f − 消费净%.2f − 消费税%.2f − 储蓄%.2f = %.2f",
+			got, snap.Flow.WageTotal, snap.Welfare, o.SpendNet, snap.Flow.ConsumerTax, snap.Saving, wantLeft)
 	}
 }
 

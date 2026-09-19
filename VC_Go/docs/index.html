@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>叶赫那拉市场 · 1.0 文档索引</title>
+<style>
+  :root{--fg:#1f2328;--muted:#59636e;--bg:#ffffff;--card:#f6f8fa;--line:#d1d9e0;--accent:#0969da}
+  @media (prefers-color-scheme:dark){
+    :root{--fg:#e6edf3;--muted:#9198a1;--bg:#0d1117;--card:#161b22;--line:#30363d;--accent:#4493f8}
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 64px;background:var(--bg);color:var(--fg);
+       font:16px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+  main{max-width:820px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 4px}
+  p.sub{color:var(--muted);margin:0 0 26px}
+  h2{font-size:17px;margin:30px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+  ul{list-style:none;padding:0;margin:0}
+  li{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin:10px 0}
+  a{color:var(--accent);text-decoration:none;font-weight:600;font-size:17px}
+  a:hover{text-decoration:underline}
+  .desc{display:block;color:var(--muted);font-size:14px;font-weight:400;margin-top:6px}
+  code{background:var(--card);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:13px}
+  .note{margin-top:28px;padding:12px 14px;background:var(--card);border:1px solid var(--line);
+        border-left:3px solid var(--accent);border-radius:6px;color:var(--muted);font-size:14px}
+  .arch{color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<main>
+  <h1>叶赫那拉市场 · 1.0 文档索引</h1>
+  <p class="sub">项目只有<strong>两个核心文档</strong>；其余历史文档的现行内容已并入它们，原文归档在 <code>docs/archive/</code>。</p>
+
+  <h2>两个核心文档</h2>
+  <ul>
+    <li><a href="ACTIVE.html">ACTIVE —— 状态、裁决登记与全部订正记录（先读这份）</a>
+      <span class="desc">
+        §0 口径速查与 <strong>12 项修改意向登记处（第 1–11 项已裁决）</strong> · §一 一句话状态 · §二 已验证结论 ·
+        §三 30 分钟恢复上下文 · §四 未决事项（8 项，含两处产能自锁）· §五 纪律 ·
+        <strong>§六 实现架构(6.2) / 记账内核(6.3) / 价格锚定备选(6.4) / 游戏可行性审计(6.5)</strong> ·
+        <strong>§七 R1–R43 逐轮订正记录</strong>。
+      </span></li>
+    <li><a href="1.0 生产与市场模拟.html">1.0 生产与市场模拟 —— 契约正文（唯一权威）</a>
+      <span class="desc">
+        §零 当前口径速查与裁决登记 · §一 版本目标 · §二 市场微分方程 · §三 商品与建筑体系（四类建筑 + 仓库）·
+        §四 扩建 / 政府 / 资本 · §五 劳动力与工资（含储蓄渠道）· §六 消费与需求 ·
+        <strong>§七 GDP（7.1 名义 / 7.2 实际工农生产总值）</strong> · §八 模拟主循环与验收判据 <strong>A1–A9</strong>。
+      </span></li>
+  </ul>
+
+  <h2>工程说明</h2>
+  <ul>
+    <li><a href="../README.html">README —— 包结构、复现命令、当前状态</a>
+      <span class="desc">Go 工程各包 ↔ 契约条文的映射、一键复现命令、验收长跑结果。</span></li>
+  </ul>
+
+  <h2>历史文档（归档）</h2>
+  <p class="arch">
+    以下文档<strong>已不再维护、不作为结论来源</strong>，只作证据保留（在 <code>docs/archive/</code>）：
+    ARCHITECTURE / LEDGER / PRICE-ANCHOR / AUDIT / CHANGES / FEASIBILITY / 契约注释存档。<br>
+    它们各自的现行内容位置见 <a href="ACTIVE.html">ACTIVE</a> §6.2–§6.6 与
+    <code>docs/archive/README.md</code>。
+  </p>
+
+  <div class="note">
+    <strong>重新渲染</strong>（改了 <code>.md</code> 之后）：<br>
+    <code>powershell -ExecutionPolicy Bypass -File D:\Code\YehenalaMarket\tools\render_all.ps1</code><br>
+    脚本重渲染两个核心 + README，并校验产物本身（HTML 已更新、无渲染失败的公式），
+    再对契约跑 <code>html_audit</code>（必须"全部检查通过"）。<br>
+    ⚠ <strong>本页（<code>index.html</code>）是手写静态页，不由该脚本生成</strong>——
+    文档结构、轮次范围（现为 R1–R43）或待裁决项数变化时，需一并手工订正。
+  </div>
+</main>
+</body>
+</html>

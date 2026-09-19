@@ -99,7 +99,6 @@ func TestAuditSurvival(t *testing.T) {
 			Population:           10_000_000,
 			WealthTier:           10,
 			FinanceLaborPerLevel: 1000,
-			FinanceBuildCost:     400,
 			GovStartupFraction:   0.5,
 			ProductionInitLevel:  c.initLevel,
 		})

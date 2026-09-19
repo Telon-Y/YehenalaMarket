@@ -9,8 +9,18 @@ import (
 //
 // 这是本包存在的全部理由：只要每一类交易都借贷相等，
 // "货币守恒"就是构造性事实，不需要靠事后审计去追残差。
+//
+// 【前值 → 后值（2026-09-19，第 11 轮）】
+//   - ④政府采购建造力：旧签名 PowerPurchase(idx, net, taxRate) 含"政府自己收自己"
+//     的税腿；建造力交易现已定案**不计税**，改为 PowerPurchase(idx, amount)。
+//   - ⑤政府售力（PowerSale）与⑥政府自建付款（GovOwnBuildout）：两条流动随
+//     "整批采购 + 转售"口径一并删除，替换为投资池入池（InvestmentInflow）
+//     与投资池付政府（InvestmentPayGov）。
+//   - ⑦利润划分（ProfitSplit）→ ⑦利润归属（ProfitAllocate）：三条腿从
+//     "政府 / 资本 / 留存比例"改为"补足自身现金池 / 政府 / 所属资本建筑"。
 func TestAllTxnTypesBalance(t *testing.T) {
 	const t0 = 0.10
+	_ = t0
 	cases := []struct {
 		name string
 		txn  *Txn
@@ -18,12 +28,13 @@ func TestAllTxnTypesBalance(t *testing.T) {
 		{"①工资", Wage(3, []float64{1000, 400, 100})},
 		{"②消费", ConsumerPurchase(Household(3, 1, 3), 5, 2000, t0)},
 		{"③中间投入", Intermediate(2, 7, 1500, t0)},
-		{"④政府采购建造力", PowerPurchase(10, 5000, t0)},
-		{"⑤政府售力", PowerSale(Building(4), 3000, t0)},
-		{"⑤政府售力(资本)", PowerSale(Capital(), 3000, t0)},
-		{"⑥政府自建付款", GovOwnBuildout(10, 2500, t0)},
-		{"⑦利润划分", ProfitSplit(6, 700, 150, 150)},
-		{"⑦利润划分(亏损)", ProfitSplit(6, -700, -150, -150)},
+		{"④政府采购建造力（不计税）", PowerPurchase(10, 5000)},
+		{"⑤投资池入池（庄园）", InvestmentInflow(Building(12), 3000)},
+		{"⑤投资池入池（金融区）", InvestmentInflow(Capital(), 3000)},
+		{"⑥投资池付政府", InvestmentPayGov(2500)},
+		{"⑦利润归属（盈利）", ProfitAllocate(6, 300, 700, Capital(), 0)},
+		{"⑦利润归属（私人份额）", ProfitAllocate(6, 0, 210, Building(12), 490)},
+		{"⑦利润归属（亏损）", ProfitAllocate(6, 0, -210, Capital(), -490)},
 	}
 	for _, c := range cases {
 		if !c.txn.Balanced() {
@@ -74,11 +85,11 @@ func TestMoneyIsConservedByConstruction(t *testing.T) {
 		ConsumerPurchase(Household(0, 0, 3), 0, 800, t0),
 		ConsumerPurchase(Household(0, 1, 3), 0, 400, t0),
 		Intermediate(10, 5, 1200, t0),
-		PowerPurchase(10, 6000, t0),
-		PowerSale(Building(0), 2000, t0),
-		GovOwnBuildout(10, 1500, t0),
-		ProfitSplit(0, 700, 150, 150),
-		ProfitSplit(10, -200, -40, -40),
+		PowerPurchase(10, 6000),
+		InvestmentPayGov(2000),
+		InvestmentInflow(Capital(), 1500),
+		ProfitAllocate(0, 300, 700, Capital(), 0),
+		ProfitAllocate(10, 0, -40, Capital(), -160),
 		Wage(5, []float64{3000, 800, 200}),
 		ConsumerPurchase(Household(5, 2, 3), 3, 950, t0),
 	}
@@ -122,89 +133,86 @@ func TestInjectionIsOnlySourceOfGrowth(t *testing.T) {
 	}
 }
 
-// TestPowerPurchaseNetCostEqualsNet 校验"政府自己收自己"的税额不影响政府净支出。
+// TestPowerPurchaseIsTaxFreeAndBalanced 校验 §4.5.3 的两条裁决：
 //
-// 这是此前最易错的一处：政府自建/自购时，借方是 Gross、贷方有一笔 Tax 回政府，
-// 故政府池的净变动恰好等于 Net。若实现里省掉那笔 Tax 贷方，
-// 政府池就会净减 Gross，与卖方收到的 Net 不对等，留下 Net·t 的残差。
-func TestPowerPurchaseNetCostEqualsNet(t *testing.T) {
-	const net, t0 = 4000.0, 0.10
+//	① 建造力交易**不计税**（政府既是唯一买家又是税收收款人，计税只会原地回冲），
+//	   故政府池的净支出恰等于建造部门收到的全额；
+//	② 投资池偿还同一笔货款后，政府的建造力**净支出为 0**（G6）。
+//
+// 【前值 → 后值】旧口径下 PowerPurchase 是"借政府 Gross、贷卖方 Net、贷政府 Tax"，
+// 政府净支出恰为 Net；改造后 Gross ≡ Net（无税腿），且新增 InvestmentPayGov
+// 把同一笔钱从投资池收回政府，使净支出进一步归零。
+func TestPowerPurchaseIsTaxFreeAndBalanced(t *testing.T) {
+	const amount = 4000.0
 	a := NewAuditor()
 	a.SetBalance(Gov(), 100_000)
 	a.SetBalance(Building(10), 0)
+	a.SetBalance(Investment(), 10_000)
 
-	if err := a.Post(PowerPurchase(10, net, t0)); err != nil {
+	if err := a.Post(PowerPurchase(10, amount)); err != nil {
 		t.Fatalf("过账失败: %v", err)
 	}
-	if got := a.Balance(Gov()); math.Abs(got-(100_000-net)) > Epsilon {
-		t.Errorf("政府净支出 = %.4f，应恰为 Net = %.4f", 100_000-got, net)
+	if got := a.Balance(Gov()); math.Abs(got-(100_000-amount)) > Epsilon {
+		t.Errorf("政府支出 = %.4f，应恰为全额 %.4f（不计税）", 100_000-got, amount)
 	}
-	if got := a.Balance(Building(10)); math.Abs(got-net) > Epsilon {
-		t.Errorf("建造力部门入账 = %.4f，应恰为 Net = %.4f", got, net)
+	if got := a.Balance(Building(10)); math.Abs(got-amount) > Epsilon {
+		t.Errorf("建造力部门入账 = %.4f，应恰为全额 %.4f", got, amount)
 	}
 
-	// GovOwnBuildout 同构
-	a2 := NewAuditor()
-	a2.SetBalance(Gov(), 100_000)
-	if err := a2.Post(GovOwnBuildout(10, net, t0)); err != nil {
-		t.Fatalf("过账失败: %v", err)
+	// G6：投资池偿还同一笔货款 ⇒ 政府净支出 = 0
+	if err := a.Post(InvestmentPayGov(amount)); err != nil {
+		t.Fatalf("投资池偿还失败: %v", err)
 	}
-	if got := a2.Balance(Gov()); math.Abs(got-(100_000-net)) > Epsilon {
-		t.Errorf("政府自建净支出 = %.4f，应恰为 Net = %.4f", 100_000-got, net)
+	if got := a.Balance(Gov()); math.Abs(got-100_000) > Epsilon {
+		t.Errorf("政府建造力净支出应为 0，实际余额 %.4f（初值 100000）", got)
+	}
+	if got := a.Balance(Investment()); math.Abs(got-(10_000-amount)) > Epsilon {
+		t.Errorf("投资池余额 = %.4f，应为 %.4f", got, 10_000-amount)
 	}
 }
 
-// TestProfitSplitSumsToProfit 校验利润划分的借贷相等条件。
-func TestProfitSplitSumsToProfit(t *testing.T) {
+// TestProfitAllocateSumsToProfit 校验利润归属的借贷相等条件。
+//
+// 【前值 → 后值】旧测试遍历 (govShare, retainRatio) 两个比例；删除留存比例后，
+// 三条腿由 book.ProfitAllocate 按"先补池、再按持股"算出，本测试改为
+// 直接遍历三条腿的组合，验证 ProfitAllocate 恒满足 Σ借 = Σ贷。
+func TestProfitAllocateSumsToProfit(t *testing.T) {
 	a := NewAuditor()
-	for _, tc := range []struct{ profit, govShare, retainRatio float64 }{
-		{1000, 0.70, 0.50}, {-500, 0.70, 0.50}, {0, 0.70, 0.50},
-		{1234.56, 0, 1}, {999.99, 1, 0},
-	} {
-		gov, capital, retain := shareProfit(tc.profit, tc.govShare, tc.retainRatio)
-		tx := ProfitSplit(0, gov, capital, retain)
+	cases := []struct {
+		retain, gov, owner float64
+	}{
+		{300, 700, 0},      // 全额补池后无可分配（极端）
+		{0, 210, 490},      // 不补池，全部按 0.30 持股分配
+		{100, 270, 630},    // 部分补池
+		{0, -210, -490},    // 亏损：政府与所有者按持股承担
+		{0, 0, 0},          // 零利润
+		{-100, 210, 490},   // 负数补池（不应出现，但借贷仍须相等）
+	}
+	for _, tc := range cases {
+		tx := ProfitAllocate(0, tc.retain, tc.gov, Building(12), tc.owner)
 		if !tx.Balanced() {
-			t.Errorf("profit=%.2f: 借贷不等（净 %.9f）", tc.profit, tx.Net())
+			t.Errorf("retain=%.2f gov=%.2f owner=%.2f: 借贷不等（净 %.9f）",
+				tc.retain, tc.gov, tc.owner, tx.Net())
 		}
 		if err := a.Post(tx); err != nil {
-			t.Errorf("profit=%.2f: %v", tc.profit, err)
+			t.Errorf("retain=%.2f gov=%.2f owner=%.2f: %v", tc.retain, tc.gov, tc.owner, err)
 		}
 	}
-}
-
-// shareProfit 是本包对 §4.5.1 划分规则的复刻，用于自洽测试。
-//
-// 之所以在这里重写而不 import fiscal：ledger 是被所有业务包依赖的底层包，
-// 不能反向依赖 fiscal，否则会形成循环依赖。
-func shareProfit(profit, govShare, retainRatio float64) (gov, capital, retain float64) {
-	if govShare < 0 {
-		govShare = 0
-	}
-	if govShare > 1 {
-		govShare = 1
-	}
-	if retainRatio < 0 {
-		retainRatio = 0
-	}
-	if retainRatio > 1 {
-		retainRatio = 1
-	}
-	gov = profit * govShare
-	priv := profit * (1 - govShare)
-	retain = priv * retainRatio
-	capital = priv - retain
-	return
 }
 
 // TestAccountTotalMatchesSumOfPools 校验"货币总量 = 各类账户之和"是表的定义。
+//
+// 【前值 → 后值】§4.5.1b 新增投资池账户后，五类账户（政府/资本/投资池/建筑/人群）
+// 之和才是货币总量；旧断言只加了四类。
 func TestAccountTotalMatchesSumOfPools(t *testing.T) {
 	a := NewAuditor()
 	a.SetBalance(Gov(), 1000)
 	a.SetBalance(Capital(), 2000)
+	a.SetBalance(Investment(), 500)
 	a.SetBalance(Building(0), 3000)
 	a.SetBalance(Household(0, 0, 3), 4000)
 
-	sum := a.TotalOf(KindGovernment) + a.TotalOf(KindCapital) +
+	sum := a.TotalOf(KindGovernment) + a.TotalOf(KindCapital) + a.TotalOf(KindInvestment) +
 		a.TotalOf(KindBuilding) + a.TotalOf(KindHousehold)
 	if math.Abs(sum-a.Total()) > Epsilon {
 		t.Errorf("分类合计 %.2f ≠ 总量 %.2f", sum, a.Total())

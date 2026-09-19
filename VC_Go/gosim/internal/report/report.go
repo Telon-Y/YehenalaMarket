@@ -1,24 +1,33 @@
-// Package report 聚合诊断指标并判定契约 §8.4 的验收判据 A1–A6。
+// Package report 聚合诊断指标并判定契约 §8.4 的验收判据 A1–A8。
 //
-// 判据原文（1.0 生产与市场模拟.md §8.4，取末 2,000 周期为稳态窗口）：
+// 判据原文（1.0 生产与市场模拟.md §8.4）已由 **2026-09-19 第 15 轮裁决**修订，
+// 修订要点（§0.4 第 6 项）：
 //
-//	A1 价格在合法带内，且不长期贴边
-//	   |ln(P/Pcost)| ≤ ln5，贴 P_floor 或 P_ceil 的 tick 占比 < 5%
-//	A2 利润率有界，无大面积亏损
-//	   每建筑 margin ∈ [−10%, +25%]，行业加权平均 ≤ +15%
-//	A3 均衡点不再漂移
-//	   |Δ(P/Pcost)| < 1e-4 且 |Δ(S/a)| < 2e-4 每周期（末 500 周期均值）
+//	A1 价格不长期贴边
+//	   只查**贴边占比 < 5%**（删除原 |ln(P/P⁰)| ≤ ln5 的判定——该阈值与价格
+//	   钳制带 [0.2,5]×P⁰ 的上限完全重合，价格一旦触边即取等号，判据恒不通过）。
+//	   |ln(P/P⁰)| 的极值仍作为**报告量**输出。
+//	A2 部门不普遍亏损（原"逐部门 margin ∈ [−10%,+25%]"已废止）
+//	   封闭经济下全局总利润恒为 0 ⇒ 必然有部门亏损；改为按**等级加权的亏损占比**
+//	   ≤ 50%，并附加"全窗口 max|margin| ≤ 100%"以防数值爆炸。
+//	A3 均衡点不漂移（观察窗移到**人口增长停止之后**）
+//	   末 500 周期的 |Δ(P/P⁰)| 与 |Δ(S/D)| 均值小于阈值，且仅在人口年化
+//	   增长率 |r| < 0.1% 时才判定；人口仍在增长时判为未通过并注明"不适用"。
 //	A4 GDP 正值且不衰退
-//	   GDP > 0 全程；末 500 周期线性斜率 ≥ 0
-//	A5 无爆炸与无坍缩
-//	   建筑等级、价格、现金池均不出现单调冲向 0 或上界；人口增长率进入 [0%, +5%] 年化
+//	A5 无爆炸与无坍缩 + **人口有界**
+//	   末 2,000 周期内人口 max/min ≤ 4（R16 缺陷 2 的修复：原判据抓不到
+//	   +4.99%/年 复利至 2.34e11 的爆炸），且人口年化增长率 ∈ [0%, +5%]。
 //	A6 建造队列不饥饿
-//	   末 2,000 周期内队列非空 tick 占比 < 20%
+//	A7 政府债务不突破上限（**第 15 轮接入**）
+//	   末 2,000 周期逐 tick 满足 GovDebt ≤ GovDebtCap。
+//	A8 货币守恒（**第 15 轮接入**）
+//	   逐 tick 满足 ΔM == NewCapital + 诊断注入增量（§4.5.3）。
+//	A9 实际工农生产总值不衰退（**第 18 轮新增**）
+//	   用 §7.2 的实际口径（实物量 × 固定 $P_{ref}$）判定真实增长：全程 > 0 且
+//	   末 500 周期斜率 ≥ 0。它与 A4（名义 GDP）并列，专用于**剔除货币/价格的干扰**——
+//	   实测长跑里名义 GDP 涨到 2.6e13，而居民实际货币余额从 6.7e6 掉到 319。
 //
-// 本包【同时报告判据自身的可实现性问题】，不掩盖矛盾：
-//   - A1 的阈值 ln5 与钳制区间上限 5×Pcost 完全重合，价格一旦触边即取等号，
-//     而"贴边占比 < 5%"正是要禁止触边 ⇒ 该判据对任何触边情形恒为未通过；
-//   - A3 与 §6.5 的人口增长数学互斥：人口年增 5% 时 Δ(S/a) ≈ 9.4e-4 > 2e-4 限值。
+// 本包【同时报告判据自身的可实现性问题】，不掩盖矛盾。
 package report
 
 import (
@@ -73,12 +82,17 @@ func Assess(snaps []*sim.Snapshot, goods []model.Good, params model.Params) *Sum
 	for _, sn := range tail {
 		for i := 0; i < n; i++ {
 			g := goods[i]
-			floor := g.PriceFloorRatio * g.Pcost
-			ceil := g.PriceCeilRatio * g.Pcost
+			// 【§七 R32】参考价 P⁰ 取**快照里的当期零利润价**（静态模式下它 ≡ Good.Pcost）。
+			ref := g.Pcost
+			if i < len(sn.Pzero) && sn.Pzero[i] > 0 {
+				ref = sn.Pzero[i]
+			}
+			floor := g.PriceFloorRatio * ref
+			ceil := g.PriceCeilRatio * ref
 			if sn.Prices[i] <= floor*1.001 || sn.Prices[i] >= ceil*0.999 {
 				clampShare[i]++
 			}
-			l := math.Abs(math.Log(sn.Prices[i] / g.Pcost))
+			l := math.Abs(math.Log(sn.Prices[i] / ref))
 			if l > maxLog[i] {
 				maxLog[i] = l
 			}
@@ -92,9 +106,6 @@ func Assess(snaps []*sim.Snapshot, goods []model.Good, params model.Params) *Sum
 		if clampShare[i] >= 0.05 {
 			a1Pass = false
 		}
-		if maxLog[i] > math.Log(5)+1e-9 {
-			a1Pass = false
-		}
 		if clampShare[i] > worstClamp {
 			worstClamp = clampShare[i]
 		}
@@ -104,18 +115,29 @@ func Assess(snaps []*sim.Snapshot, goods []model.Good, params model.Params) *Sum
 	}
 	sum.Verdicts = append(sum.Verdicts, Verdict{
 		ID: "A1", Pass: a1Pass,
-		Text:   "价格在合法带内且贴边占比 < 5%",
-		Detail: fmt.Sprintf("最大贴边率=%.2f%%  max|ln(P/Pcost)|=%.4f（限 %.4f）", worstClamp*100, worstLog, math.Log(5)),
-		Note:   "阈值 ln5 与钳制上限 5×Pcost 完全重合：价格触边时 |ln(P/Pcost)| 恰等于 ln5，而贴边又是本判据禁止的行为，故该判据对任何触边情形恒为未通过。",
+		Text:   "价格不长期贴边：贴边占比 < 5%（各商品）",
+		Detail: fmt.Sprintf("最大贴边率=%.2f%%  max|ln(P/P⁰)|=%.4f（仅报告，不判定）", worstClamp*100, worstLog),
+		Note:   "2026-09-19 第 15 轮裁决：删除原 |ln(P/P⁰)| ≤ ln5 的判定——它与钳制带上限完全重合，对任何触边情形恒为未通过。极值仍作报告量。",
 	})
 
-	// ---- A2 ----
+	// ---- A2（修订：按等级加权的亏损占比）----
+	//
+	// 【口径】只扫 **11 种商品部门**（i < len(goods)）：金融区与宅邸庄园不是商品生产者，
+	// 它们的"利润率"分母是自身工资（工资→0 时会数值爆炸），不属本条判据。
+	// 前值实现用 len(sn.Margins)（13），会把金融区卷进来，实测 A2 min = −1.34e10%。
 	mMin, mMax := math.Inf(1), math.Inf(-1)
+	// lossShare：逐 tick 的"亏损等级占全部等级的比例"，取窗口内**平均**。
+	var lossShareSum float64
+	var lossTicks float64
 	for _, sn := range tail {
-		for i := 0; i < n; i++ {
-			// 金融区不参与 §8.4 的建筑利润率判据（它不是商品生产者）
-			if i >= len(sn.Margins) {
+		var lossLv, allLv float64
+		for i := 0; i < n && i < len(sn.Margins) && i < len(sn.Levels); i++ {
+			if sn.Levels[i] <= 0 {
 				continue
+			}
+			allLv += sn.Levels[i]
+			if sn.Margins[i] < 0 {
+				lossLv += sn.Levels[i]
 			}
 			if sn.Margins[i] < mMin {
 				mMin = sn.Margins[i]
@@ -124,13 +146,18 @@ func Assess(snaps []*sim.Snapshot, goods []model.Good, params model.Params) *Sum
 				mMax = sn.Margins[i]
 			}
 		}
+		if allLv > 0 {
+			lossShareSum += lossLv / allLv
+			lossTicks++
+		}
+	}
+	lossShare := 0.0
+	if lossTicks > 0 {
+		lossShare = lossShareSum / lossTicks
 	}
 	var num, den float64
 	for _, sn := range tail {
-		for i := 0; i < n; i++ {
-			if i >= len(sn.Margins) {
-				continue
-			}
+		for i := 0; i < n && i < len(sn.Margins) && i < len(sn.Levels); i++ {
 			num += sn.Margins[i] * sn.Levels[i]
 			den += sn.Levels[i]
 		}
@@ -139,14 +166,27 @@ func Assess(snaps []*sim.Snapshot, goods []model.Good, params model.Params) *Sum
 	if den > 0 {
 		wAvg = num / den
 	}
+	// 【防爆上限 4.5 的来源】§3.1 的实际成本基利润率 = P/P⁰ − 1，而价格被钳制在
+	// [0.2, 5]×P⁰(t)（§2.4）⇒ 利润率合法区间是 [−80%, +400%]。留 0.5 的松弛：
+	// 钳制带用的是**上一 tick 结算后**的 P⁰，而 margin 用当期价格，两者可微幅错位。
 	sum.Verdicts = append(sum.Verdicts, Verdict{
-		ID: "A2", Pass: mMin >= -0.10-1e-9 && mMax <= 0.25+1e-9 && wAvg <= 0.15+1e-9,
-		Text:   "每建筑 margin ∈ [−10%, +25%]，行业加权平均 ≤ +15%",
-		Detail: fmt.Sprintf("min=%.2f%% max=%.2f%% 加权=%.2f%%", mMin*100, mMax*100, wAvg*100),
-		Note:   "封闭经济下全局总利润恒为 0（会计恒等式），因此 11 个部门必然分为盈利与亏损两组；配合价格钳制带 [0.2,5]×Pcost，两者不可能同时落进 [−10%,+25%]。详见 fiscal 包注释。",
+		ID: "A2", Pass: lossShare <= 0.50+1e-9 && math.Abs(mMin) <= 4.5 && mMax <= 4.5,
+		Text:   "部门不普遍亏损：等级加权亏损占比 ≤ 50%，且 |margin| ≤ 450%",
+		Detail: fmt.Sprintf("亏损等级占比=%.2f%% min=%.2f%% max=%.2f%% 加权=%.2f%%", lossShare*100, mMin*100, mMax*100, wAvg*100),
+		Note:   "2026-09-19 第 15 轮裁决：原「逐部门 margin ∈ [−10%,+25%]」与「封闭经济全局总利润恒为 0」数学互斥，已废止；改为 ① 按等级加权的亏损占比 ≤ 50%，② 防爆上限 ±450%（= 价格钳制带 [0.2,5]×P⁰ 对应的利润率区间 [−80%,+400%] 加松弛）。同时把口径限定在 11 种商品部门（金融区/宅邸庄园的\"利润率\"分母是自身工资，不属本条）。",
 	})
 
-	// ---- A3 ----
+	// ---- A3（修订：观察窗移到人口增长停止之后）----
+	// 人口年化增长率取**末 500 周期窗口**（与漂移量同窗口）的端点计算。
+	popAnnualA3 := 0.0
+	if len(last500) >= 2 {
+		f0 := last500[0]
+		last := last500[len(last500)-1]
+		if f0.Population > 0 && last.Tick > f0.Tick {
+			popAnnualA3 = math.Pow(last.Population/f0.Population, float64(params.TicksPerYear)/float64(last.Tick-f0.Tick)) - 1
+		}
+	}
+	popStopped := math.Abs(popAnnualA3) < 0.001
 	var dPR, dSa float64
 	var cnt float64
 	for k := 1; k < len(last500); k++ {
@@ -161,11 +201,15 @@ func Assess(snaps []*sim.Snapshot, goods []model.Good, params model.Params) *Sum
 		dPR /= cnt
 		dSa /= cnt
 	}
+	a3Note := "2026-09-19 第 15 轮裁决：观察窗移到**人口增长停止之后**——人口仍在增长时本判据不可判定（原判据与 §6.5 的人口增长数学互斥：人口年增 5% 时 S/a 每 tick 漂移约 9.4e-4，超限一个数量级）。"
+	if !popStopped {
+		a3Note += fmt.Sprintf(" 当前窗口人口年化 %.3f%%，故判为未通过（不适用）。", popAnnualA3*100)
+	}
 	sum.Verdicts = append(sum.Verdicts, Verdict{
-		ID: "A3", Pass: dPR < 1e-4 && dSa < 2e-4,
-		Text:   "均衡点不漂移：|Δ(P/Pcost)| < 1e-4 且 |Δ(S/a)| < 2e-4 每周期",
-		Detail: fmt.Sprintf("Δ(P/Pcost)=%.3e  Δ(S/a)=%.3e", dPR, dSa),
-		Note:   "与 §6.5 的人口增长数学互斥：人口年增 5% 时 S/a 每 tick 漂移约 9.4e-4，超出 2e-4 限值一个数量级。",
+		ID: "A3", Pass: popStopped && dPR < 1e-4 && dSa < 2e-4,
+		Text:   "均衡点不漂移：人口停增后 |Δ(P/P⁰)| < 1e-4 且 |Δ(S/D)| < 2e-4 每周期",
+		Detail: fmt.Sprintf("Δ(P/P⁰)=%.3e  Δ(S/D)=%.3e  人口年化=%.3f%%（停增=%v）", dPR, dSa, popAnnualA3*100, popStopped),
+		Note:   a3Note,
 	})
 
 	// ---- A4 ----
@@ -194,7 +238,7 @@ func Assess(snaps []*sim.Snapshot, goods []model.Good, params model.Params) *Sum
 		Note:   "契约 §7 的 GDP 含「各建筑现金池期末总额」。引入政府后，政府现金池允许为负（§4.5.4 的债务），故只计其正值部分；债务另行报告。",
 	})
 
-	// ---- A5 ----
+	// ---- A5（修订：增加"人口有界"）----
 	first, last := snaps[0], snaps[len(snaps)-1]
 	var lv0, lvT float64
 	for _, v := range first.Levels {
@@ -207,10 +251,26 @@ func Assess(snaps []*sim.Snapshot, goods []model.Good, params model.Params) *Sum
 	if first.Population > 0 && last.Tick > first.Tick {
 		popAnnual = math.Pow(last.Population/first.Population, float64(params.TicksPerYear)/float64(last.Tick-first.Tick)) - 1
 	}
+	// 人口有界：末 2,000 周期的 max/min。
+	popMin, popMax := math.Inf(1), 0.0
+	for _, sn := range tail {
+		if sn.Population < popMin {
+			popMin = sn.Population
+		}
+		if sn.Population > popMax {
+			popMax = sn.Population
+		}
+	}
+	popRatio := 1.0
+	if popMin > 1e-9 {
+		popRatio = popMax / popMin
+	}
+	popBounded := popRatio <= 4.0
 	sum.Verdicts = append(sum.Verdicts, Verdict{
-		ID: "A5", Pass: popAnnual >= -1e-9 && popAnnual <= 0.05+1e-9 && lvT > 0,
-		Text:   "无爆炸无坍缩；人口增长率 ∈ [0%, +5%] 年化",
-		Detail: fmt.Sprintf("人口年化=%.2f%%  总级数 %.0f→%.0f", popAnnual*100, lv0, lvT),
+		ID: "A5", Pass: popAnnual >= -1e-9 && popAnnual <= 0.05+1e-9 && lvT > 0 && popBounded,
+		Text:   "无爆炸无坍缩：人口有界（窗口 max/min ≤ 4）且年化 ∈ [0%, +5%]",
+		Detail: fmt.Sprintf("人口年化=%.2f%%  窗口 max/min=%.2f  总级数 %.0f→%.0f", popAnnual*100, popRatio, lv0, lvT),
+		Note:   "2026-09-19 第 15 轮裁决（修 R16 缺陷 2）：原判据只有增长率区间，而上限 +5%/年 本身就是爆炸的成因——R15/R34 实测人口复利到 1.17e11 / 2.34e11 仍判「通过」。现增加「窗口 max/min ≤ 4」的有界性判定。",
 	})
 
 	// ---- A6 ----
@@ -226,6 +286,95 @@ func Assess(snaps []*sim.Snapshot, goods []model.Good, params model.Params) *Sum
 		Text:   "建造队列不饥饿：队列非空 tick 占比 < 20%",
 		Detail: fmt.Sprintf("建造力成交 tick 占比=%.1f%%  总级数 %.0f→%.0f", share*100, lv0, lvT),
 		Note:   "若资本存量在增长（lvT > lv0），队列忙碌是健康信号而非饥饿，故此处加入增长豁免。",
+	})
+
+	// ---- A7（本轮接入）：政府债务不突破上限 ----
+	worstDebtRatio := 0.0
+	debtBreach := 0
+	for _, sn := range tail {
+		cap := sn.GovDebtCap
+		ratio := 0.0
+		if cap > 1e-9 {
+			ratio = sn.GovDebt / cap
+		} else if sn.GovDebt > 1e-9 {
+			ratio = math.Inf(1)
+		}
+		if ratio > worstDebtRatio {
+			worstDebtRatio = ratio
+		}
+		if sn.GovDebt > cap+1e-6 {
+			debtBreach++
+		}
+	}
+	a7Pass := debtBreach == 0
+	sum.Verdicts = append(sum.Verdicts, Verdict{
+		ID: "A7", Pass: a7Pass,
+		Text:   "政府债务不突破上限（末 2,000 周期逐 tick）",
+		Detail: fmt.Sprintf("最大债务/上限=%.4f  越界 tick 数=%d/%d", worstDebtRatio, debtBreach, len(tail)),
+		Note:   "2026-09-19 第 15 轮裁决：A7 本轮接入 report.Assess（此前只由审计套件独立守住）。",
+	})
+
+	// ---- A8（本轮接入）：货币守恒 ----
+	// 逐 tick 恒等式：ΔM == NewCapital + 诊断注入增量（§4.5.3）。
+	//
+	// 【容差口径（2026-09-19 第 16 轮）】用**相对容差 1e-8 × 货币存量**（下限 1e-3 元）：
+	//
+	//   - 逐 tick 的残差来自双精度在几十万笔过账上的累积舍入，量级约为
+	//     "每笔 ~1 ulp(余额) × √笔数"：实测 10,000 tick 长跑在货币 1.5e7 时
+	//     单 tick 残差最大 **2.88e-02 元 = 相对 1.9e-9**（`out/verify/r40-warehouse-10000.txt`）；
+	//   - 双精度有效位是 2.2e-16，故 1e-8 相对容差 = 约 1e8 倍有效位，
+	//     足以覆盖"1e4 tick × 每 tick 1e5 笔"的累积舍入；
+	//   - 真实缺陷的量级完全不同：历史实测的漏记是 2.1e6 元（逐建筑对账）与
+	//     每 tick 净损 15%~34%（工资未付出），都远超该容差。
+	maxMoneyResidual, maxMoneyTol := 0.0, 1e-3
+	for k := 1; k < len(snaps); k++ {
+		prev, cur := snaps[k-1], snaps[k]
+		dM := cur.TotalMoney - prev.TotalMoney
+		expect := cur.NewCapital + (cur.Infusion - prev.Infusion)
+		if r := math.Abs(dM - expect); r > maxMoneyResidual {
+			maxMoneyResidual = r
+		}
+		if tol := 1e-8 * math.Abs(cur.TotalMoney); tol > maxMoneyTol {
+			maxMoneyTol = tol
+		}
+	}
+	a8Pass := maxMoneyResidual <= maxMoneyTol
+	sum.Verdicts = append(sum.Verdicts, Verdict{
+		ID: "A8", Pass: a8Pass,
+		Text:   "货币守恒：逐 tick ΔM == NewCapital + 诊断注入（§4.5.3）",
+		Detail: fmt.Sprintf("最大逐 tick 残差=%.3e 元（容差 %.3e = max(1e-3, 1e-8×货币存量)，全程 %d tick）", maxMoneyResidual, maxMoneyTol, len(snaps)-1),
+		Note:   "2026-09-19 第 15 轮裁决：A8 本轮接入 report.Assess（此前只由审计套件与 cmd/diag_govcash 独立守住）。容差为相对口径（1e-8 × 货币存量），以容纳上万 tick 的浮点累积舍入；真实记账缺陷（漏一条腿）的量级是元~万元，远超该容差。",
+	})
+
+	// ---- A9（本轮新增）：实际工农生产总值不衰退 ----
+	//
+	// 【为什么需要它】A1–A8 里与经济表现有关的那几条用的是**名义**口径（价格、GDP、债务）：
+	// 10,000 tick 长跑实测价格指数 ×98,704、货币量 3.2e7，而居民**实际**货币余额从 6.7e6
+	// 掉到 319——名义数字看不出经济是在增长还是在通胀（`docs/ACTIVE.md` §七 R41）。
+	//
+	// A9 用 §7.2 的**实际工农生产总值**（实物量 × 固定 P_ref）：
+	//   - 全程 > 0，且末 500 周期线性斜率 ≥ 0；
+	//   - 与价格水平、税率、货币存量、政府债务**完全无关**。
+	minAdded := math.Inf(1)
+	addedSeries := make([]float64, len(last500))
+	for k, sn := range snaps {
+		if sn.ProductAdded < minAdded {
+			minAdded = sn.ProductAdded
+		}
+		if k >= len(snaps)-len(last500) {
+			addedSeries[k-(len(snaps)-len(last500))] = sn.ProductAdded
+		}
+	}
+	a9Slope := linearSlope(addedSeries)
+	lastSnap := snaps[len(snaps)-1]
+	a9Pass := minAdded > 0 && a9Slope >= 0
+	sum.Verdicts = append(sum.Verdicts, Verdict{
+		ID: "A9", Pass: a9Pass,
+		Text: "实际工农生产总值不衰退（固定参考价，与货币无关）",
+		Detail: fmt.Sprintf("最低实际增加值=%.0f  末 500 周期斜率=%.3e  末态=%.0f（指数 %.3f，人均 %.4f）",
+			minAdded, a9Slope, lastSnap.ProductAdded, lastSnap.ProductIndex, lastSnap.ProductPerCapita),
+		Note: "2026-09-19 第 18 轮新增：用 §7.2 的实际口径（实物量 × 固定 P_ref）判断真实增长，" +
+			"以剔除名义通胀/通缩的干扰。它与 A4（名义 GDP）并列：A4 看货币面，A9 看实物面。",
 	})
 
 	for _, v := range sum.Verdicts {

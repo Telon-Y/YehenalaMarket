@@ -39,6 +39,7 @@ import (
 	"math"
 	"testing"
 
+	"yehenala/market/internal/calibrate"
 	"yehenala/market/internal/model"
 )
 
@@ -80,7 +81,9 @@ func equilibriumLevels(st *State, pop float64) (levels, finalDemand []float64, i
 	levels = make([]float64, n)
 
 	isProducer := func(i int) bool {
-		return !st.Buildings[i].Spec.IsFinance &&
+		// 【§4.5.6】判据是 Produces()：仓库/消费代理没有配方（Recipe.Qty = 0），
+		// 若被当作生产者，`finalDemand[Output=0]/Qty=0` 会得到 +Inf。
+		return st.Buildings[i].Spec.Produces() &&
 			st.Buildings[i].Spec.Recipe.Output != powerGoodIndex
 	}
 	// 初值：只按最终需求布点（不含中间投入），随后迭代补上链条消耗
@@ -138,15 +141,16 @@ func equilibriumLevels(st *State, pop float64) (levels, finalDemand []float64, i
 //
 //	k = 每级工资 / 每级最终需求价值(P_cost)
 //
-// 于是"工资收入 = 最终需求价值"只在不收税时成立。收全过程 10% 交易税后，
-// 居民可支配额只剩 1/(1+t) 的水平，而 §6.3 的需求表并未随税率缩小。
+// 于是"工资收入 = 最终需求价值"只在不收税时成立。收全过程交易税后（§4.5.6：
+// ν=τ=2.5%，实现替身 t=0.05），居民可支配额只剩 1/(1+t) 的水平，
+// 而 §6.3 的需求表并未随税率缩小。
 func budgetFeasibility(st *State, totalLevels, demandValue float64) (wage, avail, ratio, ratioNet float64) {
 	wage = totalLevels * 5000 * model.AverageWage()
 	t := st.Params.TaxRate
 	// 居民支付的是含税总额，故能买到的税前商品价值 = 现金 / (1+t)。
 	avail = wage / (1 + t)
 	ratio = wage / demandValue     // 不收税时的覆盖率
-	ratioNet = avail / demandValue // 实收 10% 税后的覆盖率
+	ratioNet = avail / demandValue // 收税后（§4.5.6 的替身税率 t）的覆盖率
 	return
 }
 
@@ -169,7 +173,10 @@ func TestAuditEquilibrium(t *testing.T) {
 	var totalLevels float64
 	for i := range st.Buildings {
 		b := &st.Buildings[i]
-		if b.Spec.IsFinance || b.Spec.Recipe.Output == powerGoodIndex {
+		// 金融区与宅邸庄园都是推导级数、不生产商品，不参与"起始 < 平衡"的判定；
+		// 【§4.5.6】仓库/消费代理同样没有配方（也不参与），故判据用 Produces()，
+		// 否则会把它们按"Output=0（谷物）"误判成谷物农场。
+		if !b.Spec.Produces() || b.Spec.Recipe.Output == powerGoodIndex {
 			continue
 		}
 		verdict := "OK"
@@ -208,8 +215,8 @@ func TestAuditEquilibrium(t *testing.T) {
 	fmt.Printf("  工资总额（L*×5000×6.75）    = %12.2f 元\n", wage)
 	fmt.Printf("  最终需求价值（P_cost 计价） = %12.2f 元\n", demandValue)
 	fmt.Printf("  不收税覆盖率 工资/需求      = %12.6f\n", ratio)
-	fmt.Printf("  10%% 税后可购价值 工资/1.1   = %12.2f 元\n", avail)
-	fmt.Printf("  10%% 税后覆盖率              = %12.6f\n", ratioNet)
+	fmt.Printf("  %.1f%% 税后可购价值 工资/(1+t) = %12.2f 元\n", st.Params.TaxRate*100, avail)
+	fmt.Printf("  %.1f%% 税后覆盖率              = %12.6f\n", st.Params.TaxRate*100, ratioNet)
 	if ratioNet < 1 {
 		fmt.Printf("  ⇒ 结构性缺口：%.4f%%，居民在手现金买不下 §6.3 表列的名义需求\n",
 			(1-ratioNet)*100)
@@ -257,44 +264,103 @@ func TestAuditLevelCompositionGap(t *testing.T) {
 	// 实际布点（契约默认：每种生产建筑统一 5 级）
 	var actualLevels, eqLevels float64
 	for i := range st.Buildings {
-		if st.Buildings[i].Spec.IsFinance || st.Buildings[i].Spec.Recipe.Output == powerGoodIndex {
+		// 【§4.5.6】用 Produces() 而不是 IsNonMarket()：仓库/消费代理没有配方，
+		// 不属于"生产级数"的统计口径。
+		if !st.Buildings[i].Spec.Produces() || st.Buildings[i].Spec.Recipe.Output == powerGoodIndex {
 			continue
 		}
 		actualLevels += st.Buildings[i].Level
 		eqLevels += eq[i]
 	}
-	var demandValue float64
+	// 【Leontief 恒等式的口径（2026-09-19 第 16 轮）】该恒等式成立的前提是
+	// 零利润价取自 **p = Aᵀp + l**（无买家加载系数）。仓库落地后
+	// `Good.Pcost` 是 w·Aᵀp + l 的解，用它反算出的"需求价值"是**买家的实付**，
+	// 比"生产者的收入"多出一个 w 倍的楔子（加价 + 消费税）。
+	// 故恒等式核对必须用无楔子的零利润价 P⁽¹⁾，与工资口径同源。
+	pNoWedge := demandValueAtNoWedge(st)
+	var demandValue, demandValueBuyer float64
 	for g := range finalDemand {
-		demandValue += finalDemand[g] * st.Goods[g].Pcost
+		demandValue += finalDemand[g] * pNoWedge[g]
+		demandValueBuyer += finalDemand[g] * st.Goods[g].Pcost
 	}
 
-	wage := func(lv float64) float64 { return lv * 5000 * model.AverageWage() }
+	// 【§5 第 20 轮改口径】工资不再是"级数 × 常数"：农业建筑（谷物 / 棉花）与
+	// 宅邸庄园走"农民 7 元"结构，每级工资 28,250（城镇类仍为 33,750）。
+	// 故工资必须**逐建筑**按 WagePerLevel() 加权，恒等式随之变为
+	//
+	//	Σ_k WagePerLevel_k · L*_k ≡ Σ P⁽¹⁾·最终需求
+	//
+	// （仍然与 k 齐次，故"比值只由起点构成决定"这一结论不变。）
+	wage := func(lv []float64) float64 {
+		var s float64
+		for i := range st.Buildings {
+			if i < len(lv) {
+				s += lv[i] * st.Buildings[i].Spec.WagePerLevel()
+			}
+		}
+		return s
+	}
+	actualVec := make([]float64, len(st.Buildings))
+	eqVec := make([]float64, len(st.Buildings))
+	for i := range st.Buildings {
+		if !st.Buildings[i].Spec.Produces() || st.Buildings[i].Spec.Recipe.Output == powerGoodIndex {
+			continue
+		}
+		actualVec[i] = st.Buildings[i].Level
+		eqVec[i] = eq[i]
+	}
 
-	fmt.Printf("\n【比值分解】人口 %.0f   k = %.4f\n", pop, st.demandScale)
+	fmt.Printf("\n【比值分解】人口 %.0f   k = %.4f   w = %.5f\n", pop, st.demandScale, st.Params.BuyerWedge())
 	fmt.Printf("%-26s %14s %14s %14s\n", "", "生产级数", "工资总额", "工资/需求价值")
 	fmt.Printf("%-26s %14.2f %14.0f %14.6f\n", "实际布点（统一 5 级）",
-		actualLevels, wage(actualLevels), wage(actualLevels)/demandValue)
+		actualLevels, wage(actualVec), wage(actualVec)/demandValue)
 	fmt.Printf("%-26s %14.2f %14.0f %14.6f\n", "需求匹配布点 L*",
-		eqLevels, wage(eqLevels), wage(eqLevels)/demandValue)
-	fmt.Printf("\n最终需求价值（P_cost 计价）= %.2f，k = %.4f\n", demandValue, st.demandScale)
+		eqLevels, wage(eqVec), wage(eqVec)/demandValue)
+	fmt.Printf("\n最终需求价值（无楔子 P⁽¹⁾ 计价）= %.2f；买家实付（含加价与消费税）= %.2f\n",
+		demandValue, demandValueBuyer)
+	fmt.Printf("k = %.4f\n", st.demandScale)
 
 	// 需求匹配布点上的比值必须为 1（这是 Leontief 恒等式，不是拟合结果）
-	if got := wage(eqLevels) / demandValue; math.Abs(got-1) > 1e-3 {
+	if got := wage(eqVec) / demandValue; math.Abs(got-1) > 1e-3 {
 		t.Errorf("需求匹配布点上 工资/最终需求价值 = %.6f，应恒等于 1"+
-			"（Leontief 恒等式：33750·ΣL* ≡ Σ P_cost·最终需求）", got)
+			"（Leontief 恒等式：Σ WagePerLevel·L* ≡ Σ P_cost·最终需求）", got)
 	}
 
 	// 实际布点的比值必须恰等于"级数构成比"——这就是缺口的全部来源。
 	// 容差 1e-4：两者只在浮点意义上"恒等"，残差 6e-6 来自不动点迭代
 	// （tol=1e-11）在 688 级量级上的累积误差，不是第二个缺口来源。
+	//
+	// 【§5 第 20 轮】加权工资后，"工资比"不再逐字等于"级数比"（农业级的权重
+	// 较低），但两者仍只差一个**由构成决定的**常数因子；这里同时报告两者。
 	ratioOfLevels := actualLevels / eqLevels
-	if got := wage(actualLevels) / demandValue; math.Abs(got-ratioOfLevels) > 1e-4 {
-		t.Errorf("实际布点比值 %.6f 与级数构成比 %.6f 不符：缺口还有别的来源",
-			got, ratioOfLevels)
+	wageRatio := wage(actualVec) / wage(eqVec)
+	if got := wage(actualVec) / demandValue; math.Abs(got-wageRatio) > 1e-6 {
+		t.Errorf("实际布点比值 %.6f 与加权级数构成比 %.6f 不符：缺口还有别的来源",
+			got, wageRatio)
 	}
-	fmt.Printf("\n⇒ 工资/需求价值 = 实际布点级数 / 需求匹配布点级数 = %.2f / %.2f = %.4f\n",
-		actualLevels, eqLevels, ratioOfLevels)
+	if math.Abs(wageRatio-ratioOfLevels) > 1e-3 {
+		t.Logf("提示：加权工资比 %.6f 与纯级数比 %.6f 相差 %.2f%%（农业级权重较低所致）",
+			wageRatio, ratioOfLevels, (wageRatio/ratioOfLevels-1)*100)
+	}
+	fmt.Printf("\n⇒ 工资/需求价值 = 加权实际布点 / 加权需求匹配布点 = %.4f / %.4f = %.4f\n",
+		actualLevels, eqLevels, wageRatio)
 	fmt.Printf("   故该比值是【起点产能构成】的函数：k 在分子分母各出现一次、恰好抵消，\n")
 	fmt.Printf("   改需求缩放系数 k 无法改变它（契约 §1 的判断正确），\n")
 	fmt.Printf("   但缺口的位置是【起点布点】，不是【§6.3 需求表的量级】。\n")
+}
+
+// demandValueAtNoWedge 返回**无买家加载系数**（w = 1）的零利润价向量。
+//
+// 用途：Leontief 恒等式 `工资(L*) ≡ Σ P·最终需求` 只在 p = Aᵀp + l 的口径下成立。
+// 仓库落地后 `Good.Pcost` 含 w，故本函数按 w = 1 重解一次，供恒等式核对使用。
+func demandValueAtNoWedge(st *State) []float64 {
+	if st.calibration == nil {
+		return nil
+	}
+	l := calibrate.UnitLaborCost(st.buildingSpecs())
+	p, err := calibrate.PriceEquation(st.calibration.A, l, 1.0, 1.0)
+	if err != nil {
+		return nil
+	}
+	return p
 }

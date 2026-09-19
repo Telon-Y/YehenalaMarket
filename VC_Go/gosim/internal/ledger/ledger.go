@@ -18,34 +18,35 @@
 //
 // ============================ 资金流量表 ============================
 //
-// 账户共 15 个：
+// 账户共 16 个（§4.5.1b 修订：新增与政府/资本/建筑/人群并列的**投资池**）：
 //
 //	政府现金池      Gov
-//	资本现金池      Capital            （金融区持有）
-//	建筑现金池 ×12   Building[i]        （i = 0..11，含金融区自身）
+//	资本现金池      Capital            （金融区持有，§4.5.2）
+//	投资池          Investment         （投资资金，§4.5.1b）
+//	建筑现金池 ×12   Building[i]        （i = 0..12，含金融区与宅邸庄园）
 //	人群现金池 ×N    Household[场地][阶级]
 //
 // 交易类型与借贷方向（借 = 余额减少，贷 = 余额增加）：
 //
-//	① 工资         借 建筑[i]                    贷 人群[i][各阶级]
-//	② 消费         借 人群[池]                   贷 建筑[产出该商品的卖方]
+//	① 工资         借 建筑[i]（金融区取 Capital）  贷 人群[i][各阶级]
+//	② 消费         借 人群[池]                   贷 建筑[产出该商品的卖方 / 宅邸庄园]
 //	                                             贷 政府（税额）
 //	③ 中间投入     借 建筑[买方]                 贷 建筑[卖方]
 //	                                             贷 政府（税额）
 //	④ 政府采购建造力 借 政府                      贷 建筑[建造力]
-//	                                             贷 政府（税额）※自己收自己
-//	⑤ 售力给扩建方   借 建筑[付款方]或资本        贷 政府（净额）
-//	                                             贷 政府（税额）※同上
-//	⑥ 政府自建付款   借 政府                      贷 建筑[建造力]
-//	                                             贷 政府（税额）※同上
-//	⑦ 利润划分       借 建筑[i]                  贷 政府 / 资本 / 建筑[i]留存
-//	                                             三者之和恒等于利润
+//	                                             ※按需即买即用、不计税（§4.5.3 G2）
+//	⑤ 投资池偿还     借 投资池                    贷 政府
+//	                                             ※G6：政府净支出为 0，无自反税
+//	⑥ 利润归属       借 建筑[i]                  贷 建筑[i]补足 / 政府 / 所属资本建筑
+//	                                             三者之和恒等于纯利（§4.5.1，无留存比例）
+//	⑦ 资本建筑入池   借 资本建筑账户               贷 投资池
+//	                                             ※庄园用 Building[Manor]，金融区用 Capital
 //	⑧ 新建营运本金   借 （无）                    贷 建筑[i]
 //	                                             ※唯一合法的货币注入
 //
-// ④⑤⑥ 中的税额是"政府自己收自己"：资金不离开政府池，故对政府池的净影响
-// 只等于净额。把它们显式写出（而不是省掉）是为了让每笔交易都满足借贷相等，
-// 从而不必在别处补记任何补偿项——这正是此前反复出错的地方。
+// §4.5.3 修订后**不存在"政府自己收自己"的自反税腿**：建造力交易不计税
+// （G2 采购与 G6 偿还都按净额成交），故政府买建造力、再收投资池的偿还，
+// 净支出恒为 0。历史上省掉自反税腿造成的 Net·t 残差因此从结构上消失。
 //
 // ============================ 与 Cash.Add 的关系 ============================
 //
@@ -58,11 +59,31 @@ import (
 	"math"
 )
 
-// Epsilon 是借贷相等的容差。
+// Epsilon 是借贷相等的**绝对**容差下限。
 //
 // 取 1e-6 元：远小于任何有经济意义的金额（最小货币单位是"元"），
-// 又足以吸收浮点累加误差。超差即报错，不做静默修补。
+// 又足以吸收小额交易的浮点累加误差。超差即报错，不做静默修补。
+//
+// 【2026-09-19 第 15 轮补：量级相关的相对容差】经济一旦真实扩张，单笔中间投入
+// 会到 1e9 元量级，此时双精度累加误差本身就可达 1e-6 元（相对 1e-15），
+// 被绝对容差判为"借贷不相等"并 panic（实测借 3816197311.827538 −
+// 贷 3816197311.827536 = 1e-6）。故实际容差取
+// `max(Epsilon, 1e-12 × 金额量级)`：在 1e9 量级上等于 1e-3 元，
+// 仍远小于任何真实记账差错（真实差错是"漏一整条腿"，量级为元~万元）。
 const Epsilon = 1e-6
+
+// RelativeEpsilon 是相对容差（1e-12 = 双精度有效位的两个数量级余量）。
+const RelativeEpsilon = 1e-12
+
+// toleranceFor 返回给定金额量级下的借贷相等容差。
+func toleranceFor(debits, credits float64) float64 {
+	scale := math.Max(math.Abs(debits), math.Abs(credits))
+	tol := RelativeEpsilon * scale
+	if tol < Epsilon {
+		tol = Epsilon
+	}
+	return tol
+}
 
 // AccountKind 是账户类别。
 type AccountKind int
@@ -71,11 +92,41 @@ const (
 	// KindGovernment 是政府现金池。
 	KindGovernment AccountKind = iota
 	// KindCapital 是资本（金融区）现金池。
+	//
+	// 【§4.5.1b 口径】它同时是金融区这个"资本建筑"的营运现金池：
+	// 金融区的工资从这里支付，其私人份额纯利也记入这里（§4.5.2）。
 	KindCapital
+	// KindInvestment 是投资池（§4.5.1b）。
+	//
+	// 它是与政府/资本/建筑/人群并列的第 5 类账户：两个资本建筑（宅邸庄园、
+	// 金融区）扣除自身工资后的纯利全额入池，再按累计贡献 K_m : K_f 分配给
+	// 两条投资栈（庄园栈 / 金融栈），由投资池向政府偿还建造力货款（§4.5.3 G6）。
+	KindInvestment
 	// KindBuilding 是建筑现金池，Index 为建筑类别下标。
+	//
+	// 宅邸庄园（§4.5.5）也用它：庄园的销售收入、私人份额纯利与工资走同一个池，
+	// 即 ledger.Building(model.ManorIndex)——不另开账户类别。
 	KindBuilding
 	// KindHousehold 是人群现金池，Index 由 HouseholdIndex 编码。
 	KindHousehold
+	// KindSavings 是**居民储蓄固定账户**（§5.3，2026-09-19 第 20 轮）。
+	//
+	// 【为什么单独开一个账户，而不是直接留在人群池里】
+	// 第 20 轮裁决原文：「工资结余当前计入某固定账户，随后每周期全部转移入投资池，
+	// 维护货币循环，但记账」。
+	//
+	// 于是结余**不再沉积在人群池**，而是每 tick 走两步两笔借贷相等的交易：
+	//
+	//	① 借 人群池[p]  结余     贷 储蓄账户  结余     （结余离开居民钱包）
+	//	② 借 储蓄账户   σ·结余   贷 投资池    σ·结余   （按储蓄率转入投资，σ=1 全额）
+	//
+	// 账户本身**不留钱**（σ=1 时每 tick 归零），它的作用是让"结余 → 投资"
+	// 这笔搬运在账本上有一个**具名的过手方**：任何一期都能读出"本期结余多少、
+	// 其中多少转成了投资、多少仍挂在储蓄账户"，而不再需要从人群池余额反推。
+	//
+	// 排序：它放在 KindHousehold **之后**，以保证 Household/Investment 等既有
+	// 账户的常量值不变（审计证据与快照的可比性）。
+	KindSavings
 )
 
 // Account 定位一个账户。
@@ -87,6 +138,8 @@ type Account struct {
 // 构造账户的便捷函数。
 func Gov() Account           { return Account{Kind: KindGovernment} }
 func Capital() Account       { return Account{Kind: KindCapital} }
+func Investment() Account    { return Account{Kind: KindInvestment} }
+func Savings() Account       { return Account{Kind: KindSavings} }
 func Building(i int) Account { return Account{Kind: KindBuilding, Index: i} }
 func Household(worksite, class int, classes int) Account {
 	return Account{Kind: KindHousehold, Index: worksite*classes + class}
@@ -99,10 +152,14 @@ func (a Account) String() string {
 		return "政府"
 	case KindCapital:
 		return "资本"
+	case KindInvestment:
+		return "投资池"
 	case KindBuilding:
 		return fmt.Sprintf("建筑[%d]", a.Index)
 	case KindHousehold:
 		return fmt.Sprintf("人群[%d]", a.Index)
+	case KindSavings:
+		return "居民储蓄"
 	}
 	return "未知"
 }
@@ -145,9 +202,9 @@ func (t *Txn) Credit(a Account, amount float64) *Txn {
 func (t *Txn) SumDebits() float64  { return sum(t.Debits) }
 func (t *Txn) SumCredits() float64 { return sum(t.Credits) }
 
-// Balanced 返回借贷是否相等。
+// Balanced 返回借贷是否相等（按金额量级取相对容差）。
 func (t *Txn) Balanced() bool {
-	return math.Abs(t.SumDebits()-t.SumCredits()) <= Epsilon
+	return math.Abs(t.SumDebits()-t.SumCredits()) <= toleranceFor(t.SumDebits(), t.SumCredits())
 }
 
 // Net 返回交易的净额（借 − 贷）。恒等于 0 即货币守恒。
@@ -163,8 +220,8 @@ func sum(es []Entry) float64 {
 
 // Auditor 是记账账本。它持有全部余额，并强制每笔交易借贷相等。
 //
-// 余额本身按账户存放；四个"池"只是同一张余额表上的不同账户，
-// 因此"四池之和 = 货币总量"是表的定义，不需要额外断言。
+// 余额本身按账户存放；五类"池"（政府 / 资本 / 投资池 / 建筑 / 人群）只是同一张
+// 余额表上的不同账户，因此"五池之和 = 货币总量"是表的定义，不需要额外断言。
 type Auditor struct {
 	// balances 是账户余额表。用 map 是因为账户数量随建筑类别与阶级数变化，
 	// 且 map 的零值即是"余额 0"，无需显式初始化。
@@ -200,11 +257,38 @@ func (a *Auditor) SetBalance(acc Account, v float64) {
 // 返回 error 而不是静默修正：记错账必须立刻暴露，而不是留下一个
 // 需要靠事后审计去追的残差。
 func (a *Auditor) Post(t *Txn) error {
-	if d := math.Abs(t.Net()); d > Epsilon {
+	tol := toleranceFor(t.SumDebits(), t.SumCredits())
+	if d := math.Abs(t.Net()); d > tol {
 		msg := fmt.Sprintf("%s: 借贷不相等，借 %.6f − 贷 %.6f = %.6f（容差 %.1e）",
-			t.Name, t.SumDebits(), t.SumCredits(), t.Net(), Epsilon)
+			t.Name, t.SumDebits(), t.SumCredits(), t.Net(), tol)
 		a.violations = append(a.violations, msg)
 		return fmt.Errorf("ledger: %s", msg)
+	}
+	// 【把容差内的浮点残差吸收掉（2026-09-19 第 16 轮）】
+	//
+	// 大额交易（1e9~1e12 元）的借贷两侧由不同的浮点累加路径得到，差值可达
+	// ~1e-12 相对量级。若原样过账，这笔极小残差会**逐 tick 累积**：
+	// 实测 10,000 tick 的 §8.4 A8 逐 tick 残差最大 3.05e-02 元。
+	// 故在容差内把残差并入最大的一笔贷方分录，使每笔交易的 Σ借 == Σ贷 **精确成立**。
+	// 真实差错（漏一整条腿，量级为元~万元）远大于容差，仍会被上面的检查抓住。
+	if net := t.Net(); net != 0 {
+		if len(t.Credits) > 0 {
+			k, mx := 0, 0.0
+			for i, e := range t.Credits {
+				if v := math.Abs(e.Amount); v > mx {
+					k, mx = i, v
+				}
+			}
+			t.Credits[k].Amount += net
+		} else if len(t.Debits) > 0 {
+			k, mx := 0, 0.0
+			for i, e := range t.Debits {
+				if v := math.Abs(e.Amount); v > mx {
+					k, mx = i, v
+				}
+			}
+			t.Debits[k].Amount -= net
+		}
 	}
 	for _, e := range t.Debits {
 		a.balances[e.Account] -= e.Amount

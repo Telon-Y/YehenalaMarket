@@ -46,6 +46,8 @@ type Scenario struct {
 	entries []scenarioEntry
 	// restoreSwitches 由 OnlyPrivatizable 记录，供 Restore 还原。
 	restoreSwitches []bool
+	// restoreSubsidy 由 SubsidyOnly 记录，供 Restore 还原（§4.5.7）。
+	restoreSubsidy []bool
 }
 
 type scenarioEntry struct {
@@ -108,6 +110,28 @@ func (s *Scenario) capital(to string, apply func(*State), reason string) *Scenar
 	return s
 }
 
+// InvestmentAdd 给**投资池**追加资金（§4.5.1b）。
+//
+// 用途：默认参数下两个资本建筑（宅邸庄园 / 金融区）扣除自身工资后的净额均为负，
+// 故投资池恒为 0、两条投资栈永远无预算、建造队列恒空（这是 R26 新资金口径的
+// 直接后果，不是实现缺陷）。要单独检验"队列 / 采购 / 完工归属 / 两条栈"这些
+// 机制本身，必须先隔离资金约束——本注入就是那笔被显式声明的隔离资金。
+//
+// 【纪律】与 CapitalAdd 同理：每笔注入都带字段与理由，并由 Apply 打印"旧值 → 新值"。
+func (s *Scenario) InvestmentAdd(delta float64, reason string) *Scenario {
+	s.entries = append(s.entries, scenarioEntry{
+		field:  "投资池余额（ledger.Investment()）",
+		reason: reason + "（目标：现有余额 + " + fmt.Sprintf("%g", delta) + "）",
+		snapshot: func(st *State) string {
+			return fmt.Sprintf("%g", st.balInvest())
+		},
+		apply: func(st *State) {
+			st.Aud.SetBalance(ledger.Investment(), st.balInvest()+delta)
+		},
+	})
+	return s
+}
+
 // OnlyPrivatizable 把【除 target 之外】的所有建筑的 AllowPrivatize 设为 false。
 //
 // 用途：把机制的观察面收窄到单一建筑，从而能用单笔金额反解对价公式。
@@ -146,18 +170,56 @@ func (s *Scenario) OnlyPrivatizable(target int, reason string) func() {
 	}
 }
 
-// Restore 还原 OnlyPrivatizable 记录的原开关值。
+// Restore 还原 OnlyPrivatizable / SubsidyOnly 记录的原开关值。
 func (s *Scenario) Restore(st *State) {
-	if s.restoreSwitches == nil {
+	if s.restoreSwitches == nil && s.restoreSubsidy == nil {
 		return
 	}
 	for i := range st.Buildings {
 		if i < len(s.restoreSwitches) {
 			st.Buildings[i].Spec.AllowPrivatize = s.restoreSwitches[i]
 		}
+		if i < len(s.restoreSubsidy) {
+			st.Buildings[i].Spec.AllowSubsidy = s.restoreSubsidy[i]
+		}
 	}
-	s.t.Logf("[场景注入] 已还原 %d 类建筑的 AllowPrivatize 原值", len(s.restoreSwitches))
+	s.t.Logf("[场景注入] 已还原 %d 类建筑的 AllowPrivatize / %d 类建筑的 AllowSubsidy 原值",
+		len(s.restoreSwitches), len(s.restoreSubsidy))
 	s.restoreSwitches = nil
+	s.restoreSubsidy = nil
+}
+
+// SubsidyOnly 把【除 target 之外】的所有建筑的 AllowSubsidy 设为 false（§4.5.7）。
+//
+// 用途与 OnlyPrivatizable 同构：把补贴的观察面收窄到单一建筑，
+// 使"补贴入账"与"该建筑是否被扩建"能够一一对应。
+func (s *Scenario) SubsidyOnly(target int, reason string) func() {
+	var saved []bool
+	s.entries = append(s.entries, scenarioEntry{
+		field:  fmt.Sprintf("全部建筑的 Spec.AllowSubsidy（仅保留 [%d]）", target),
+		reason: reason,
+		snapshot: func(st *State) string {
+			var n int
+			for i := range st.Buildings {
+				if st.Buildings[i].Spec.AllowSubsidy {
+					n++
+				}
+			}
+			return fmt.Sprintf("开启数 = %d", n)
+		},
+		apply: func(st *State) {
+			saved = make([]bool, len(st.Buildings))
+			for i := range st.Buildings {
+				saved[i] = st.Buildings[i].Spec.AllowSubsidy
+				st.Buildings[i].Spec.AllowSubsidy = (i == target)
+			}
+		},
+	})
+	return func() {
+		if saved != nil {
+			s.restoreSubsidy = saved
+		}
+	}
 }
 
 // Apply 施加全部注入，并把"字段：旧值 → 新值（理由）"逐条打印。

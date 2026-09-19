@@ -99,35 +99,31 @@ func TestAllFlowsConserveMoney(t *testing.T) {
 	}
 	check("③ 中间投入")
 
-	// ④ 政府采购建造力
-	pr := b.PurchasePower(5, 1000, taxRate)
-	if pr.Net <= 0 || pr.Tax <= 0 {
+	// ④ 政府采购建造力（§4.5.3 G2：不计税、按需采购）
+	pr := b.PurchasePower(5, 1000)
+	if pr.Amount <= 0 {
 		t.Fatalf("采购过账异常：%+v", pr)
 	}
-	// 政府净支出必须恰为 Net
+	// 政府支出必须恰等于建造部门收到的全额（无税腿）
 	check("④ 政府采购建造力")
 
-	// ⑤ 售力给外部付款方（建筑）
-	if _, taxOut := b.SellPowerExternal(false, 4, 3_000, 1000, taxRate); taxOut < 0 {
-		t.Fatal("售力税额为负")
-	}
-	check("⑤ 售力给建筑")
+	// ⑤ 投资池入池（庄园与金融区）——§4.5.1b
+	b.InvestmentInflow(ledger.Building(12), 3_000)
+	check("⑤ 投资池入池（庄园）")
+	b.InvestmentInflow(ledger.Capital(), 2_000)
+	check("⑤b 投资池入池（金融区）")
 
-	// ⑤b 售力给资本
-	b.SellPowerExternal(true, 0, 2_000, 1000, taxRate)
-	check("⑤b 售力给资本")
+	// ⑥ 投资池付政府（G6）：政府净支出归零
+	b.InvestmentPayGov(4_000)
+	check("⑥ 投资池付政府")
 
-	// ⑥ 政府自建付款
-	if n, g := b.GovOwnBuildout(4_000, 1000, taxRate, b.BalGov()); n <= 0 || g <= 0 {
-		t.Fatalf("政府自建付款异常：net=%.2f gross=%.2f", n, g)
-	}
-	check("⑥ 政府自建付款")
-
-	// ⑦ 利润划分（含亏损）
-	b.ProfitSplit(0, 8_000, 0.70, 0.50)
-	check("⑦ 利润划分（盈利）")
-	b.ProfitSplit(9, -5_000, 0.70, 0.50)
-	check("⑦ 利润划分（亏损）")
+	// ⑦ 利润归属（含亏损）：三条腿之和恒等于纯利
+	//（站点 0 的现金池已在上面的消费环节被改动，故按实际余额传入 B_i；
+	// 这里只校验"借贷相等 + 三条腿之和 = 纯利"，C* 取一个较大的目标值。）
+	b.ProfitAllocate(0, 8_000, 0.30, 1e12, b.BalBld(0), ledger.Capital())
+	check("⑦ 利润归属（盈利）")
+	b.ProfitAllocate(9, -5_000, 0.30, 1e12, b.BalBld(9), ledger.Capital())
+	check("⑦ 利润归属（亏损）")
 
 	// ⑧ 货币注入：这是唯一【允许】改变存量的操作
 	before := b.Total()
@@ -199,38 +195,119 @@ func TestConsumeResidualGoesToLastSeller(t *testing.T) {
 	}
 }
 
-// TestIntermediateShrinksWhenCashShort 校验买方现金不足时按可用资金缩减。
-func TestIntermediateShrinksWhenCashShort(t *testing.T) {
+// TestIntermediateIsNotShrunkByCash 校验 §4.3 裁决后的口径：
+// **资金不足不再缩减中间投入付款**——买方按申报额全额成交，现金池允许透支。
+//
+// 【前值 → 后值】本条测试原为 TestIntermediateShrinksWhenCashShort，
+// 断言"余额 1,100 时只成交净额 1,000"。2026-09-19 删除"资金不足时停工"后，
+// 改为断言全额成交 50,000 且余额变为 1,100 − 55,000 = −53,900（透支）。
+func TestIntermediateIsNotShrunkByCash(t *testing.T) {
 	b := New(12, 3, 10, 11)
-	b.Endow(ledger.Building(5), 1_100) // 只够 1000 净额 + 100 税
+	b.Endow(ledger.Building(5), 1_100)
 	sellerOf := func(int) (int, bool) { return 4, true }
 	net, tax, paid, _ := b.PayIntermediate([]IntermediateLeg{{Buyer: 5, Need: 50_000}}, 0.10, sellerOf)
-	if math.Abs(net-1000) > 1e-6 {
-		t.Errorf("净额 = %.6f，应为 1000（按可用资金缩减）", net)
+	if math.Abs(net-50_000) > 1e-6 {
+		t.Errorf("净额 = %.6f，应恒为申报额 50000（不再按可用资金缩减）", net)
 	}
-	if math.Abs(tax-100) > 1e-6 {
-		t.Errorf("税额 = %.6f，应为 100", tax)
+	if math.Abs(tax-5_000) > 1e-6 {
+		t.Errorf("税额 = %.6f，应为 5000", tax)
 	}
-	if math.Abs(paid[5]-1100) > 1e-6 {
-		t.Errorf("买方实付 = %.6f，应为 1100", paid[5])
+	if math.Abs(paid[5]-55_000) > 1e-6 {
+		t.Errorf("买方实付 = %.6f，应为含税全额 55000", paid[5])
 	}
-	if got := b.BalBld(5); math.Abs(got) > 1e-6 {
-		t.Errorf("买方余额 = %.6f，应为 0", got)
+	if got := b.BalBld(5); math.Abs(got-(-53_900)) > 1e-6 {
+		t.Errorf("买方余额 = %.6f，应为 −53900（允许透支）", got)
+	}
+	if got := b.Total(); math.Abs(got-1_100) > ledger.Epsilon {
+		t.Errorf("中间投入交易后货币不守恒：%.6f", got)
 	}
 }
 
-// TestGovPurchaseNetCostIsNet 校验"政府自己收自己"的税额不改变政府净支出。
-func TestGovPurchaseNetCostIsNet(t *testing.T) {
-	b := New(12, 3, 10, 11)
+// TestGovPurchaseIsTaxFreeAndInvestmentRepays 校验 §4.5.3 的两条裁决：
+//
+//	① 建造力交易**不计税**：政府支出恰等于建造部门收到的全额；
+//	② G6 由投资池全额偿还 ⇒ 政府的建造力**净支出为 0**（本版无政府自有项目）。
+//
+// 【前值 → 后值】旧测试断言"政府净支出恰为 Net（隐含 Net·t 的自反税留在池内）"；
+// 建造力交易定案不计税后，Gross ≡ Net，且投资池偿还把它再收回来。
+func TestGovPurchaseIsTaxFreeAndInvestmentRepays(t *testing.T) {
+	b := New(13, 3, 10, 11)
 	b.Endow(ledger.Gov(), 100_000)
-	pr := b.PurchasePower(10, 1000, 0.10)
-	want := 100_000 - pr.Net
+	b.Endow(ledger.Investment(), 100_000)
+
+	pr := b.PurchasePower(10, 1000)
+	want := 100_000 - pr.Amount
 	if got := b.BalGov(); math.Abs(got-want) > 1e-6 {
-		t.Errorf("政府净支出后余额 = %.4f，应为 %.4f（净支出应恰为 Net=%.4f）",
-			got, want, pr.Net)
+		t.Errorf("政府支出后余额 = %.4f，应为 %.4f（支出应恰为全额 %.4f，不计税）",
+			got, want, pr.Amount)
 	}
-	if got := b.BalBld(10); math.Abs(got-pr.Net) > 1e-6 {
-		t.Errorf("建造力部门入账 = %.4f，应恰为 Net=%.4f", got, pr.Net)
+	if got := b.BalBld(10); math.Abs(got-pr.Amount) > 1e-6 {
+		t.Errorf("建造力部门入账 = %.4f，应恰为全额 %.4f", got, pr.Amount)
+	}
+
+	// G6：投资池偿还同一笔货款，政府净支出归零
+	b.InvestmentPayGov(pr.Amount)
+	if got := b.BalGov(); math.Abs(got-100_000) > 1e-6 {
+		t.Errorf("投资池偿还后政府余额 = %.4f，应为初值 100000（净支出为 0）", got)
+	}
+	if got := b.BalInvestment(); math.Abs(got-(100_000-pr.Amount)) > 1e-6 {
+		t.Errorf("投资池余额 = %.4f，应为 %.4f", got, 100_000-pr.Amount)
+	}
+}
+
+// TestProfitAllocatePartitionAndLoss 校验 §4.5.1 的"先补池、再按持股"口径。
+//
+// 【前值 → 后值】旧测试断言 700 / 150 / 150 的三份额（含留存比例 0.5）；
+// 留存比例已删除，改为：
+//
+//	R_i = min(max(π,0), max(0, C*−B))，余额按当期持股 0.30 分配
+//
+// 并新增亏损情形：政府与所有者按持股承担、建筑池同额回补，三腿之和恒为 0。
+func TestProfitAllocatePartitionAndLoss(t *testing.T) {
+	const profit, share, cstar = 1000.0, 0.30, 10_000.0
+	b := New(13, 3, 10, 11)
+	b.Endow(ledger.Building(0), 0)
+
+	// 现金池为空 ⇒ 全额补足（R = min(1000, 10000-0) = 1000），可分配余额为 0。
+	res := b.ProfitAllocate(0, profit, share, cstar, b.BalBld(0), ledger.Capital())
+	if math.Abs(res.Retain-profit) > 1e-9 {
+		t.Errorf("补足额 = %.4f，应为 %.4f（现金池为空 ⇒ 全额留池）", res.Retain, profit)
+	}
+	if math.Abs(res.Gov+res.Owner) > 1e-9 {
+		t.Errorf("可分配余额 = %.4f，应为 0（利润已被补足吸收）", res.Gov+res.Owner)
+	}
+	if sum := res.Retain + res.Gov + res.Owner; math.Abs(sum-profit) > 1e-9 {
+		t.Errorf("三腿之和 = %.6f，必须恰好等于纯利 %.6f", sum, profit)
+	}
+
+	// 现金池已达标 ⇒ 不补池，余额按 0.30 / 0.70 分配。
+	b2 := New(13, 3, 10, 11)
+	b2.Endow(ledger.Building(1), 10_000)
+	res2 := b2.ProfitAllocate(1, profit, share, cstar, b2.BalBld(1), ledger.Capital())
+	if math.Abs(res2.Retain) > 1e-9 {
+		t.Errorf("补足额 = %.4f，应为 0（现金池已达 C*）", res2.Retain)
+	}
+	if math.Abs(res2.Gov-300) > 1e-9 {
+		t.Errorf("政府份额 = %.3f，应为 1000×0.30 = 300", res2.Gov)
+	}
+	if math.Abs(res2.Owner-700) > 1e-9 {
+		t.Errorf("所有者份额 = %.3f，应为 1000−300 = 700", res2.Owner)
+	}
+
+	// 亏损：三腿之和恒为 0（政府 −300、所有者 −700、建筑池 +1000）。
+	b3 := New(13, 3, 10, 11)
+	res3 := b3.ProfitAllocate(2, -1000, share, cstar, b3.BalBld(2), ledger.Capital())
+	if math.Abs(res3.Retain) > 1e-9 {
+		t.Errorf("亏损时不应补池，补足额 = %.4f", res3.Retain)
+	}
+	if math.Abs(res3.Gov-(-300)) > 1e-9 {
+		t.Errorf("政府承担的亏损 = %.3f，应为 −300", res3.Gov)
+	}
+	if math.Abs(res3.Owner-(-700)) > 1e-9 {
+		t.Errorf("所有者承担的亏损 = %.3f，应为 −700", res3.Owner)
+	}
+	if sum := res3.Retain + res3.Gov + res3.Owner; math.Abs(sum-(-1000)) > 1e-9 {
+		t.Errorf("亏损三腿之和 = %.6f，必须恰好等于纯利 −1000", sum)
 	}
 }
 

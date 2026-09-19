@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>1.2 货币与金融</title>
+<style>
+:root{--ink:#1f2328;--ink-2:#57606a;--line:#d8dee4;--bg:#fff;--accent:#0969da;--panel:#f6f8fa}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-size:16px;line-height:1.85;
+  font-family:"Segoe UI","PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,sans-serif}
+.wrap{display:flex;max-width:1400px;margin:0 auto;align-items:flex-start}
+.sidebar{position:sticky;top:0;width:270px;flex:0 0 270px;max-height:100vh;overflow:auto;
+  padding:32px 18px 48px 24px;border-right:1px solid var(--line);font-size:13.5px}
+.sidebar h4{margin:0 0 10px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
+.sidebar ol{list-style:none;margin:0;padding:0}
+.sidebar a{color:var(--ink-2);text-decoration:none;display:block;padding:3px 8px;border-radius:5px;line-height:1.5}
+.sidebar a:hover{background:var(--panel);color:var(--accent)}
+.sidebar .sub{padding-left:14px;font-size:13px}
+main{flex:1 1 auto;min-width:0;padding:40px 48px 90px}
+h1{font-size:30px;line-height:1.3;margin:0 0 6px}
+.doc-meta{color:var(--ink-2);font-size:14px;margin:0 0 34px;padding-bottom:18px;border-bottom:2px solid var(--ink)}
+h2{font-size:22px;margin:44px 0 14px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:30px 0 10px}
+h4{font-size:16px;margin:24px 0 8px}
+/* h5：契约 §4.5.3 用 ##### 写三级子标题（如"交易税的记账口径"）。
+   2026-09-19 修复：此前未定义 h5 样式，浏览器默认会把 h5 渲染成小号粗体，
+   与全文排版不一致；侧栏目录按 h2→h3/h4 两层构建，h5 不进目录（有意）。 */
+h5{font-size:14.5px;margin:20px 0 6px;color:#3a4149;letter-spacing:.01em}
+h5::before{content:"";display:inline-block;width:3px;height:.95em;margin-right:8px;
+  vertical-align:-.08em;background:#c6ccd4;border-radius:2px}
+p{margin:.7em 0}
+ul,ol{margin:.6em 0;padding-left:1.7em}
+li{margin:.3em 0}
+/* 引用块：文档头的"修订记录"与正文注释都用 > 书写，数量多且常整段出现，
+   故采用低调的浅灰底 + 深灰左边框；若用高饱和蓝色会整页发蓝、喧宾夺主。 */
+blockquote{margin:1.1em 0;padding:.7em 1.05em;background:#f7f8fa;
+  border-left:3px solid #c6ccd4;border-radius:0 6px 6px 0;color:#3a4149}
+blockquote p{margin:.3em 0}
+blockquote ul,blockquote ol{margin:.4em 0}
+blockquote strong{color:var(--ink)}
+blockquote ul,blockquote ol{margin:.4em 0}
+code{background:rgba(175,184,193,.2);padding:.15em .38em;border-radius:4px;
+  font-family:Consolas,"Cascadia Mono",Menlo,monospace;font-size:.9em}
+pre.code-block{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+  padding:12px 14px;overflow-x:auto}
+pre.code-block code{background:none;padding:0;font-size:13.5px;line-height:1.6}
+.equation{margin:1.25em 0;padding:.9em 1em;text-align:center;overflow-x:auto;
+  background:linear-gradient(180deg,#fbfcfd,#f6f8fa);border:1px solid var(--line);border-radius:8px}
+.table-wrap{overflow-x:auto;margin:1.2em 0}
+table{border-collapse:collapse;width:100%;font-size:14.5px;line-height:1.65}
+th,td{border-bottom:1px solid var(--line);padding:7px 12px;vertical-align:top}
+thead th{border-bottom:2px solid var(--ink);background:var(--panel);font-weight:600;white-space:nowrap}
+tbody tr:hover{background:#fafbfc}
+.left{text-align:left}.right{text-align:right}.center{text-align:center}
+tbody td.right{font-variant-numeric:tabular-nums}
+/* 数学公式：行内公式必须能在容器内换行，否则 nowrap 会把整段文字撑出视口、
+   右侧内容被硬截断（这是"公式显示异常"的主因，截图可见大批行尾被切掉）。
+   方案：inline-block 让公式整体可换行 + max-width 允许超长公式在其内部横向滚动。 */
+/* ===== 数学排版（配合 VC_Go/tools/mathrender.js 的输出）=====
+   设计要点：
+     · 上下标用标准 <sub>/<sup>，由浏览器原生渲染，不再平铺；
+     · 分式用纵向 flex + 上边框作分数线，可嵌套；
+     · 行内公式允许在容器内换行，避免 nowrap 把整段文字撑出视口。 */
+.math{font-family:"Cambria Math","Latin Modern Math","STIX Two Math",Cambria,"Times New Roman",Georgia,serif;
+  font-size:1.06em;color:#111;line-height:1.5}
+.math-inline{display:inline;white-space:normal}
+.mi{font-style:italic}
+.mn{font-style:normal}
+.mbf{font-weight:700}
+.mbb{font-family:"Cambria Math",Cambria,serif;font-weight:600}
+.mtext{font-family:inherit;font-style:normal}
+.mopname{font-style:normal;font-family:inherit;padding-right:.12em}
+.mo{padding:0 .04em}
+.mscript{white-space:nowrap}
+.msub{font-size:.72em;vertical-align:-.25em;line-height:0}
+.msup{font-size:.72em;vertical-align:.45em;line-height:0}
+/* 分式：纵向堆叠，分子下边框作分数线 */
+.mfrac{display:inline-flex;flex-direction:column;vertical-align:-.45em;text-align:center;
+  margin:0 .18em;line-height:1.15;font-size:.97em}
+.mfrac-d{font-size:1em}
+.mfrac-num{border-bottom:1.1px solid currentColor;padding:0 .3em .06em}
+.mfrac-den{padding:.06em .3em 0}
+/* 根号 */
+.msqrt{white-space:nowrap}
+.msqrt-sym{padding-right:.04em}
+.msqrt-body{border-top:1.1px solid currentColor;padding:.08em .18em 0 .06em}
+.msqrt-deg{font-size:.62em;vertical-align:.7em;margin-right:-.35em}
+/* 自适应括号 */
+.mdelim{font-size:1.15em;line-height:1}
+.mdelim-sm{font-size:1.02em}
+/* cases 环境：左侧表达式、右侧条件。
+   必须 width:auto + 仅按内容占宽，否则 inline-table 会撑满可用宽度，
+   把条件列推到很远、中间留出大片空白（目视即"公式错位"）。 */
+.mcases{display:inline-table;width:auto;vertical-align:middle;border-collapse:collapse;margin:0 .2em}
+.mcases td{border:none;padding:.05em 0 .05em 0;text-align:left;white-space:nowrap}
+.mcases td + td{padding-left:1.6em}
+.mcases tr:first-child td{padding-top:0}
+.mcases tr:last-child td{padding-bottom:0}
+.munknown{background:#fff1f0;border:1px solid #ffa39e;border-radius:3px;padding:0 .2em;color:#a8071a}
+.math-error{background:#fff1f0;border:1px solid #ffa39e;border-radius:4px;padding:0 .3em;color:#a8071a}
+hr{border:none;border-top:1px solid var(--line);margin:2.2em 0}
+a{color:var(--accent)}
+.doc-note{background:#fffbe6;border:1px solid #ffe58f;border-radius:8px;padding:.7em 1em;margin:1.1em 0}
+@media(max-width:1000px){.wrap{flex-direction:column}.sidebar{position:static;width:auto;flex:none;border-right:none;border-bottom:1px solid var(--line)}main{padding:24px 18px 60px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="sidebar"><h4>目录</h4>
+<ol>
+<li><a href="#h2-M1-迁自-1-0-5-3-工资结余-储蓄-个人投资">M1（迁自 1.0 §5.3）：工资结余 → 储蓄 → 个人投资</a>
+</li>
+<li><a href="#h3-M2-迁自-1-0-4-5-4-政府债务的计息口径">M2（迁自 1.0 §4.5.4）：政府债务的计息口径</a>
+</li>
+<li><a href="#h4-M3-迁自-1-0-0-4-第-5-项-玩家决策接口中的-投资-一条-已由-M6-细化">M3（迁自 1.0 §0.4 第 5 项）：玩家决策接口中的&quot;投资&quot;一条（已由 M6 细化）</a>
+</li>
+<li><a href="#h5-M4-迁自-1-0-4-5-1a-1-2-3-6-3-7-金融商品与所有权重构-2026-09-20-裁决">M4（迁自 1.0 §4.5.1a + 1.2 §3.6/§3.7）：金融商品与所有权重构（2026-09-20 裁决）</a>
+<ol class="sub">
+<li><a href="#h6-M4-1-金融商品-私有化收购的进阶版本">M4.1 金融商品 = 私有化收购的进阶版本</a></li>
+<li><a href="#h7-M4-2-所有权重构">M4.2 所有权重构</a></li>
+<li><a href="#h8-M4-3-劳动力储蓄-储蓄银行-购买-债券-并向金融区贷款">M4.3 劳动力储蓄 → 储蓄银行 → 购买&quot;债券&quot;并向金融区贷款</a></li>
+<li><a href="#h9-M4-6-债券-不是传统商品-2026-09-20-第-4-次裁决">M4.6 &quot;债券&quot;不是传统商品（2026-09-20 第 4 次裁决）</a></li>
+<li><a href="#h10-M4-4-金融区的角色变化-3-7-的推论">M4.4 金融区的角色变化（§3.7 的推论）</a></li>
+<li><a href="#h11-M4-5-与-1-0-的关系-不推翻">M4.5 与 1.0 的关系（不推翻）</a></li>
+</ol>
+</li>
+<li><a href="#h12-M5-迁自-1-0-4-5-4-统一利率体系-2026-09-20-裁决">M5（迁自 1.0 §4.5.4）：统一利率体系（2026-09-20 裁决）</a>
+</li>
+<li><a href="#h13-M6-迁自-1-0-0-4-第-5-项-玩家投资额度-政府投资额度-2026-09-20-裁决">M6（迁自 1.0 §0.4 第 5 项）：玩家投资额度 = 政府投资额度（2026-09-20 裁决）</a>
+</li>
+<li><a href="#h14-M7-新设计-2026-09-20-工资竞标-1-2-草案-1-2-6-的-灵活工资">M7（新设计，2026-09-20）：工资竞标（1.2 草案 §1.2-6 的&quot;灵活工资&quot;）</a>
+<ol class="sub">
+<li><a href="#h15-M7-1-目标与它在模型里的位置">M7.1 目标与它在模型里的位置</a></li>
+<li><a href="#h16-M7-2-每-tick-的规则-5-步">M7.2 每 tick 的规则（5 步）</a></li>
+<li><a href="#h17-M7-3-与价格-成本的耦合-必须处理-否则竞标会自我引爆">M7.3 与价格/成本的耦合（必须处理，否则竞标会自我引爆）</a></li>
+<li><a href="#h18-M7-4-记账">M7.4 记账</a></li>
+<li><a href="#h19-M7-5-与-1-0-现有机制的差异-一张表">M7.5 与 1.0 现有机制的差异（一张表）</a></li>
+<li><a href="#h20-M7-6-裁决结果-2026-09-20-第-5-次裁决-已全部裁定">M7.6 裁决结果（2026-09-20 第 5 次裁决：已全部裁定）</a></li>
+</ol>
+</li>
+<li><a href="#h21-M8-新设计-2026-09-20-借贷台账-债券的字段-利息-偿还-以及入池规则">M8（新设计，2026-09-20）：借贷台账（债券的字段、利息、偿还、以及入池规则）</a>
+<ol class="sub">
+<li><a href="#h22-M8-1-债券的字段-一笔贷款-一条台账记录">M8.1 债券的字段（一笔贷款 = 一条台账记录）</a></li>
+<li><a href="#h23-M8-2-每周期还款额-等额本息">M8.2 每周期还款额（等额本息）</a></li>
+<li><a href="#h24-M8-3-资金流与记账-本轮裁决的落点">M8.3 资金流与记账（本轮裁决的落点）</a></li>
+<li><a href="#h25-M8-4-还款的资金来源-已裁决-a">M8.4 还款的资金来源（已裁决：(a)）</a></li>
+<li><a href="#h26-M8-4-1-违约规则-违约则延期-已裁决">M8.4.1 违约规则：违约则延期（已裁决）</a></li>
+<li><a href="#h27-M8-5-与-M5-统一利率体系-的关系-已裁决-无息例外取消">M8.5 与 M5（统一利率体系）的关系（已裁决：无息例外取消）</a></li>
+<li><a href="#h28-M8-7-负债登记的实现形态-已裁决选-A-Capital-Debt-字段">M8.7 负债登记的实现形态：已裁决选 (A) Capital.Debt 字段</a></li>
+<li><a href="#h29-M8-6-裁决状态">M8.6 裁决状态</a></li>
+</ol>
+</li>
+<li><a href="#h31-1-2-1-总述与阶段目标">1.2-1 总述与阶段目标</a>
+</li>
+<li><a href="#h32-1-2-2-货币的三种形态与银行">1.2-2 货币的三种形态与银行</a>
+</li>
+<li><a href="#h33-1-2-3-货币系统带来的问题">1.2-3 货币系统带来的问题</a>
+<ol class="sub">
+<li><a href="#h34-3-1-商品价格的表示">3.1 商品价格的表示</a></li>
+<li><a href="#h35-3-2-货币的转移与结算">3.2 货币的转移与结算</a></li>
+<li><a href="#h36-3-3-劳动力与工资">3.3 劳动力与工资</a></li>
+<li><a href="#h37-3-4-利润与再生产">3.4 利润与再生产</a></li>
+<li><a href="#h38-3-5-投资池">3.5 投资池</a></li>
+<li><a href="#h39-3-6-金融商品">3.6 金融商品</a></li>
+<li><a href="#h40-3-7-金融区">3.7 金融区</a></li>
+</ol>
+</li>
+<li><a href="#h41-1-2-4-玩家现金池">1.2-4 玩家现金池</a>
+</li>
+<li><a href="#h42-1-2-5-贵金属与银行的具体设定">1.2-5 贵金属与银行的具体设定</a>
+</li>
+<li><a href="#h43-1-2-6-工资系统">1.2-6 工资系统</a>
+</li>
+<li><a href="#h44-1-2-7-其余设定">1.2-7 其余设定</a>
+</li>
+</ol></nav>
+<main>
+<h1>1.2 货币与金融</h1>
+<p class="doc-meta">叶赫那拉市场 · 由 <code>1.2 货币与金融.md</code> 经 <code>VC_Go/tools/md2html.js</code> 离线编译生成 · 完全自包含，无需联网</p>
+<blockquote>
+<p>## ⚠️ 本文件的状态（<strong>未完成开发日志</strong>，不是契约）</p>
+<ul><li><strong>性质</strong>：这是一份<strong>开发日志</strong>，需要经过<strong>多轮讨论与多轮迭代</strong>才能&quot;<strong>1.0 化</strong>&quot; ——即达到 <code>docs/1.0 生产与市场模拟.md</code> 那样的契约质量（口径唯一、有实测证据、 有前值→后值留痕、可复现可验收）。<strong>在此之前它不具备契约效力。</strong></li><li><strong>不推翻 1.0</strong>：<strong>1.0 的实现与数值不可被本文件推翻。</strong> 两者冲突时， 一律以 1.0 为准；本文件只表达&quot;未来要做什么&quot;，且<strong>任何迁移都必须先在 1.0 侧留索引</strong>。</li><li><strong>来源</strong>：用户提供的 <code>1.2 货币与金融.docx</code>（19,402 字节，2026-09-15 19:12）， 由 <code>tools/docx2md.py</code> 机械转换（只读，不改原文件）。</li><li><strong>docx 的原始结构</strong>：39 段，其中<strong>只有 1 个标题段</strong>（居中样式的&quot;货币与金融&quot;）， 其余 38 段无样式，靠<strong>空行</strong>与<strong>首行缩进 420 twip</strong>分段，<strong>无表格、无列表</strong>。 故下面的 <code>##</code>/<code>###</code> 小标题是<strong>转换者为便于讨论而加的</strong>，<strong>未改动任何原文措辞</strong>。</li><li><strong>外部来源</strong>：本文的&quot;借用&quot;性质已在 <code>docs/ACTIVE.md</code> 登记；若与项目现行口径冲突， 以 1.0 与 ACTIVE 的记录为准。</li></ul>
+</blockquote>
+<hr>
+<h1 id="h1-第一部分-自-1-0-契约迁入的章节">第一部分：自 1.0 契约迁入的章节</h1>
+<blockquote>
+<p>本部分收录<strong>从 1.0 契约整段迁出</strong>的内容：1.0 已裁定&quot;留给 1.2 实现&quot;的部分。 1.0 的原位置只保留<strong>索引</strong>（小节号与锚点不变，供 32/18 处交叉引用继续生效）。 <strong>迁移纪律</strong>：迁入时<strong>只搬文字、不改数值</strong>；1.0 的实现继续按迁移前的口径运行。</p>
+</blockquote>
+<h2 id="h2-M1-迁自-1-0-5-3-工资结余-储蓄-个人投资">M1（迁自 1.0 §5.3）：工资结余 → 储蓄 → 个人投资</h2>
+<p><strong>1.0 的处置</strong>：§5.3 的&quot;两步过账&quot;照常运行（货币循环与记账完整），但 <strong>投资被冻结</strong>（<code>Params.InvestmentFrozen</code>）——&quot;投资池 → 建造力&quot;这一跳在 1.0 暂时断开。</p>
+<p><strong>迁入 1.2 的原因（1.0 原话）</strong>：</p>
+<blockquote>
+<p>&quot;个人投资留到 1.2「整理金融」时实现&quot;；&quot;解冻时把它置 <code>false</code>，同时把投资池的支出端 接到 1.2 的<strong>个人投资</strong>上&quot;；&quot;<strong>1.2 的&quot;个人投资&quot;正是要补上这一段</strong>：让居民以储蓄购买资产 （而不是把结余无差别地当扩建资金），届时应把&quot;储蓄账户余额&quot;与&quot;已分配投资&quot;拆成两个口径&quot;。 口径边界：σ=1 意味着&quot;居民不持币&quot;；1.0 不建模银行、利率与信贷（§1.3 的非目标）， 故储蓄没有利息、也不能取回。</p>
+</blockquote>
+<p><strong>1.2 要做的事（待讨论 → 待裁决 → 待实现）</strong>：</p>
+<ol><li><strong>解冻</strong>：<code>Params.InvestmentFrozen</code> 置 <code>false</code>。</li><li><strong>把&quot;投资池支出端&quot;接到个人投资</strong>：1.0 的投资池支出端只有&quot;付建造力货款（G6）&quot;； 1.2 要新增&quot;<strong>居民以储蓄购买资产</strong>&quot;这一条支出腿。</li><li><strong>拆账户</strong>：把&quot;储蓄账户余额&quot;与&quot;已分配投资&quot;拆成两个口径。</li><li><strong>与本文件 §3.6/§3.7 的关系</strong>：1.2 草案的&quot;<strong>金融商品</strong>&quot;（每级收益权） 与&quot;<strong>金融区</strong>（被动金融建筑）&quot;正是&quot;个人投资&quot;的落地形态—— 居民储蓄通过金融商品变成生产建筑等级的收益权。</li><li><strong>与 1.0 §4.5.1a 私有化的关系（待裁决）</strong>：1.0 已有&quot;政府级 → 私有级&quot;的<strong>收购订单</strong>； 1.2 的金融商品把交易顺序锁定为&quot;政府 → 劳动力 → 金融区&quot;。两者是<strong>取代</strong>还是<strong>并存</strong>， 需要 1.0 侧先给结论（本文件不推翻 1.0）。</li></ol>
+<h2 id="h3-M2-迁自-1-0-4-5-4-政府债务的计息口径">M2（迁自 1.0 §4.5.4）：政府债务的<strong>计息口径</strong></h2>
+<p><strong>1.0 的处置（原文）</strong>：</p>
+<blockquote>
+<p>&quot;<strong>不计息</strong>：§1.3 把&quot;完整货币、银行、利率&quot;列为 1.2 版本的非目标， 故本版债务不计息、不设期限，只设上限。&quot;</p>
+</blockquote>
+<p><strong>迁入 1.2 的原因</strong>：1.0 显式把&quot;计息/期限&quot;交给 1.2，自己只保留&quot;上限 + 硬约束&quot;。</p>
+<p><strong>1.0 留下的部分（不迁）</strong>：债务定义 <span class="math math-inline"><span class="mtext">债务</span><span class="mo">=</span><span class="mopname">max</span><span class="mo">(</span><span class="mn">0</span><span class="mo">,</span><span class="mo">−</span><span class="mtext">政府现金池</span><span class="mo">)</span></span>、 资产基数与上限公式、<code>AvailableCash</code> 三段口径、触及上限的硬约束行为、量级表。 这些是 1.0 可运行的机制，<strong>数值与实现不变</strong>。</p>
+<p><strong>1.2 要做的事</strong>：</p>
+<ol><li>给政府债务加<strong>利息</strong>与<strong>期限</strong>（1.0 明确&quot;不计息、不设期限&quot;）。</li><li>与 M3（银行/贷款）合并：1.2 草案的贷款是&quot;中央银行→银行→其他建筑、 每次 100w、抵押率 ≥ 50%、5 年无息&quot;。<strong>已裁决：两者是同一套利率体系 → 见 M5</strong> （2026-09-20 裁决；M5 负责给出统一曲线与例外说明）。</li><li>上限口径是否保留&quot;建造力产出 × 2&quot;？（1.0 的 §0.4 第 2 项已登记该基数偏窄， 见 ACTIVE §七 R49/R50——那是 1.0 的待办，不因迁入 1.2 而消失。）</li></ol>
+<h2 id="h4-M3-迁自-1-0-0-4-第-5-项-玩家决策接口中的-投资-一条-已由-M6-细化">M3（迁自 1.0 §0.4 第 5 项）：玩家决策接口中的&quot;投资&quot;一条（<strong>已由 M6 细化</strong>）</h2>
+<p><strong>1.0 的处置（原文）</strong>：第 5 项&quot;<strong>玩家决策接口缺失</strong>&quot;的裁决是&quot;<strong>暂缓</strong>：当前处于核心功能 校准阶段，玩家接口在 <strong>1.1 UI 界面阶段</strong>同步开发；本版只把旋钮暴露为 CLI 参数&quot;。 其中候选 (a) &quot;<strong>投资额度/方向交给玩家</strong>&quot;本质属 1.2。</p>
+<p><strong>1.2 要做的事</strong>：把&quot;投资额度与方向&quot;从 AI 托管改为<strong>玩家可决策</strong>， 并把 §4.5.1b 的两条投资栈预算（现按当期意向需求比例自动分配）接上玩家输入。 ——<strong>额度口径与接管机制见下方 M6</strong>（2026-09-20 裁决：玩家投资额度 = 政府投资额度； 政府投资 AI 开关在玩家控制时自动关闭）。</p>
+<hr>
+<h2 id="h5-M4-迁自-1-0-4-5-1a-1-2-3-6-3-7-金融商品与所有权重构-2026-09-20-裁决">M4（迁自 1.0 §4.5.1a + 1.2 §3.6/§3.7）：<strong>金融商品与所有权重构</strong>（2026-09-20 裁决）</h2>
+<blockquote>
+<p><strong>状态</strong>：<strong>已裁决方向，待实现</strong>。本条把 1.2 草案 §3.6&quot;金融商品&quot;与 §3.7&quot;金融区&quot; 与 1.0 的<strong>私有化收购</strong>接成一条链——<strong>金融商品是私有化收购的进阶版本</strong>。</p>
+</blockquote>
+<h3 id="h6-M4-1-金融商品-私有化收购的进阶版本">M4.1 金融商品 = 私有化收购的进阶版本</h3>
+<p>1.0 的私有化（§4.5.1a）是&quot;<strong>政府级 → 私有级</strong>&quot;的一次性收购订单（对价 = 建造成本 × 建造力价）。 1.2 把它<strong>进阶</strong>为<strong>可交易的金融商品</strong>：</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>维度</th><th>1.0 私有化收购</th><th>1.2 金融商品</th></tr>
+</thead>
+<tbody>
+<tr><td>标的</td><td>一次转让若干<strong>级</strong>的所有权</td><td><strong>每级发行一份收益权商品</strong>（1 级 = 1 份）</td></tr>
+<tr><td>交易方向</td><td>单向：政府 → 私有</td><td><strong>单向，只能从左往右</strong>（详下）</td></tr>
+<tr><td>出资方</td><td>政府 ↔ 私有级之间的一次性收购</td><td><strong>储蓄银行</strong>（买金融区发行的&quot;债券&quot;，见 M4.3）</td></tr>
+<tr><td>定价</td><td>建造成本 × 建造力价 × 倍数</td><td><strong>随建造力波动的价格</strong>（不自主波动）</td></tr>
+<tr><td>收益</td><td>按持股分红（§4.5.1）</td><td>持有者获<strong>每周期对应分红</strong></td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>交易规则（2026-09-20 第 2 次裁决，纠正&quot;顺序交易&quot;的措辞）</strong>：</p>
+<blockquote>
+<p>&quot;交易<strong>不是顺序交易</strong>，而是<strong>单向交易</strong>，<strong>只能从左往右</strong>，<strong>不能同级交易</strong>， 也<strong>不能从右往左</strong>。&quot;</p>
+</blockquote>
+<p>即链条 <strong>政府 → 劳动力 → 金融区</strong> 是<strong>资金/股权的流向</strong>，不是&quot;必须按次序发生的一串交易&quot;：</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>允许</th><th>禁止</th></tr>
+</thead>
+<tbody>
+<tr><td>政府 → 劳动力</td><td>劳动力 → 政府（从右往左）</td></tr>
+<tr><td>劳动力 → 金融区</td><td>金融区 → 劳动力（从右往左）</td></tr>
+<tr><td><strong>相邻两级之间</strong>的交易</td><td><strong>同级之间</strong>（政府↔政府、劳动力↔劳动力、金融区↔金融区）</td></tr>
+<tr><td></td><td>跨级直连（政府 → 金融区）</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>歧义标注（Ⅰ）→ 已澄清（2026-09-20 第 3 次裁决）</strong>： &quot;不能同级交易&quot;= <strong>A 所有的东西不能被 A 自己私有化</strong>—— 具体地：&quot;<strong>劳工不能私有化劳工所有的建筑</strong>&quot;。即<strong>所有权主体不能从自己手里买</strong>， 这与&quot;逐级可拆分性&quot;无关。</p>
+</blockquote>
+<h3 id="h7-M4-2-所有权重构">M4.2 所有权重构</h3>
+<p><strong>裁决原文</strong>：&quot;完成后将 <strong>30% 的政府所有改为资本所有</strong>，<strong>70% 资本所有改为劳动力所有</strong>。&quot;</p>
+<p><strong>1.0 现状（实测，tick 1）</strong>：</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>类别</th><th class="right">政府级</th><th class="right">私有级</th><th>说明</th></tr>
+</thead>
+<tbody>
+<tr><td>生产建筑（可私有化者）</td><td class="right"><strong>30%</strong></td><td class="right">70%</td><td>每股 1.5 / 3.5 级；<code>s_gov = 0.30</code></td></tr>
+<tr><td><strong>金融区</strong>（工业资本的载体）</td><td class="right">0</td><td class="right"><strong>100%</strong></td><td>它就是&quot;私有级&quot;的持有者（§4.5.2）</td></tr>
+<tr><td><strong>宅邸庄园</strong>（农业资本的载体）</td><td class="right">0</td><td class="right"><strong>100%</strong></td><td>同上（§4.5.5，农业建筑）</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>按字面执行的算术</strong>：</p>
+<div class="equation"><span class="math"><span class="mn">3</span><span class="mn">0</span><span class="mo">%</span><span style="display:inline-block;width:.3em"></span><span class="mtext">政府</span><span class="mo">→</span><span class="mtext">资本所有</span><span class="mo">;</span><span style="display:inline-block;width:2em"></span><span class="mn">7</span><span class="mn">0</span><span class="mo">%</span><span style="display:inline-block;width:.3em"></span><span class="mtext">资本所有</span><span class="mo">→</span><span class="mtext">劳动力所有</span></span></div>
+<p><strong>过渡后的持股：资本 30% + 劳动力 70%。</strong></p>
+<p><strong>农业的口径（2026-09-20 第 2 次裁决）</strong>：</p>
+<blockquote>
+<p>&quot;<strong>农业中自给农场不变</strong>，<strong>商品农场所有权改变</strong>。&quot;</p>
+</blockquote>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>农业部门</th><th>是否参与所有权重构</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>自给农场</strong>（每级未使用耕地自动生成，§4.2）</td><td><strong>不变</strong>——它本就不是商品生产建筑，其所有权载体是<strong>宅邸庄园</strong>（§4.5.5），本次不改</td></tr>
+<tr><td><strong>谷物农场 / 棉花种植园</strong>（商品农场）</td><td><strong>所有权改变</strong>——与工业建筑同办（30% 政府→资本、70% 资本→劳动力）</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p>这一条<strong>消解了上一轮的待澄清点①</strong>（&quot;庄园/农业建筑是否同办&quot;）：答案是 <strong>商品农场同办、自给农场不同办</strong>。宅邸庄园作为<strong>自给农场</strong>的所有权载体不变， 它作为<strong>商品农场</strong>的资本载体那部分则转出给劳动力。</p>
+</blockquote>
+<p><strong>劳动力持有的口径（2026-09-20 第 2 次裁决）</strong>：</p>
+<blockquote>
+<p>&quot;劳动力<strong>不分阶级</strong>，视作<strong>一同管理</strong>，按<strong>劳动力数量比例平分</strong>分红。&quot;</p>
+</blockquote>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>项</th><th>口径</th></tr>
+</thead>
+<tbody>
+<tr><td>持有主体</td><td><strong>一个</strong>主体（&quot;劳动力&quot;），<strong>不按阶级拆分</strong></td></tr>
+<tr><td>分红分配</td><td>按<strong>劳动力数量比例</strong>平分</td></tr>
+<tr><td>对 1.0 的影响</td><td>需要一个<strong>新的账本主体</strong>（劳动力池），与 §5.1 的&quot;场地 × 阶级&quot;39 个池<strong>并存或改造</strong>——待 1.0 化时定</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>歧义标注（Ⅱ）→ 已澄清（2026-09-20 第 3 次裁决）</strong>： &quot;按人头平分<strong>就是</strong>按场地人数比例平分&quot;——两者<strong>等价</strong>： 每人分到相同份额 ⇒ 各场地拿到的总额自然与其<strong>劳动力人数</strong>成正比。 故<strong>不需要</strong>按场地分别计算分红：给&quot;劳动力&quot;一个统一池，<strong>按人头等分</strong>即可。 对 1.0 的含义：不必为分红改造 §5.1 的 39 池；但<strong>储蓄与代买</strong>仍需一个统一入口（见 M4.3）。</p>
+</blockquote>
+<h3 id="h8-M4-3-劳动力储蓄-储蓄银行-购买-债券-并向金融区贷款">M4.3 劳动力储蓄 → 储蓄银行 → 购买&quot;债券&quot;并向金融区贷款</h3>
+<blockquote>
+<p><strong>裁决（2026-09-20 第 3 次）：</strong>&quot;收购<strong>走建造队列</strong>，只是现在增加一个<strong>金融建筑：银行（储蓄银行）</strong>， 其<strong>接受劳动力多余的资金</strong>，用于<strong>购买金融区发行的商品&quot;债券&quot;</strong>，<strong>向其提供贷款</strong>。&quot;</p>
+</blockquote>
+<p><strong>这条同时回答了两件事</strong>：① 收购仍走<strong>建造队列</strong>（1.0 第 27 轮的机制保留）； ② 但<strong>出资方换成储蓄银行</strong>——它用劳动力储蓄去买<strong>金融区发行的债券</strong>，从而<strong>向金融区提供贷款</strong>。</p>
+<p><strong>机制（按裁决原文整理）</strong>：</p>
+<p>图示：<strong>劳动力多余的资金 → 储蓄银行 → 购买&quot;债券&quot;（金融区发行）→ 向金融区提供贷款</strong></p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>环节</th><th>内容</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>资金来源</strong></td><td><strong>劳动力多余的资金</strong>（= 1.0 §5.3 的&quot;工资结余&quot;，但它<strong>进入储蓄银行</strong>，不再直接进投资池）</td></tr>
+<tr><td><strong>新增建筑</strong></td><td><strong>银行（储蓄银行）</strong>——一个新的<strong>金融建筑</strong>（与 §1.2-5 的&quot;储蓄银行&quot;对应）</td></tr>
+<tr><td><strong>购买标的</strong></td><td><strong>金融区发行的商品&quot;债券&quot;</strong>——金融商品的一种（新商品，进商品体系）</td></tr>
+<tr><td><strong>经济含义</strong></td><td>买债券 = <strong>向金融区提供贷款</strong>（金融区拿到现金，储蓄银行持有债权）</td></tr>
+<tr><td><strong>收购路径</strong></td><td>仍<strong>走建造队列</strong>（第 27 轮的 <code>Order.Acquire</code> 机制保留），出资方改为储蓄银行</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>与 1.0 第 28 轮实现的冲突 → 已给出解法</strong>：</p>
+<p>1.0 第 28 轮实现了&quot;<strong>允许收购用投资池余额出资</strong>&quot;（<code>ledger.InvestmentBuyEquity</code>：借投资池 / 贷政府）。 但 1.0 的<strong>投资池混入了居民储蓄</strong>（§5.3 全额转入），所以那是&quot;<strong>资本用了劳动力储蓄购买</strong>&quot;， 与第 31 轮裁决&quot;<strong>资本不再能使用劳动力储蓄购买</strong>&quot;直接冲突。</p>
+<p><strong>本裁决给出的解法</strong>：<strong>把&quot;劳动力储蓄&quot;从投资池里分出来，交给储蓄银行</strong>—— 于是&quot;资本不得用劳动力储蓄购买&quot;自然成立，因为那笔钱已经不在投资池里了：</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>项</th><th>1.0 现状（第 28 轮）</th><th>1.2 口径（本裁决）</th></tr>
+</thead>
+<tbody>
+<tr><td>劳动力结余的去向</td><td>§5.3 两步：储蓄账户 → <strong>投资池</strong></td><td>→ <strong>储蓄银行</strong></td></tr>
+<tr><td>收购的出资方</td><td><strong>投资池</strong>（第 28 轮）</td><td><strong>储蓄银行</strong>（买债券）</td></tr>
+<tr><td>资本能否动用劳动力储蓄</td><td><strong>能</strong>（因投资池含储蓄）</td><td><strong>不能</strong>（储蓄已归储蓄银行）</td></tr>
+<tr><td>收购是否走建造队列</td><td>是（第 27 轮 <code>Order.Acquire</code>）</td><td><strong>是（不变）</strong></td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>1.0 化待办（三条）</strong>：</p>
+<ol><li>§5.3 的第二步从&quot;储蓄账户 → 投资池&quot;改为&quot;储蓄账户 → <strong>储蓄银行</strong>&quot;—— 这会不会让投资池<strong>枯竭</strong>（1.0 实测投资池 3.0e9 主要来自储蓄）？需给出新的资金结构。</li><li>新增&quot;<strong>债券</strong>&quot;的口径与记账（<strong>不是传统商品</strong>，见 M4.6）。</li><li>新增建筑&quot;<strong>银行（储蓄银行）</strong>&quot;：每级雇佣、建造成本、上限、配方待定。</li></ol>
+</blockquote>
+<p><strong>资金回路（2026-09-20 第 4 次裁决澄清）</strong>：</p>
+<blockquote>
+<p>&quot;<strong>资金会通过借贷走向金融区，再走向投资池。</strong>&quot;</p>
+</blockquote>
+<p>即待办 1（&quot;投资池会不会枯竭&quot;）<strong>已有答案</strong>——<strong>投资池由金融区补给</strong>，回路闭合：</p>
+<div class="equation"><span class="math"><span class="mtext">劳动力多余的资金</span><span class="mo">→</span><span class="mtext">储蓄银行</span><span class="mo">→</span><span class="mtext">借给金融区</span><span class="mo">→</span><span class="mtext">金融区</span><span class="mo">→</span><span class="mtext">投资池</span><span class="mo">→</span><span class="mtext">扩建/收购</span></span></div>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>环节</th><th>借/贷</th><th>说明</th></tr>
+</thead>
+<tbody>
+<tr><td>劳动力 → 储蓄银行</td><td>劳动力<strong>存入</strong>；银行<strong>负债</strong></td><td>劳动力多余资金（1.0 §5.3 的工资结余）</td></tr>
+<tr><td>储蓄银行 → 金融区</td><td>银行<strong>放贷</strong>；金融区<strong>负债</strong></td><td>买&quot;债券&quot;= 提供贷款（M4.3）</td></tr>
+<tr><td><strong>金融区 → 投资池</strong></td><td>金融区的（净额）<strong>入池</strong></td><td><strong>这就是投资池的资金来源</strong>（1.0 §4.5.1b 的&quot;资本净额入池&quot;）</td></tr>
+<tr><td>投资池 → 扩建/收购</td><td>投资池<strong>支出</strong></td><td>G6 偿还建造力货款（§4.5.3）；收购走建造队列（第 27 轮）</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>口径要点</strong>：本裁定把&quot;<strong>储蓄</strong>&quot;与&quot;<strong>投资</strong>&quot;之间的中介从&quot;直接转入投资池&quot;（1.0 §5.3 两步） 改成&quot;<strong>经由储蓄银行放贷给金融区，再由金融区入池</strong>&quot;。 好处：① 资本不再直接动用劳动力储蓄（满足第 31 轮裁决）； ② 中间多了<strong>利率</strong>（M5 的统一利率体系）与<strong>借贷关系</strong>（可登记余额与利息）； ③ 投资池仍有来源，不会枯竭。</p>
+<p><strong>⚠️ 记账影响（1.0 化时必查）</strong>：金融区从银行拿到贷款时，钱先进<strong>金融区现金池</strong> （<code>ledger.Capital()</code>），而 §4.5.1b 只把&quot;<strong>扣除工资后的净额</strong>&quot;入池； 若金融区的营运净额为负（1.0 实测长期为负），贷款会被<strong>先用来补亏损</strong>而不是入池。 故&quot;贷款 → 投资池&quot;这条通道需要一个<strong>显式的入池规则</strong>（否则回路看不见）。</p>
+</blockquote>
+<h3 id="h9-M4-6-债券-不是传统商品-2026-09-20-第-4-次裁决">M4.6 &quot;债券&quot;不是传统商品（2026-09-20 第 4 次裁决）</h3>
+<blockquote>
+<p>&quot;债券<strong>不是传统商品</strong>，其为<strong>借贷凭证</strong>，标记（某处）<strong>金融区贷款多少、每周期还多少利息、 多少年要还</strong>。&quot;</p>
+</blockquote>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>维度</th><th>传统商品（1.0 §3.1）</th><th><strong>&quot;债券&quot;</strong></th></tr>
+</thead>
+<tbody>
+<tr><td>性质</td><td>可消费/可投入的实物或服务</td><td><strong>借贷凭证</strong>（金融资产）</td></tr>
+<tr><td>是否有配方</td><td>有（§3.3 投入产出）</td><td><strong>无</strong></td></tr>
+<tr><td>是否进商品体系</td><td>是（<code>model.Goods</code>，含需求弹性/价格列）</td><td><strong>不进</strong>——<strong>不占商品编号、不改 <code>A</code> 矩阵维度</strong></td></tr>
+<tr><td>价格</td><td>由价格 ODE 内生</td><td>不自主波动；<strong>面值 + 利息</strong>（条款式）</td></tr>
+<tr><td>记录内容</td><td>数量、价格</td><td><strong>贷款额 / 每周期利息 / 期限（多少年还清）</strong></td></tr>
+<tr><td>位置</td><td>§3.1 商品表</td><td>一张<strong>借贷台账</strong>（新账户/新结构，非商品表）</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>⇒ 这消掉了 M4.3 待办 2 的最大风险</strong>：<strong>&quot;债券&quot;不进 §3.1 商品表</strong>， 因此<strong>不会改变 <code>A</code> 矩阵维度</strong>，<strong>不需要重做三表联合标定</strong>（价格表 / 谱半径 / <span class="math math-inline"><i class="mi">k</i></span> / §8.6 的 <span class="math math-inline"><i class="mi">L</i><sup class="msup"><span class="mo">∗</span></sup></span> 都不受影响）。</p>
+<p><strong>1.0 化待办（新增）</strong>：</p>
+<ol><li>设计<strong>借贷台账</strong>的结构：每笔&quot;债券&quot;记录 <code>{债务方=金融区, 债权方=储蓄银行, 本金, 利率, 期限, 已还本, 已付息}</code>。</li><li>利息与本金偿还走 M5 的<strong>统一利率体系</strong>；偿还腿要与 §4.5.3 的&quot;借贷相等&quot;一致。</li><li>1.2 草案 §1.2-5 的&quot;银行每 1m 生产为 1 单位『贷款』商品、一级银行最多 50 单位&quot;—— 与&quot;债券不是商品&quot;<strong>冲突</strong>（那里把&quot;贷款&quot;当商品）。<strong>以本条裁决为准</strong>：贷款是<strong>凭证</strong>，不是商品。</li></ol>
+</blockquote>
+<h3 id="h10-M4-4-金融区的角色变化-3-7-的推论">M4.4 金融区的角色变化（§3.7 的推论）</h3>
+<ul><li><strong>过渡前</strong>：金融区 = 私有级的<strong>所有者</strong>（被动持有）。</li><li><strong>过渡后</strong>：金融区 = 金融商品的<strong>买方</strong>（链条最右端，只能从劳动力买）， 1 级工商业金融商品对应 1 级金融区。</li><li>与 §3.7 一致：&quot;金融区实际上是投资池收购建筑等级的<strong>具象化</strong>，只是中间隔了一层金融商品&quot;。</li><li><strong>过渡之后的二级交易禁跨级直连</strong>（政府 ↛ 金融区）。 &gt; <strong>歧义标注（Ⅲ）→ 已澄清（2026-09-20 第 3 次裁决）</strong>： &gt; &quot;<strong>资本直接承接政府 30%、劳动力直接承接资本 70%</strong>，<strong>这是初始化改动</strong>。&quot; &gt; &gt; 即过渡是<strong>两条各自一跳的直接划转</strong>（不是&quot;政府→劳动力→金融区&quot;的链式转让）：</li></ul>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th class="center">初始划转</th><th>从</th><th>到</th><th class="center">比例</th></tr>
+</thead>
+<tbody>
+<tr><td class="center">①</td><td><strong>政府</strong></td><td><strong>资本</strong>（金融区 / 宅邸庄园）</td><td class="center">30%</td></tr>
+<tr><td class="center">②</td><td><strong>资本</strong>（金融区的 70% 私有级）</td><td><strong>劳动力</strong></td><td class="center">70%</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>过渡后</strong>：<strong>资本 30% + 劳动力 70%</strong>（合计 100%）。 <strong>&quot;禁跨级直连 / 禁同级&quot;只约束过渡之后的二级交易</strong>，不约束本次初始化。</p>
+</blockquote>
+<h3 id="h11-M4-5-与-1-0-的关系-不推翻">M4.5 与 1.0 的关系（不推翻）</h3>
+<ul><li>1.0 的 §4.5.1a 私有化<strong>继续按现口径运行</strong>（收购订单、对价 = 建造成本 × 建造力价）， 1.2 的金融商品是它的<strong>进阶替代</strong>；实现后 1.0 该节改为索引（同 R54 纪律）。</li><li>1.0 的 §4.5.1b&quot;谁出资、谁拥有&quot;在过渡后变成&quot;<strong>谁持有金融商品、谁收益</strong>&quot;—— <strong>所有权口径的升级</strong>，需在 1.0 侧单独立项（不在本轮）。</li></ul>
+<h2 id="h12-M5-迁自-1-0-4-5-4-统一利率体系-2026-09-20-裁决">M5（迁自 1.0 §4.5.4）：<strong>统一利率体系</strong>（2026-09-20 裁决）</h2>
+<p><strong>裁决</strong>：政府债务的利息/期限，与 1.2 草案的银行贷款（&quot;中央银行 → 银行 → 其他建筑、 每次 100w、抵押率 ≥ 50%&quot;）<strong>是同一套利率体系</strong>。</p>
+<p><strong>推论（待 1.0 化）</strong>：</p>
+<ol><li><strong>一个利率曲线覆盖四条腿</strong>：① 政府债务（§4.5.4）；② 央行 → 银行； ③ 银行 → 其他建筑（§1.2-5 的贷款）；④ 投资池的&quot;5 年无息贷款&quot;（§1.2-7）。 — ④ 是<strong>唯一</strong>的特例（无息），需说明它凭什么是例外（政策性融资？）。</li><li><strong>抵押率 ≥ 50%</strong> 这条要同时适用于政府债务吗？（1.0 的债务上限是 &quot;建造力产出 × 2&quot;，性质上是一种<strong>抵押率</strong>——两者是否统一口径？）</li><li>利率水平由谁定（央行货币政策？贵金属成色？）——1.2 草案 §3.1 说货币价值 = 贵金属价值 × 1倍 （成色五成），利率应与它挂钩还是独立？</li></ol>
+<h2 id="h13-M6-迁自-1-0-0-4-第-5-项-玩家投资额度-政府投资额度-2026-09-20-裁决">M6（迁自 1.0 §0.4 第 5 项）：<strong>玩家投资额度 = 政府投资额度</strong>（2026-09-20 裁决）</h2>
+<p><strong>裁决</strong>：</p>
+<blockquote>
+<p>&quot;玩家投资额度<strong>即</strong>政府投资额度；设置<strong>政府投资 AI 开关</strong>，当玩家控制时<strong>自动关闭</strong> （为之后接入<strong>国家系统</strong>做准备）。&quot;</p>
+</blockquote>
+<p><strong>口径</strong>：</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>项</th><th>内容</th></tr>
+</thead>
+<tbody>
+<tr><td>额度</td><td><strong>玩家可支配的投资额度 = 政府投资额度</strong>（同一个额度，不是两份额度）</td></tr>
+<tr><td>开关</td><td><code>政府投资 AI</code>（默认开）；<strong>玩家接管时自动关闭</strong>该 AI</td></tr>
+<tr><td>目的</td><td>为后续接入<strong>国家系统</strong>做接口准备</td></tr>
+<tr><td>与 M3 的关系</td><td>M3 说&quot;投资额度/方向交给玩家&quot;，M6 界定了&quot;额度&quot;= <strong>政府的投资额度</strong>，并给出接管机制</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>待 1.0 化的接口点</strong>：1.0 现在的投资决策是&quot;§4.5.1b 两条投资栈按<strong>当期意向需求</strong>比例自动分配&quot; （§0.4 第 8 项选 (a)）。M6 接管后，这一自动分配要能被玩家输入替换； 且&quot;政府投资额度&quot;与&quot;投资池余额&quot;（§5.3 储蓄）是<strong>两个不同的池</strong>（政府 vs 居民储蓄）， 玩家接管的到底是哪一个、还是两者合并计算，需要先定。</p>
+<hr>
+<h2 id="h14-M7-新设计-2026-09-20-工资竞标-1-2-草案-1-2-6-的-灵活工资">M7（新设计，2026-09-20）：<strong>工资竞标</strong>（1.2 草案 §1.2-6 的&quot;灵活工资&quot;）</h2>
+<blockquote>
+<p><strong>状态</strong>：<strong>本轮为设计稿，待讨论 → 待裁决 → 待 1.0 化</strong>。<strong>未改任何实现。</strong> <strong>来源</strong>：1.2 草案原文—— &gt; &quot;在原始工资的基础上，建筑扣除工资、分红后，可将<strong>剩余部分最高 50% 投入到工资提升</strong>之中， &gt; 最后剩余的部分为扩大再生产资金。而劳动力将会<strong>根据工资从高到低选择工作岗位</strong>。&quot;</p>
+<p><strong>本轮已在代码里确认</strong>：<code>WageBid</code> / <code>工资竞</code> / <code>WagePremium</code> / <code>raiseWage</code> <strong>均不存在</strong> ⇒ 1.0 的雇佣调整仍是&quot;按利润率 EMA 增/减雇&quot;（§5.2），<strong>不含工资竞标</strong>。</p>
+</blockquote>
+<h3 id="h15-M7-1-目标与它在模型里的位置">M7.1 目标与它在模型里的位置</h3>
+<p><strong>要解决的现象（1.2 草案原文）</strong>：&quot;劳动力在约 700 周期后便会耗尽……在劳动力耗尽后， 由于没有工资系统，使得所有建筑的劳动力数量会随着人口衰减而减少。<strong>这是不符合逻辑的</strong>。&quot;</p>
+<p><strong>目标</strong>：劳动力<strong>稀缺</strong>时，让建筑<strong>用工资竞争</strong>劳动力，而不是被动按利润率增减雇； 让&quot;谁拿到人&quot;由<strong>出价</strong>决定，并且<strong>出价能力受利润约束</strong>（不能凭空抬价）。</p>
+<p><strong>位置</strong>：它替换/增强 §5.2 的<strong>配置机制</strong>（谁得到多少人），但<strong>不改变</strong> §5 的<strong>工资表</strong> （各阶级的<strong>基准</strong>工资不变）。即：<strong>基准工资（契约层）+ 竞标溢价（每场地每周期）</strong>。</p>
+<h3 id="h16-M7-2-每-tick-的规则-5-步">M7.2 每 tick 的规则（5 步）</h3>
+<p>新增状态：每场地 <code>WagePremium_i ≥ 0</code>（元/人/周期）。</p>
+<p><strong>第 1 步｜基准工资</strong> <span class="mtext">baseWage</span><sub class="msub"><i class="mi">i</i></sub><span class="mo">=</span><span class="mtext">WagePerLevel</span><span class="mo">(</span><i class="mi">i</i><span class="mo">)</span><span class="mo">/</span><span class="mtext">LaborPerLevel</span><span class="mo">(</span><i class="mi">i</i><span class="mo">)</span> （1.0 已是逐建筑：城镇 6.75、农业 5.65、庄园 5.65、金融区 6.75。）</p>
+<p><strong>第 2 步｜可竞标资金（A_i）</strong> <span class="mo">π</span><sub class="msub"><i class="mi">i</i><sup class="msup"><i class="mi">n</i><i class="mi">e</i><i class="mi">t</i></sup></sub><span class="mo">=</span><span class="mtext">本期纯利</span><span class="mo">−</span><span class="mtext">baseWage</span><sub class="msub"><i class="mi">i</i></sub><span class="mo">×</span><span class="mtext">在岗人数</span><span class="mo">,</span><span style="display:inline-block;width:2em"></span><i class="mi">A</i><sub class="msub"><i class="mi">i</i></sub><span class="mo">=</span><span class="mtext">wageBidCap</span><span class="mo">×</span><span class="mopname">max</span><span class="mdelim">(</span><span class="mn">0</span><span class="mo">,</span><span style="display:inline-block;width:.3em"></span><span class="mo">π</span><sub class="msub"><i class="mi">i</i><sup class="msup"><i class="mi">n</i><i class="mi">e</i><i class="mi">t</i></sup></sub><span class="mdelim">)</span> <code>wageBidCap</code> <strong>默认 0.5</strong>（1.2 草案原文&quot;最高 50%&quot;）。</p>
+<blockquote>
+<p><strong>⚠️ 与 §4.5.1 的关系（必须写明，否则会重复扣一次工资）</strong>： §4.5.1 的划分顺序是「<strong>先补足自身现金池 <span class="math math-inline"><i class="mi">C</i><sup class="msup"><span class="mo">∗</span><sub class="msub"><i class="mi">i</i></sub></sup></span>，余额再按持股分红</strong>」。 竞标资金应当取自<strong>分红之后的剩余</strong>（即&quot;扩大再生产资金&quot;那一份）， 而不是在分红之前再切一刀。故上式的&quot;本期纯利&quot;应理解为 <strong>&quot;扣基准工资与分红后的剩余&quot;</strong>，与草案原文&quot;建筑扣除工资、分红后&quot;一致。</p>
+</blockquote>
+<p><strong>第 3 步｜出价与择优（本期只抬一次，避免与利润互为因果的震荡）</strong> <i class="mi">p</i><sub class="msub"><i class="mi">i</i><sup class="msup"><i class="mi">n</i><i class="mi">e</i><i class="mi">w</i></sup></sub><span class="mo">=</span><span class="mopname">min</span><span class="mdelim">(</span><i class="mi">p</i><sub class="msub"><i class="mi">i</i><sup class="msup"><i class="mi">m</i><i class="mi">a</i><i class="mi">x</i></sup></sub><span class="mo">,</span><span style="display:inline-block;width:.3em"></span><i class="mi">p</i><sub class="msub"><i class="mi">i</i></sub><span class="mo">+</span><span class="mfrac"><span class="mfrac-num"><i class="mi">A</i><sub class="msub"><i class="mi">i</i></sub></span><span class="mfrac-den"><span class="mtext">在岗人数</span></span></span><span class="mdelim">)</span></p>
+<ul><li><strong>抬价条件（待裁决①已定：(a)）</strong>：<strong>只在该场地本期招不满</strong>（申报量未被满足）时才抬价； <strong>招满则不加价</strong>（否则会无谓地推高成本）。</li><li><strong>回落与衰减（待裁决②已定：(b)+(c)）</strong>：两条同时实施——<ul><li><strong>(b) 招满即回落</strong>：本期<strong>招满且有富余申报</strong>（说明出价过高）⇒ 溢价按 <code>wageBidDecay</code> 下调；</li><li><strong>(c) 缓慢衰减</strong>：即使一直缺员，溢价也按 <code>wageBidDecay</code> 向 0 衰减， 使&quot;降价试探&quot;成为可能（否则只有上抬、没有下探）。</li><li><strong><code>wageBidDecay</code> 默认 5%/年</strong>（年化口径，与 §5.2 的 <code>HireAnnual = 5%/年</code> 同一约定， 每 tick 生效 <span class="math math-inline"><span class="mn">5</span><span class="mo">%</span><span class="mo">/</span><span class="mn">5</span><span class="mn">2</span><span class="mo">≈</span><span class="mn">0</span><span class="mn">.</span><span class="mn">0</span><span class="mn">9</span><span class="mn">6</span><span class="mo">%</span></span>）。</li></ul></li><li><strong>不设显式上限（待裁决⑤已定：(c)）</strong>：<span class="math math-inline"><i class="mi">p</i><sub class="msub"><i class="mi">i</i><sup class="msup"><i class="mi">m</i><i class="mi">a</i><i class="mi">x</i></sup></sub><span class="mo">=</span><span class="mo">+</span><span class="mo">∞</span></span>， 由 <strong>§4.1 的 10% 阈值隐式约束</strong>——抬价推高成本 ⇒ 利润率跌破阈值 ⇒ 停建、亏损解雇， 竞标资金 <span class="math math-inline"><i class="mi">A</i><sub class="msub"><i class="mi">i</i></sub></span> 随之归零。<strong>故不需要额外的工资上限条款</strong>。</li></ul>
+<p><strong>第 4 步｜配置（按工资从高到低）</strong></p>
+<ol><li>各场地按<strong>实际人均工资</strong> <span class="math math-inline"><i class="mi">w</i><sub class="msub"><i class="mi">i</i></sub><span class="mo">=</span><span class="mtext">baseWage</span><sub class="msub"><i class="mi">i</i></sub><span class="mo">+</span><i class="mi">p</i><sub class="msub"><i class="mi">i</i></sub></span> <strong>降序</strong>排序；</li><li>每级建筑需要 <code>LaborPerLevel</code> 人；<strong>雇佣率 <span class="math math-inline"><i class="mi">h</i><sub class="msub"><i class="mi">i</i></sub></span> 按 §5.2 的规则演化</strong> （利润率 &gt; 0 尝试增雇、&lt; 0 解雇）——<strong>竞标只决定&quot;优先级&quot;，不决定&quot;要不要人&quot;</strong>；</li><li>依次满足：<span class="math math-inline"><span class="mtext">需求</span><sub class="msub"><i class="mi">i</i></sub><span class="mo">=</span><i class="mi">N</i><sub class="msub"><i class="mi">i</i></sub><span class="mo">×</span><i class="mi">h</i><sub class="msub"><i class="mi">i</i></sub><span class="mo">×</span><span class="mtext">LaborPerLevel</span></span>，直到总人口耗尽；</li><li><strong>未获配的申报量 ⇒ 该场地雇佣率按实际到岗/申报的比例下调</strong>（与 1.0 第 23 轮的 <code>LaborMarketRatio</code> 同构，但那时是<strong>全局等比</strong>，这里是<strong>按工资排序</strong>）；</li><li>仍有人口剩余 ⇒ 按 §4.2 的就业顺序进自给农场，再余为失业。</li></ol>
+<blockquote>
+<p><strong>迁徙成本（待裁决④已定：无迁徙成本）</strong>：工人<strong>瞬时</strong>按工资排序择业， <strong>不设迁移摩擦、不设每期迁移上限</strong>——因为模型里工人本来就没有&quot;地点&quot;这个状态， 只有&quot;场地 × 阶级&quot;的池（§5.1）；引入摩擦需要一个额外的人口分布状态，本版不引入。 于是<strong>排序即配置</strong>：同一 tick 内按工资降序分配完毕。</p>
+</blockquote>
+<blockquote>
+<p><strong>失业者参与竞标（待裁决⑥已定：(a) 参与）</strong>：失业人口在 §5.1 的失业池里， 他们<strong>就是被高价吸引的那部分劳动力</strong>，故参与排序与配置；一旦被某场地录用， 当 tick 即从失业池转入该场地的池。</p>
+</blockquote>
+<p><strong>第 5 步｜分阶级落到人群池</strong></p>
+<ul><li>场地 <span class="math math-inline"><i class="mi">i</i></span> 的阶级 <span class="math math-inline"><i class="mi">c</i></span> 的<strong>实际工资</strong> = <span class="math math-inline"><span class="mdelim">(</span><span class="mtext">baseWage</span><sub class="msub"><i class="mi">i</i></sub><span class="mo">+</span><i class="mi">p</i><sub class="msub"><i class="mi">i</i></sub><span class="mdelim">)</span><span class="mo">×</span><span class="mfrac mfrac-d"><span class="mfrac-num"><span class="mtext">该阶级的基准工资</span></span><span class="mfrac-den"><span class="mtext">baseWage</span><sub class="msub"><i class="mi">i</i></sub></span></span></span> （即<strong>溢价按比例放大到各阶级</strong>，保持 75/20/5 的工资结构）；</li><li>人群池由&quot;场地 × 阶级&quot;扩展为<strong>携带实际工资</strong>的池（§5.1 的 39 池结构不变， 但每池多一个 <code>Wage</code> 字段）。</li></ul>
+<h3 id="h17-M7-3-与价格-成本的耦合-必须处理-否则竞标会自我引爆">M7.3 与价格/成本的耦合（必须处理，否则竞标会自我引爆）</h3>
+<p>实际人均工资进入单位劳动成本，进而进入 §3.4 的零利润价：</p>
+<div class="equation"><span class="math"><i class="mi">l</i><sub class="msub"><i class="mi">j</i></sub><span class="mo">=</span><span class="mfrac"><span class="mfrac-num"><span class="mtext">baseWage</span><sub class="msub"><i class="mi">j</i></sub><span class="mo">+</span><i class="mi">p</i><sub class="msub"><i class="mi">j</i></sub></span><span class="mfrac-den"><i class="mi">q</i><sub class="msub"><i class="mi">j</i></sub></span></span><span class="mo">×</span><span class="mtext">LaborPerLevel</span></span></div>
+<ul><li>1.0 的 <code>refreshPzero()</code>（当期零利润价 <span class="math math-inline"><i class="mi">P</i><sup class="msup"><span class="mn">0</span></sup><span class="mo">(</span><i class="mi">t</i><span class="mo">)</span></span>）<strong>要改用实际工资</strong>； 否则钳制带与 A1/A3 判据仍看&quot;无溢价&quot;的成本，会把高工资部门的贴边误判。</li><li><strong>静态 <span class="math math-inline"><i class="mi">P</i><sub class="msub"><i class="mi">r</i><i class="mi">e</i><i class="mi">f</i></sub></span> 不变</strong>：它由 §3.4 的 Leontief 方程在<strong>基准工资</strong>下解出， 竞标只影响<strong>当期</strong>成本与价格动态（与第 14 轮&quot;<span class="math math-inline"><i class="mi">P</i><sub class="msub"><i class="mi">r</i><i class="mi">e</i><i class="mi">f</i></sub></span> 固定、<span class="math math-inline"><i class="mi">P</i><sup class="msup"><span class="mn">0</span></sup><span class="mo">(</span><i class="mi">t</i><span class="mo">)</span></span> 动态&quot;的分工一致）。</li><li><strong>自限机制（这是本设计的核心好处）</strong>：抬价 ⇒ 成本↑ ⇒ 利润率↓ ⇒ ① 分红与竞标资金↓（<span class="math math-inline"><i class="mi">A</i><sub class="msub"><i class="mi">i</i></sub></span> 变小）、② 低于 §4.1 的 10% 阈值就不再扩建、③ 亏损就解雇。 ⇒ <strong>工资竞标天然被利润约束</strong>，不会无限抬价。</li></ul>
+<h3 id="h18-M7-4-记账">M7.4 记账</h3>
+<div class="equation"><span class="math"><span class="mtext">借 建筑</span><span class="mo">[</span><i class="mi">i</i><span class="mo">]</span><span style="display:inline-block;width:.3em"></span><span style="display:inline-block;width:.3em"></span><span class="mtext">溢价总额</span><span style="display:inline-block;width:.3em"></span><span class="mo">(</span><i class="mi">p</i><sub class="msub"><i class="mi">i</i></sub><span class="mo">×</span><span class="mtext">在岗人数</span><span class="mo">)</span><span style="display:inline-block;width:2em"></span><span class="mtext">贷 人群池</span><span class="mo">[</span><i class="mi">i</i><span class="mo">]</span><span class="mo">[</span><i class="mi">c</i><span class="mo">]</span><span style="display:inline-block;width:.3em"></span><span style="display:inline-block;width:.3em"></span><span class="mtext">按阶级分摊</span></span></div>
+<ul><li>溢价是<strong>工资的一部分</strong>，故与 §5.1 的工资划转<strong>同一笔交易</strong>（一次过账，不新增腿）；</li><li><strong>基准工资的腿不变</strong>，只是金额从 <code>baseWage × 人数</code> 变成 <code>(baseWage + p_i) × 人数</code>；</li><li><strong>货币总量不变</strong>（建筑 → 人群池的转移）；</li><li><strong>与投资池的竞争关系</strong>：<span class="math math-inline"><i class="mi">A</i><sub class="msub"><i class="mi">i</i></sub></span> 从&quot;扩大再生产资金&quot;里划走 ⇒ <strong>投资池入池额减少</strong>。 即&quot;抬工资&quot;与&quot;扩建&quot;花的是<strong>同一笔钱</strong>——这是本设计想要的政策张力。</li></ul>
+<h3 id="h19-M7-5-与-1-0-现有机制的差异-一张表">M7.5 与 1.0 现有机制的差异（一张表）</h3>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>维度</th><th>1.0 现状</th><th>M7 工资竞标</th></tr>
+</thead>
+<tbody>
+<tr><td>谁决定&quot;谁拿到人&quot;</td><td>§4.2 就业顺序（生产建筑 → 自给农场 → 失业）+ 全局等比配给（第 23 轮 <code>LaborMarketRatio</code>）</td><td><strong>按实际工资降序</strong>（工资高者优先）</td></tr>
+<tr><td>工资</td><td>契约固定（逐建筑结构表）</td><td><strong>基准 + 每场地每周期溢价</strong></td></tr>
+<tr><td>雇佣量</td><td>§5.2 按利润率 EMA 增/减雇</td><td><strong>不变</strong>（竞标只改&quot;优先级&quot;，不改&quot;要不要人&quot;）</td></tr>
+<tr><td>溢出人口</td><td>按比例分摊到各场地</td><td><strong>落在工资最低的场地</strong>（被挤出）</td></tr>
+<tr><td>与投资的关系</td><td>剩余全部入投资池</td><td>剩余<strong>最高 50%</strong> 先用于抬价，其余入池</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="h20-M7-6-裁决结果-2026-09-20-第-5-次裁决-已全部裁定">M7.6 裁决结果（2026-09-20 第 5 次裁决：<strong>已全部裁定</strong>）</h3>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th class="center">#</th><th>问题</th><th><strong>裁决</strong></th><th>落地要点</th></tr>
+</thead>
+<tbody>
+<tr><td class="center">①</td><td>溢价是否只在招不满时才抬</td><td><strong>(a) 只在缺员时抬</strong></td><td>招满不加价，避免无谓推高成本</td></tr>
+<tr><td class="center">②</td><td>溢价能否下调</td><td><strong>(b)+(c) 招满即回落 + 缓慢衰减</strong></td><td>新增 <code>wageBidDecay</code>，<strong>默认 5%/年</strong>（年化，与 <code>HireAnnual</code> 同约定）</td></tr>
+<tr><td class="center">③</td><td>分红与竞标的先后</td><td><strong>(a) 先分红再竞标</strong></td><td><span class="math math-inline"><i class="mi">A</i><sub class="msub"><i class="mi">i</i></sub></span> 取自&quot;扣基准工资与分红后的剩余&quot;，与草案原文一致</td></tr>
+<tr><td class="center">④</td><td>工人迁徙成本</td><td><strong>无迁徙成本</strong></td><td><strong>瞬时按工资排序择业</strong>，不设摩擦与迁移上限（模型里工人无&quot;地点&quot;状态）</td></tr>
+<tr><td class="center">⑤</td><td>单级工资上限 <span class="math math-inline"><i class="mi">p</i><sup class="msup"><i class="mi">m</i><i class="mi">a</i><i class="mi">x</i></sup></span></td><td><strong>(c) 由 §4.1 的 10% 阈值隐式约束</strong></td><td><strong>不设显式上限</strong>；抬价 ⇒ 成本↑ ⇒ 利润率跌破阈值 ⇒ 停建/解雇 ⇒ <span class="math math-inline"><i class="mi">A</i><sub class="msub"><i class="mi">i</i></sub></span> 归零</td></tr>
+<tr><td class="center">⑥</td><td>失业者是否参与竞标</td><td><strong>(a) 参与</strong></td><td>失业者就是&quot;被高价吸引的人&quot;；录用当 tick 即从失业池转入场地池</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>⇒ M7 的设计参数已齐</strong>，可直接进入&quot;1.0 化&quot;（补实测证据 / 前值→后值 / 验收判据）与实现。</p>
+<p><strong>新增参数（M7 引入，均为 1.2 侧）</strong>：</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>参数</th><th class="center">默认</th><th>含义</th></tr>
+</thead>
+<tbody>
+<tr><td><code>wageBidCap</code></td><td class="center"><strong>0.5</strong></td><td>剩余利润中可投入工资竞标的<strong>比例上限</strong>（草案原文&quot;最高 50%&quot;）</td></tr>
+<tr><td><code>wageBidDecay</code></td><td class="center"><strong>0.05/年</strong></td><td>溢价的衰减率（每 tick <span class="math math-inline"><span class="mn">0</span><span class="mn">.</span><span class="mn">0</span><span class="mn">5</span><span class="mo">/</span><span class="mn">5</span><span class="mn">2</span></span>）；招满时触发、缺员时也缓慢生效</td></tr>
+<tr><td><code>wageBidEnabled</code></td><td class="center">false（1.0 侧）；1.2 实现后默认 true</td><td>总开关（便于<strong>对照实验</strong>：开/关竞标跑同一局）</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>与 1.0 的纪律一致</strong>：<code>wageBidEnabled=false</code> 时必须<strong>逐位复现</strong> 1.0 现行行为 （§5.2 的 EMA 雇佣 + §4.2 的就业顺序 + 全局等比配给），这是&quot;1.0 优先&quot;的落地方式， 也是本项目审计套件的既有做法（<code>-static-pcost</code>、<code>-no-expand-dilution</code> 等同型开关）。</p>
+</blockquote>
+<hr>
+<h2 id="h21-M8-新设计-2026-09-20-借贷台账-债券的字段-利息-偿还-以及入池规则">M8（新设计，2026-09-20）：<strong>借贷台账</strong>（债券的字段、利息、偿还、以及入池规则）</h2>
+<blockquote>
+<p><strong>状态</strong>：设计稿，<strong>待 1.0 化</strong>。<strong>未改任何实现。</strong> <strong>来源</strong>：R58 第 2 条（&quot;债券不是传统商品，是借贷凭证&quot;）+ 本轮裁决（&quot;本金 500k、 利率年化 5%、期限 5 年&quot;；&quot;将贷款<strong>记在金融区头上</strong>，然后投入投资池&quot;）。</p>
+</blockquote>
+<h3 id="h22-M8-1-债券的字段-一笔贷款-一条台账记录">M8.1 债券的字段（一笔贷款 = 一条台账记录）</h3>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>字段</th><th>值 / 含义</th></tr>
+</thead>
+<tbody>
+<tr><td>债务方</td><td><strong>金融区</strong>（<code>ledger.Capital()</code>）；<strong>农业侧不参与</strong>（宅邸庄园不借贷，见 M8.6 ④）</td></tr>
+<tr><td>债权方</td><td><strong>储蓄银行</strong>（M4.3 的出资方）</td></tr>
+<tr><td><strong>本金</strong> <code>P</code></td><td><strong>500,000 元</strong></td></tr>
+<tr><td><strong>利率</strong> <code>r</code></td><td><strong>年化 5%</strong></td></tr>
+<tr><td><strong>期限</strong> <code>N</code></td><td><strong>5 年</strong>（= 260 周期）</td></tr>
+<tr><td><strong>还款方式</strong></td><td>等额本息（见 M8.2），每周期还一次</td></tr>
+<tr><td>已还本 <code>paidPrincipal</code></td><td>累计已偿还本金</td></tr>
+<tr><td>已付息 <code>paidInterest</code></td><td>累计已付利息</td></tr>
+<tr><td>余额 <code>outstanding</code></td><td><code>P − paidPrincipal</code>；归零即结清、台账记录移出</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="h23-M8-2-每周期还款额-等额本息">M8.2 每周期还款额（等额本息）</h3>
+<p>年化 5% 按月/周期复利，5 年 = <strong>260 周期</strong>：</p>
+<div class="equation"><span class="math"><i class="mi">i</i><span class="mo">=</span><span class="mfrac"><span class="mfrac-num"><span class="mn">0</span><span class="mn">.</span><span class="mn">0</span><span class="mn">5</span></span><span class="mfrac-den"><span class="mn">5</span><span class="mn">2</span></span></span><span class="mo">,</span><span style="display:inline-block;width:2em"></span><i class="mi">A</i><span class="mo">=</span><i class="mi">P</i><span class="mo">·</span><span class="mfrac"><span class="mfrac-num"><i class="mi">i</i><span style="display:inline-block;width:0.17em"></span><span class="mo">(</span><span class="mn">1</span><span class="mo">+</span><i class="mi">i</i><span class="mo">)</span><sup class="msup"><span class="mn">2</span><span class="mn">6</span><span class="mn">0</span></sup></span><span class="mfrac-den"><span class="mo">(</span><span class="mn">1</span><span class="mo">+</span><i class="mi">i</i><span class="mo">)</span><sup class="msup"><span class="mn">2</span><span class="mn">6</span><span class="mn">0</span></sup><span class="mo">−</span><span class="mn">1</span></span></span><span class="mo">=</span><span class="mn">5</span><span class="mn">0</span><span class="mn">0</span><span class="mo">,</span><span class="mn">0</span><span class="mn">0</span><span class="mn">0</span><span class="mo">×</span><span class="mn">0</span><span class="mn">.</span><span class="mn">0</span><span class="mn">0</span><span class="mn">4</span><span class="mn">3</span><span class="mn">6</span><span class="mn">5</span><span class="mn">3</span><span class="mn">6</span><span class="mo">=</span><b class="mbf"><span class="mn">2</span><span class="mo">,</span><span class="mn">1</span><span class="mn">8</span><span class="mn">2</span><span class="mn">.</span><span class="mn">6</span><span class="mn">8</span><span style="display:inline-block;width:.3em"></span><span class="mtext">元/周期</span></b></span></div>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>项</th><th class="right">数值</th></tr>
+</thead>
+<tbody>
+<tr><td>每周期还款 <code>A</code></td><td class="right"><strong>2,182.68</strong></td></tr>
+<tr><td>其中利息（首期）</td><td class="right">480.77</td></tr>
+<tr><td>其中本金（首期）</td><td class="right">1,701.91</td></tr>
+<tr><td>5 年总还款</td><td class="right">567,497</td></tr>
+<tr><td>总利息</td><td class="right">67,497（≈ 本金的 <strong>13.5%</strong>）</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>为什么不用&quot;每期还本金 <span class="math math-inline"><i class="mi">P</i><span class="mo">/</span><span class="mn">2</span><span class="mn">6</span><span class="mn">0</span></span> + 当期利息&quot;</strong>：那会让前期还款额更高（首期 2,403.85）， 且总额不同。<strong>等额本息</strong>是商业贷款的通行做法，也让&quot;每周期一笔固定金额&quot;在账本上更干净。</p>
+</blockquote>
+<h3 id="h24-M8-3-资金流与记账-本轮裁决的落点">M8.3 资金流与记账（本轮裁决的落点）</h3>
+<blockquote>
+<p><strong>裁决</strong>：&quot;<strong>将贷款记在金融区头上，然后投入投资池</strong>。&quot;</p>
+</blockquote>
+<p><strong>⇒ 资金</strong>不经过金融区的营运现金池<strong>，直接进投资池</strong>；<strong>负债</strong>记在金融区头上。三者分开：</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>腿</th><th>借贷</th><th>说明</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>① 放贷</strong></td><td><strong>借 储蓄银行 / 贷 投资池</strong></td><td>钱从储蓄银行<strong>直接</strong>到投资池</td></tr>
+<tr><td><strong>② 负债登记</strong></td><td>金融区<strong>负债 +P</strong>（<strong>非现金科目</strong>）</td><td>记在金融区头上；<strong>不进它的营运现金池</strong></td></tr>
+<tr><td><strong>③ 每期还款</strong></td><td><strong>借 金融区 / 贷 储蓄银行</strong>（本息合计 A）</td><td>需先给金融区一条<strong>资金来源</strong>，见 M8.4</td></tr>
+<tr><td><strong>④ 利息收入</strong></td><td>储蓄银行持有；<strong>当期</strong>分配给<strong>劳动力</strong>（它是劳动力储蓄的代理，M4.3；已裁决见 M8.6 ③）</td><td></td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>为什么不让钱先过金融区的现金池</strong>：1.0 实测金融区营运净额<strong>长期为负</strong>（它承担全行业 30% 亏损的对应份额）；若贷款先进它的池，会被<strong>先拿去补亏损</strong>而进不了投资池—— 这正是我上一轮标出的记账风险。<strong>本裁决把它绕开了</strong>： 资金直连（储蓄银行 → 投资池），负债单独登记在金融区头上。</p>
+<p><strong>⚠️ 但这引入一个必须补的前提</strong>：<strong>1.0 没有&quot;非现金科目/资产负债表&quot;</strong>—— §4.5.1 的所有权是<strong>持股比例</strong>（<code>GovLevel/PrivLevel</code>），<code>ledger</code> 里只有<strong>现金池</strong>。 故&quot;负债登记&quot;需要一个<strong>新结构</strong>（例如 <code>Capital.Debt</code> 字段，或新增 <code>ledger.KindDebt</code>）， 且<strong>不得</strong>参与 §4.5.3 的&quot;借贷相等&quot;（它不是资金腿），也<strong>不得</strong>计入 §7 的 GDP 存量口径 （否则会把一笔贷款算成财富）。</p>
+</blockquote>
+<h3 id="h25-M8-4-还款的资金来源-已裁决-a">M8.4 还款的资金来源（<strong>已裁决：(a)</strong>）</h3>
+<p><strong>裁决（2026-09-20 第 6 次）</strong>：&quot;<strong>金融区在入池之前先扣下本期还款额</strong>&quot;。</p>
+<p>即在 §4.5.1b 的入池计算里加一条&quot;<strong>先还贷</strong>&quot;：</p>
+<div class="equation"><span class="math"><span class="mtext">入池</span><sub class="msub"><i class="mi">f</i></sub><span class="mo">=</span><span class="mopname">max</span><span class="mdelim">(</span><span class="mn">0</span><span class="mo">,</span><span style="display:inline-block;width:.3em"></span><span class="mo">(</span><span class="mtext">非农生产建筑的私人份额纯利</span><span class="mo">−</span><span class="mtext">金融区工资</span><span class="mo">)</span><span class="mo">−</span><i class="mi">A</i><span class="mdelim">)</span></span></div>
+<p>其中第一项括号内是 §4.5.1b 的<strong>净额</strong>，<span class="math math-inline"><i class="mi">A</i></span> 是<strong>本期应还本息</strong>（先扣，还储蓄银行）。</p>
+<p><strong>金融区净额 → 先还本息 → 还款给储蓄银行 ＋ 余额入投资池</strong></p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>优点</th><th>说明</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>谁借谁还</strong></td><td>还款出自金融区自己的净额，不由投资池或政府代偿</td></tr>
+<tr><td><strong>自动回收</strong></td><td>每周期回收 2,182.68，<strong>5 年后债务自然归零</strong></td></tr>
+<tr><td><strong>维护货币循环</strong></td><td>钱从金融区 → 储蓄银行 → 再放贷，形成闭环（M4.3 的回路）</td></tr>
+<tr><td><strong>不加重政府赤字</strong></td><td>政府不参与（1.0 已实测国库贴在上限上，见 R50）</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>⚠️ 一个必须写明的边界</strong>：若金融区当期净额<strong>不足以</strong>支付 A（1.0 实测其营运净额 长期为负），则本条会导致<strong>入池_f 为 0</strong>（本就为 0）且<strong>欠款累积</strong>。 <strong>违约规则已裁决（2026-09-20 第 7 次）：违约则延期</strong>——见 M8.4.1。</p>
+</blockquote>
+<h4 id="h26-M8-4-1-违约规则-违约则延期-已裁决">M8.4.1 违约规则：<strong>违约则延期</strong>（已裁决）</h4>
+<p><strong>裁决原文</strong>：&quot;<strong>违约则延期</strong>&quot;。</p>
+<p><strong>规则</strong>：当期能付多少付多少，<strong>付不出的部分不核销、不加速、不没收</strong>， 而是<strong>滚入未偿余额</strong>，并按同一利率 <strong>5%/年</strong> 继续计息（<strong>复利展期</strong>）：</p>
+<div class="equation"><span class="math"><span class="mtext">outstanding</span><sub class="msub"><i class="mi">t</i><span class="mo">+</span><span class="mn">1</span></sub><span class="mo">=</span><span class="mtext">outstanding</span><sub class="msub"><i class="mi">t</i></sub><span class="mo">×</span><span class="mo">(</span><span class="mn">1</span><span class="mo">+</span><i class="mi">i</i><span class="mo">)</span><span class="mo">−</span><span class="mtext">本期实付</span></span></div>
+<p>其中 <span class="math math-inline"><i class="mi">i</i><span class="mo">=</span><span class="mn">0</span><span class="mn">.</span><span class="mn">0</span><span class="mn">5</span><span class="mo">/</span><span class="mn">5</span><span class="mn">2</span></span>、<strong>本期实付 = min(应付 A, 金融区当期净额)</strong>。</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>情形</th><th>处理</th></tr>
+</thead>
+<tbody>
+<tr><td>净额 ≥ A</td><td>正常还本息，台账按 M8.2 推进</td></tr>
+<tr><td>0 &lt; 净额 &lt; A</td><td><strong>部分支付</strong>；差额滚入 outstanding（<strong>延期</strong>）</td></tr>
+<tr><td>净额 ≤ 0</td><td><strong>本期实付 = 0</strong>；全额滚入 outstanding 并计息（<strong>延期</strong>）</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>三条必须写明的边界</strong>：</p>
+<ol><li><strong>没有&quot;破产/没收&quot;机制</strong>——1.2 不引入资产清算、不没收股权、不加速到期。 债务只能靠<strong>未来的净额</strong>慢慢还（或永远还不上，见下）。</li><li><strong>期限语义变成&quot;最短期限&quot;</strong>：M8 的&quot;5 年&quot;是<strong>无违约情形下</strong>的期限； 一旦延期，实际结清时间后移。<strong>账本上仍记录&quot;原始期限 5 年 + 已延期次数/金额&quot;</strong>， 以便诊断（这与 1.0 §0.4 第 2 项&quot;债务上限只按建造力产出计价&quot;是同一个量级问题的两端）。</li><li><strong>与 A7 判据的关系（1.0 侧影响）</strong>：若金融区永远还不上，这条不是问题（它是<strong>资本</strong>的债务， 不是政府的）；但若将来把&quot;储蓄银行的债权&quot;计入某个总量，就会与 §8.4 的 A7（政府债务上限） 产生口径交叉——<strong>故必须明确：M8 的债务记在金融区头上，不计入政府债务</strong>。</li></ol>
+<h3 id="h27-M8-5-与-M5-统一利率体系-的关系-已裁决-无息例外取消">M8.5 与 M5（统一利率体系）的关系（<strong>已裁决：无息例外取消</strong>）</h3>
+<p><strong>裁决（2026-09-20 第 6 次）</strong>：&quot;<strong>年化 5%，将无息去掉</strong>&quot;。</p>
+<ul><li>M8 的利率（年化 <strong>5%</strong>）即 M5 统一利率曲线上的<strong>基准利率</strong>；</li><li><strong>1.2 草案 §1.2-7 的&quot;投资池可获得 5 年无息贷款&quot;作废</strong>——该条应改为 &quot;投资池可获 <strong>5 年、年化 5%</strong> 的贷款&quot;，与 M8 同一台账口径；</li><li>⇒ <strong>M5 的四条腿（政府债务 / 央行→银行 / 银行→其他建筑 / 投资池融资）全部 5%，无特例</strong>。 这消掉了我上一轮标出的&quot;唯一例外&quot;问题。</li></ul>
+<h3 id="h28-M8-7-负债登记的实现形态-已裁决选-A-Capital-Debt-字段">M8.7 负债登记的实现形态：<strong>已裁决选 (A) <code>Capital.Debt</code> 字段</strong></h3>
+<p><strong>裁决（2026-09-20 第 8 次）：选 (A)。</strong></p>
+<p><strong>背景</strong>：1.0 的 <code>ledger.Auditor</code> 里<strong>只有现金余额</strong>——<code>Total()</code> 的定义就是 &quot;全部账户余额之和 = 货币总量&quot;，所以<strong>任何进 <code>balances</code> 的东西都会被算成货币</strong>， 而负债不是钱。</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>维度</th><th><strong>(A) <code>Capital.Debt</code> 字段</strong></th><th><strong>(B) <code>ledger.KindDebt</code> 账户</strong></th></tr>
+</thead>
+<tbody>
+<tr><td><strong>性质</strong></td><td>挂在 <code>fiscal.Capital</code> 上的一串<strong>非现金标量</strong></td><td>账本里的一类<strong>账户</strong>，有余额</td></tr>
+<tr><td><strong>结构</strong></td><td><code>Capital.Debt []Loan</code>（每笔贷款一条：本金/利率/期限/已还本/已付息）</td><td>每笔贷款一个 <code>Account{Kind: KindDebt, Index: i}</code></td></tr>
+<tr><td><strong>是否进 <code>Auditor.balances</code></strong></td><td><strong>否</strong>——完全不进那张表</td><td><strong>是</strong>（除非专门排除），于是<strong>会被 <code>Total()</code> 算进货币总量</strong></td></tr>
+<tr><td><strong>与货币守恒（§4.5.3）</strong></td><td><strong>天然无关</strong>；不会污染 A8/货币总量</td><td><strong>必须显式排除</strong>：<code>Total()</code>、<code>TotalOf()</code>、借贷相等、GDP 存量口径<strong>四处</strong>都要加白名单</td></tr>
+<tr><td><strong>能否多笔</strong></td><td>能（切片，天然支持 1 笔 = 1 条台账）</td><td>能（一账户一笔），但<strong>账户数会随贷款笔数膨胀</strong>，账本规模无界</td></tr>
+<tr><td><strong>与 1.0 现有结构的一致性</strong></td><td><strong>高</strong>——1.0 已经把&quot;持股&quot;（<code>GovLevel/PrivLevel</code>）做成 <strong>BuildingState 的字段</strong>，而不是账本科目；负债是同类东西（<strong>所有权/债务 = 标量，不是资金</strong>）</td><td><strong>低</strong>——1.0 的 <code>AccountKind</code> 全是&quot;钱放在哪&quot;，没出现过&quot;钱的对手方&quot;</td></tr>
+<tr><td><strong>报表</strong></td><td>需要新增报告项（<code>Capital.Debt</code> 汇总）</td><td>天然出现在账本遍历里（但要小心被当成钱）</td></tr>
+<tr><td><strong>实现成本</strong></td><td>低（加字段 + 台账推进逻辑）</td><td>中（要改 <code>Total</code>/<code>TotalOf</code>/审计四处，风险面大）</td></tr>
+<tr><td><strong>风险</strong></td><td>低：不可能破坏货币守恒</td><td><strong>高</strong>：一处漏排除 ⇒ 货币总量虚增 ⇒ A8 判据假失败或假通过</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>这条区分的本质</strong>：</p>
+<ul><li><code>ledger.AccountKind</code> 回答的是&quot;<strong>这笔钱在谁手里</strong>&quot;；</li><li><strong>负债回答的是&quot;欠了多少&quot;</strong>，它是<strong>权利/义务</strong>，不是持有物。</li></ul>
+<p>1.0 已经做过一次同样的选择：<strong>持股没有进账本，而是做成了 <code>BuildingState</code> 的字段</strong>。 M8 的负债与持股同族（都是&quot;所有权/债权&quot;），<strong>因此应当沿用同一做法</strong>。</p>
+<p><strong>已裁决：选 (A) <code>Capital.Debt</code></strong>，理由三条：</p>
+<ol><li><strong>不污染货币守恒</strong>——它根本不进 <code>Auditor.balances</code>，A8 与&quot;货币总量&quot;零风险；</li><li><strong>与 1.0 既有设计同构</strong>（持股也是字段，不是账本科目）；</li><li><strong>实现面小</strong>：只在 <code>fiscal.Capital</code> 加台账 + 在 <code>step</code> 的入池/还款处推进， 不动 <code>ledger</code> 的四个不变量检查点。</li></ol>
+<p><strong>落点（1.0 化时按此实现）</strong>：</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>项</th><th>内容</th></tr>
+</thead>
+<tbody>
+<tr><td>结构</td><td><code>fiscal.Capital</code> 新增 <code>Debt []Loan</code>；<code>Loan{Principal, Rate, Term, PaidPrincipal, PaidInterest, Outstanding, Deferrals}</code></td></tr>
+<tr><td>推进位置</td><td><code>sim.step</code> 的 ⑧（资本入池）之前：<strong>先按 M8.4 扣本期还款额</strong>，不足则按 M8.4.1 <strong>延期</strong>（滚入 <code>Outstanding</code> 并按 5%/年计息）</td></tr>
+<tr><td>记账腿</td><td>放贷：<strong>借 储蓄银行 / 贷 投资池</strong>；还款：<strong>借 金融区 / 贷 储蓄银行</strong>（两笔都是普通资金腿，参与借贷相等）</td></tr>
+<tr><td><strong>不进</strong>的地方</td><td><code>Auditor.balances</code>、<code>Total()</code>、货币守恒（A8）、§7 GDP 的存量口径、§8.4 的 A7（政府债务）</td></tr>
+<tr><td>报表</td><td>新增诊断项：金融区未偿余额 / 已付息 / 延期次数</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>若将来需要&quot;债权的持有方&quot;也表达出来</strong>（例如储蓄银行把债权再卖给第三方）， 那才需要把 (B) 引入——那时应当<strong>新增一个独立的表</strong>（如 <code>ledger.DebtBook</code>）， 而<strong>不是</strong>把负债混进现金账户表。</p>
+</blockquote>
+<h3 id="h29-M8-6-裁决状态">M8.6 裁决状态</h3>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th class="center">#</th><th>问题</th><th><strong>裁决 / 状态</strong></th></tr>
+</thead>
+<tbody>
+<tr><td class="center">①</td><td><strong>还款资金来源</strong></td><td><strong>✅ 已裁决：(a)</strong> 金融区入池前先扣本期还款额（M8.4）</td></tr>
+<tr><td class="center">①-b</td><td><strong>净额不足时怎么办</strong></td><td><strong>✅ 已裁决：违约则延期</strong>（M8.4.1）——付不出就滚入未偿余额并继续按 5%/年计息；<strong>不核销、不加速、不没收</strong></td></tr>
+<tr><td class="center">②</td><td><strong>负债登记的实现形态</strong></td><td><strong>✅ 已裁决：选 (A) <code>Capital.Debt</code> 字段</strong>（不污染货币守恒、与&quot;持股做成字段&quot;同构、实现面小）；落点见 M8.7</td></tr>
+<tr><td class="center">③</td><td><strong>利息归谁、何时给</strong></td><td><strong>✅ 已裁决：利息当期分配</strong>；储蓄银行收息 → <strong>当期</strong>分给<strong>劳动力</strong>（M4.3 的代理关系）；宅邸庄园侧无此项（见④）</td></tr>
+<tr><td class="center">④</td><td><strong>农业侧</strong></td><td><strong>✅ 已裁决：宅邸庄园不借贷</strong>——&quot;<strong>符合农业贵族习惯</strong>&quot;。故农业资本不参与 M8 台账；庄园的收入仍走 §4.5.5（自给农场销售收入 + 农业建筑私人份额纯利），只是<strong>不融资、不负债</strong></td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>已确定（无需再议）</strong>：本金 500k、利率年化 5%、期限 5 年、记在金融区头上、 投入投资池、还款先扣、违约则延期、无息取消、利息当期分配、宅邸庄园不借贷、 负债登记用 <code>Capital.Debt</code> 字段。 <strong>⇒ M8（借贷台账）设计已全部闭合，可进入&quot;1.0 化&quot;与实现。</strong></p>
+<hr>
+<h1 id="h30-第二部分-1-2-草案原文-docx-转换">第二部分：1.2 草案原文（docx 转换）</h1>
+<blockquote>
+<p>以下为 <code>1.2 货币与金融.docx</code> 的忠实转换（措辞未改），小节标题为转换者所加。 其中与本文件第一部分重复或冲突之处，<strong>以 1.0 为准</strong>（见文件开头的状态说明）。</p>
+</blockquote>
+<h2 id="h31-1-2-1-总述与阶段目标">1.2-1 总述与阶段目标</h2>
+<p>货币与金融是模拟经营类游戏不可绕过的一个部分。好的货币与金融系统会在可玩性的基础上达到拟真的效果。维多利亚3至今都没有做出相对拟真的货币与金融系统，希望叶赫那拉能够在巨人的肩膀上走的更远。</p>
+<p>本阶段将引入基础货币系统、实现基础货币功能即结算功能、引入金融业、引入投资池概念、引入金融商品概念、优化投资系统。</p>
+<h2 id="h32-1-2-2-货币的三种形态与银行">1.2-2 货币的三种形态与银行</h2>
+<p>货币，是一种特殊的商品，根据定义，其为人类可接受的一般等价交换物。货币具有多种形态，不幸的是，维多利亚时期正是处于实体货币向可兑付以及不可兑付货币变化的过渡期。为了相对拟真的模拟这一概念，不可避免的要引入至少三种货币结算模式——贵金属货币、可兑付货币、以及信用货币。</p>
+<p>其中为了简化开发，我们设置贵金属本身设为锚定物，其中贵金属货币由其成色决定其发行量与价值；可兑付货币由准备金率决定其发行量与货币；信用货币由货币政策本身决定其发行量，由市场流通货物价值决定其价值。</p>
+<p>这三种货币政策由银行建筑以不同的生产模式落实。银行购买贵金属（信用货币除外），生产货币，货币本身加入银行现金池，而银行将通过借贷的形式将货币转移给其他建筑。其中金融区便是最主要的用户之一。</p>
+<p>这种特殊的功能使得银行建筑成为特殊的建筑。尽管其生产的货币理论上是商品，但货币如果真正制作为一种商品，当前基于货币定义的商品星系就会瞬间因为循环定义而崩塌，故而货币不能作为一般商品进入商品页面。</p>
+<p>当前版本我们将注重于贵金属货币的开发，用于完善货币系统；更加复杂的货币系统将随着2.2版本金融补完而开发完成。</p>
+<h2 id="h33-1-2-3-货币系统带来的问题">1.2-3 货币系统带来的问题</h2>
+<p>由于货币系统的到来，产生了海量的新问题：利润与再生产、工资与消费、商品价格的表示、货币的转移等等。</p>
+<h3 id="h34-3-1-商品价格的表示">3.1 商品价格的表示</h3>
+<p>首先要解决的肯定是商品价格问题。当前的商品价格是微分方程的直接解，如果引入货币概念，则需要借助货币与贵金属价格之间的关系为原商品价格乘以一个系数。这个关系则是与银行货币发行政策有关的：我们设置贵金属货币的成色是其理论价值的五成（即通过成色、法定等因素强行抬高贵金属货币的含金量），则货币价值为贵金属价值的一倍。此时商品价格就转变为商品相对于贵金属的比值乘以货币与贵金属的比值。</p>
+<p>为了区分银行的职能，我们将银行分为三类：中央银行、储蓄银行、投资银行（工商银行）。每种银行的职能与收支来往是固定的，方便逻辑编写。</p>
+<p>如假定1单位黄金的价格恒为10,000，则每单位中央银行每周期收购20单位黄金，生产200,000货币。这些货币全部转入中央银行的现金池中。</p>
+<p>储蓄银行与工商银行的功能需要重置工资与利润后才可实现，目前不讨论。</p>
+<blockquote>
+<p><strong>✅ 本条已过时（2026-09-20 第 4 次裁决）</strong>：用户裁决&quot;<strong>工资系统已经重置过了</strong>&quot;。 <strong>本工作区现状（1.0 契约 §5，已实现且被审计断言守住）</strong>：</p>
+<p>| 已重置项 | 现状 | |----------|------| | 劳动结构按建筑分派 | 城镇 75% 劳工 5 元 / 20% 工程师 10 元 / 5% 资本家 20 元（均薪 6.75） | | | 农业（谷物/棉花）75% 劳工 5 元 / <strong>20% 农民 7 元</strong> / 5% 工程师 10 元（均薪 <strong>5.65</strong>） | | | 宅邸庄园为<strong>独立</strong>阶级结构（本版暂与农业相同） | | 每级工资 | <code>WagePerLevel()</code> 逐建筑：城镇 33,750 / 农业 28,250 / 庄园 5,650 / 金融区 6,750 | | 工资=成本 | 进入 §3.4 的零利润价方程（<span class="math math-inline"><i class="mi">l</i><sub class="msub"><i class="mi">j</i></sub></span>）；现金流用真实工资 | | 利润率信号工资 | <strong>逐建筑 <code>WagePerLevel()</code></strong>（第 24 轮裁决，不用统一标准工资表） |</p>
+<p><strong>仍未实现的</strong>（1.2 草案 §1.2-6 的&quot;灵活工资&quot;）：建筑把&quot;扣工资分红后剩余&quot;的<strong>最高 50%</strong> 投入工资提升、劳动力<strong>按工资从高到低择业</strong>——1.0 的雇佣调整仍是&quot;按利润率 EMA 增/减雇&quot; （§5.2），不含工资竞标。<strong>这一条已在本文件 M7 给出完整设计</strong>（见第一部分 M7）。</p>
+</blockquote>
+<h3 id="h35-3-2-货币的转移与结算">3.2 货币的转移与结算</h3>
+<p>其次就是货币的转移问题，当前对于购买商品时的货币支付问题相对不清晰，现在明确——每一单位的商品转移都需要有投资池之间的划账，每一单位的商品都要按照市场价格支付。这一支付发生在交易关系双方的投资池之间。</p>
+<h3 id="h36-3-3-劳动力与工资">3.3 劳动力与工资</h3>
+<p>劳动力由于当前没有自己的动态工资，故而以修正参数的形式参与到市场活动中来，这一关系将被新的工资体系取代。劳动力将按照工种与所在生产建筑区分收入，其收入汇入对应阶层现金池下，并根据不同收入等级加权进行统一消费品购买。</p>
+<h3 id="h37-3-4-利润与再生产">3.4 利润与再生产</h3>
+<p>既然有了货币与购买关系，那么同样的就出现了利润与再生产。生产建筑通过买入原料卖出成品，获得毛利收入。这一部分收入将划分为工资、分红、与再生产利润。其中工资部分直接汇入对应劳动力的阶层现金池；分红则为建筑所有者的额外利润百分比分配，如一个厂为资本家所有，则该周期该建筑营业利润的10%再汇入资本家现金池；再生产利润则是扣除上述两者后的留存收益，优先填满每级建筑的500,000现金池，随后全部转入投资池。</p>
+<h3 id="h38-3-5-投资池">3.5 投资池</h3>
+<p>为了实现相对正常的扩大再生产，1.2版本将引入维多利亚3的投资池概念。即所有建筑共用同一个投资池，使扩大再生产的成本全部由统一的投资池支付，而投资池的建设顺序由阶层的投资池贡献力与对应的投资倾向综合形成。</p>
+<h3 id="h39-3-6-金融商品">3.6 金融商品</h3>
+<p>为了更加精细的模拟市场收购行为，1.2版本将翻倍商品的数量——每种生产建筑将发行自己的金融商品，这一商品对应的是生产建筑单位等级的收益权，对应商品的所有者将获得每周期的对应分红。对应的，金融区将成为金融商品的主要购买者。</p>
+<h3 id="h40-3-7-金融区">3.7 金融区</h3>
+<p>金融区是相对庄园的被动金融建筑。每一级工商业等金融商品都对应着一级金融区（农业建筑则是对应庄园）。金融区实际上是投资池收购建筑等级的具象化，只是中间隔了一层生产建筑的金融商品。目前版本将会将金融商品的价格根据建造力对应为随建造力波动的价格而非自主波动的价格。且金融商品只能被顺序交易若干次：政府所有-劳动力所有-金融区所有。各等级平级无法发生交易。</p>
+<p>由于交易是长期发生的，故而交易成本不会计入投资池选择交易的考虑范围。</p>
+<h2 id="h41-1-2-4-玩家现金池">1.2-4 玩家现金池</h2>
+<p>由于货币系统上线，添加玩家现金池（即现金储备池/贷款池）。</p>
+<h2 id="h42-1-2-5-贵金属与银行的具体设定">1.2-5 贵金属与银行的具体设定</h2>
+<p>贵金属由金矿生产（实际上银矿与铜矿也会加入这一行列，但目前不添加）。金矿劳动力需求5k，比例同一般矿场。单位金矿消耗15煤炭、15工具，生产25黄金。</p>
+<p>1.2版本最多建造50级金矿。</p>
+<p>金融区、银行与中央银行每级雇佣1k人，其中500人为资本家，500人为劳工（工资按先前分层）。</p>
+<p>单位中央银行消耗20黄金，生产400,000货币进入现金池。其中一半用于支付10,000原每单位黄金给金矿。剩余部分进入中央银行现金池。当黄金有剩余时，中央银行自动扩建。</p>
+<p>贷款。贷款是一种金融活动，以中央银行-银行-其他建筑的顺序进行，前者向后者贷款，每次贷款调拨金额100w元，即通过计次计算贷款数量。贷款不得超过目标建筑现金池100%，即一次贷款的抵押率至少50%。</p>
+<p>每级中央银行生成一级银行。1.2版本将中央银行现金池与银行现金池共用。银行向其他建筑提供贷款。</p>
+<h2 id="h43-1-2-6-工资系统">1.2-6 工资系统</h2>
+<p>由于目前系统已经可以运行，而根据运行经验，劳动力在约700周期后便会耗尽（取决于初始建筑数量——启动速度，与总劳动力数量——终点距离）。在劳动力耗尽后，由于没有工资系统，使得所有建筑的劳动力数量会随着人口衰减而减少。这是不符合逻辑的。</p>
+<p>为了模拟劳动力在劳动力短缺的情况下的自由选择权，需要加入工资系统。即在原始工资的基础上，建筑扣除工资、分红后，可将剩余部分最高50%投入到工资提升之中，最后剩余的部分为扩大再生产资金。而劳动力将会根据工资从高到低选择工作岗位。</p>
+<h2 id="h44-1-2-7-其余设定">1.2-7 其余设定</h2>
+<p>银行每1m生产为1单位“贷款”商品，一级银行最多生产50单位“贷款”。当资金池超过对应数量时银行自动扩建。</p>
+<p>投资池可以在&quot;不足以支付当前建造力所需200%资金&quot;的情况下获得5年的&quot;贷款&quot;，在5年后结清。</p>
+<blockquote>
+<p><strong>⚠️ 本句已按裁决订正（2026-09-20 第 6 次）</strong>：</p>
+<ul><li><strong>&quot;无息&quot;已去掉</strong>——统一利率体系（M5）的年化 <strong>5%</strong>（&quot;年化 5%，将无息去掉&quot;）。 故本句应读作&quot;获得 <strong>5 年、年化 5%</strong> 的贷款，在 5 年后结清&quot;。</li><li>贷款是<strong>借贷凭证</strong>、不是商品（M4 + M8）；台账字段与还款规则见 <strong>M8</strong>。</li><li><strong>还款资金来源</strong>：金融区入池前先扣本期还款额（M8.4）。</li></ul>
+</blockquote>
+<p>添加建筑类型“开发”，该类建筑无条件雇佣满员，如金融建筑、建造部门等</p>
+</main>
+</div>
+</body>
+</html>

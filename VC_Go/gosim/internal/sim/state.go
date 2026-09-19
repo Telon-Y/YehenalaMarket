@@ -32,6 +32,7 @@ import (
 	"yehenala/market/internal/ledger"
 	"yehenala/market/internal/market"
 	"yehenala/market/internal/model"
+	"yehenala/market/internal/product"
 )
 
 // BuildingState 是一类建筑的动态状态。
@@ -51,9 +52,20 @@ type BuildingState struct {
 	// IdleTicks 是雇佣率低于 75% 的连续 tick 数（§4.4）。
 	IdleTicks int
 	// MarginEMA 是利润率的指数移动平均（架构 D13，抑制抖动）。
+	//
+	// 【§4.5.7 校验条款】它是**含补贴**的口径：补贴计入本期收入后 EMA 上升，
+	// 于是 §5.2 的增雇分支生效（受补贴建筑主动追求满员）。
 	MarginEMA float64
-	// LastMargin 是上一 tick 的即时利润率，用于报告。
+	// ProfitEMA 是**不含补贴**的真实利润率 EMA（§4.5.7 的校验条款）。
+	//
+	// §4.1 的扩建判定必须用它，而不是 MarginEMA：
+	// 否则"亏损建筑靠补贴把 margin 抬到 0 以上"会被扩建逻辑误读为盈利，
+	// 用真金白银继续扩产（既是重复补贴，也违背"救急不救扩"的设计意图）。
+	ProfitEMA float64
+	// LastMargin 是上一 tick 的即时利润率（含补贴），用于报告。
 	LastMargin float64
+	// LastProfitMargin 是上一 tick 的即时利润率（不含补贴），用于报告。
+	LastProfitMargin float64
 	// LastProfit 是上一 tick 的利润额。
 	LastProfit float64
 	// LastRevenue 是上一 tick 的销售收入（已扣除交易税）。
@@ -76,7 +88,7 @@ func (b *BuildingState) CashOf(a *ledger.Auditor) float64 { return a.Balance(b.A
 // 但【写】仍然是单边分录，不保证借贷相等。真正的收敛路径是逐步把每个
 // 调用点替换为 ledger 包里对应的交易构造函数（Wage / ConsumerPurchase /
 // Intermediate / PowerPurchase / ...），那些函数保证借贷相等。
-// 替换进度见 docs/CHANGES-1.0.md。
+// 替换进度见 docs/ACTIVE.md §七（R1–R37 逐轮记录）。
 type micro struct {
 	aud *ledger.Auditor
 	acc ledger.Account
@@ -122,15 +134,199 @@ func (s *State) HouseCash(i int) micro {
 }
 
 // Order 是一个施工订单（§4.2）。
+//
+// 【队列语义（2026-09-19 修订）】s.Orders 是**持久队列**：订单跨 tick 存活，
+// 每 tick 按 FIFO 推进 min(剩余需求, SitePowerLimit) 的建造力量，直到 Progress
+// 达到 BuildCost × Units 才完工。
+//
+// 【顺带修正的缺陷】旧实现在创建订单时把当次投入一次性写进 Progress，之后
+// 永远不再推进，于是**昂贵订单永远不完工**（剩余需求始终 > 0，而 Progress 不再增长）。
+// 现在每 tick 真实累加 Progress，并在 Advance 里记录本 tick 的投入量。
 type Order struct {
 	// BuildingIndex 是目标建筑类别。
 	BuildingIndex int
 	// Units 是本次扩建的等级数。
 	Units float64
-	// Progress 是已投入的建造力。
+	// Progress 是**累计**已投入的建造力。
 	Progress float64
-	// Payer 说明出资方：'gov' / 'capital' / 'firm'。
-	Payer string
+	// Advance 是本 tick 实际投入的建造力量（诊断与 §4.2 上限校验用）。
+	Advance float64
+	// Stack 是出资/立项的投资栈："manor"（庄园栈）或 "finance"（金融栈）。
+	//
+	// 【§4.5.1b】谁出资、谁拥有：庄园栈建成的等级归宅邸庄园，金融栈归金融区。
+	// 政府不参与新增等级，故订单不再有 Payer。
+	Stack string
+	// PublicWorks 标记这是**政府公共工程**订单（§4.5.8，2026-09-19 第 15 轮裁决）。
+	//
+	// 公共工程与私人扩建的三点区别：
+	//  1. 出资方是**国库**（直接采购建造力，不走投资池，也没有 G6 偿还）；
+	//  2. 完工等级归**政府**（GovLevel += added），不归资本建筑；
+	//  3. 投向只能是**开发类建筑**（§3.2 裁决）。
+	// 它是政府的**真实支出**（不是转移支付），也是"建造部门产能自锁"
+	// （R31/R34）的结构性出口——需求端由国库托底。
+	PublicWorks bool
+
+	// Acquire 标记这是**收购订单**（§4.5.1a，2026-09-19 第 27 轮裁决）。
+	//
+	// 【为什么要把它放进建造列表】用户裁决："将收购概念同样加入建造列表"。
+	// 在此之前私有化是一笔**瞬时**交易（`book.Privatize` 在 ⑦ 一次性成交），
+	// 于是它既不受队列吞吐约束、又与"扩建"争抢同一笔资本现金，实测结果是
+	// **一笔都成交不了**（资本池 −2.77e9，见 docs/ACTIVE.md §七 R51）。
+	//
+	// 放进队列后：
+	//   - 它是一张**持久订单**，与扩建订单**同列**（同一 `s.Orders`，同一 FIFO）；
+	//   - `Units` 是**待收购的级数**，`Progress` 是**累计已付对价**（不是建造力）；
+	//   - `Remaining` 相应改为返回**剩余对价**（= Units×单价 − Progress）；
+	//   - 完工时一次性完成股权转让 **政府级 → 私有级**（与扩建订单"完工才加级"同构）；
+	//   - **不消耗建造力**：它买的是**存量股权**，不是新建产能，故不进入 §4.2 的
+	//     每工地 30 建造力上限、也不占用建造力产出；
+	//   - 资金来源是**资本池**（`book.Privatize` 的借方），并由"资本留存"机制
+	//     保证它有钱（见 sim 的资本留存：扩张出资与收购出资分开列账）。
+	Acquire bool
+	// UnitPrice 是收购订单的**每级对价**（元/级）。仅 Acquire 为 true 时有意义。
+	//
+	// 口径 = 该建筑建造成本 × 建造力当期价 × `PrivatizePriceMult`，
+	// 在**下单时冻结**（订单存续期内不随建造力价格波动）——与扩建订单按完工时的
+	// 建造成本记账不同，因为收购的对价是双方在下单时约定的。
+	UnitPrice float64
+}
+
+// hasAcquireOrder 报告某建筑类别是否已有一张未完工的**收购订单**（§4.5.1a 第 27 轮）。
+func (s *State) hasAcquireOrder(bi int) bool {
+	for i := range s.Orders {
+		o := &s.Orders[i]
+		if o.Acquire && o.BuildingIndex == bi && o.Remaining(s.Buildings) > 1e-9 {
+			return true
+		}
+	}
+	return false
+}
+
+// acquireNeed 返回本 tick 全部收购订单**还差的对价总额**（元）。
+//
+// 它被用作"资本留存"的依据：⑨b 把资本净额转入投资池之前先扣掉这一笔，
+// 于是**收购的单子有钱、扩建的单子用剩下的钱**——这是"收购进建造列表"
+// 能真正成交的关键（否则资本的钱全被 §4.5.1b 抽去付建造力，收购永远排不上）。
+func (s *State) acquireNeed() float64 {
+	var need float64
+	for i := range s.Orders {
+		o := &s.Orders[i]
+		if !o.Acquire {
+			continue
+		}
+		if r := o.Remaining(s.Buildings); r > 0 {
+			need += r
+		}
+	}
+	return need
+}
+
+// processAcquisitions 推进全部**收购订单**（§4.5.1a 第 27/28 轮）。
+//
+// 口径与扩建订单的三点区别：
+//   - 付的是**对价**而不是建造力；
+//   - **不占用建造力产出**、不受 §4.2 每工地 30 上限约束（买的是存量股权）；
+//   - 完工时才一次性转让 `Units` 级（政府级 → 私有级），与扩建"完工才加级"同构。
+//
+// 每 tick 的推进额受两条约束：① 付款方的可用余额；② 每 tick 至多完成
+// `PrivatizeStep` 比例的级数（年化速率，与下单量同一旋钮），避免一 tick 买下整个部门。
+//
+// 【出资方（第 28 轮裁决："允许收购用投资池余额出资"）】按下述顺序取：
+//
+//	① **投资池**（`PrivatizeFromInvestment`）：它是"可动用于投资的资金"，
+//	   本意就是投资——买存量股权也是投资。实测默认参数下这里有 3.0e9 闲置。
+//	② 资本池（`Privatize`）：投资池也付不动时，退回资本自己的现金。
+//
+// 【为什么不是"资本池优先"】默认参数下资本池长期为负（−3.38e9），
+// 若先试它就等于永远不动；而投资池的钱本来就是居民储蓄、等着被投出去。
+//
+// 返回本 tick 实际成交的级数与付出对价。
+func (s *State) processAcquisitions() (units, paid float64) {
+	if !s.Params.PrivatizeEnabled {
+		return 0, 0
+	}
+	step := s.Params.PrivatizeStep
+	if step <= 0 {
+		step = 0.05
+	}
+	for i := range s.Orders {
+		o := &s.Orders[i]
+		if !o.Acquire {
+			continue
+		}
+		remaining := o.Remaining(s.Buildings)
+		if remaining <= 1e-9 {
+			continue
+		}
+		b := &s.Buildings[o.BuildingIndex]
+		if b.GovLevel <= 1e-9 {
+			continue // 政府已无持股（可能被别的单子买走了）
+		}
+		// ① 本 tick 对价上限：拟转让级数 ≤ 政府持股 × 步长。
+		wantUnits := b.GovLevel * step
+		// ② 受收购单自身的剩余量约束。
+		if byOrder := remaining / o.UnitPrice; wantUnits > byOrder {
+			wantUnits = byOrder
+		}
+		if wantUnits <= 1e-9 {
+			continue
+		}
+		// ③ 出资方：默认"投资池优先，其次资本池"（第 28 轮用户裁决）。
+		//
+		// 顺序的原因：默认参数下资本池长期为负（−3.38e9），先试它就等于永远不动；
+		// 而投资池的钱本来就是居民储蓄、等着被投出去。
+		//
+		// `Params.AcquireFromInvestment = false` 时只用资本池（第 27 轮口径）——
+		// 供"在受控条件下反解对价公式"的审计断言使用（见该字段的说明）。
+		var res book.PrivatizeResult
+		if s.Params.AcquireFromInvestment {
+			res = s.Bk().PrivatizeFromInvestment(wantUnits, o.UnitPrice, s.Params.TaxRate)
+		}
+		if res.Units <= 1e-9 {
+			res = s.Bk().Privatize(wantUnits, o.UnitPrice, s.Params.TaxRate)
+		}
+		if res.Units <= 1e-9 {
+			continue // 两处都没钱：整张单子本 tick 停摆（下一 tick 再试）
+		}
+		o.Progress += res.Paid
+		moved := res.Units
+		if moved > b.GovLevel {
+			moved = b.GovLevel
+		}
+		b.GovLevel -= moved
+		b.PrivLevel += moved
+		units += moved
+		paid += res.Paid
+	}
+	// 完工的收购单移出队列（剩余 ≤ 0），与扩建单的清理同一处口径。
+	kept := s.Orders[:0]
+	for i := range s.Orders {
+		o := s.Orders[i]
+		if o.Acquire && o.Remaining(s.Buildings) <= 1e-9 {
+			continue
+		}
+		kept = append(kept, o)
+	}
+	s.Orders = kept
+	return units, paid
+}
+
+// Remaining 返回订单尚未投入的需求。
+//
+// 【两种口径（2026-09-19 第 27 轮）】
+//   - 扩建订单：**建造力**剩余需求 = 建造成本 × 级数 − 已投入建造力；
+//   - 收购订单（`Acquire`）：**对价**剩余额 = 级数 × 每级对价 − 已付对价。
+//
+// 两者共用同一张队列表，故本函数必须按类型分派——否则收购订单会被
+// 当成"要花建造力"，把建造力产出错误地算进它的剩余里。
+func (o Order) Remaining(buildings []BuildingState) float64 {
+	if o.BuildingIndex < 0 || o.BuildingIndex >= len(buildings) {
+		return 0
+	}
+	if o.Acquire {
+		return o.Units*o.UnitPrice - o.Progress
+	}
+	return buildings[o.BuildingIndex].Spec.BuildCost*o.Units - o.Progress
 }
 
 // State 是仿真的全部可变状态。
@@ -158,7 +354,7 @@ type State struct {
 	//
 	// 工资从 BuildingState.Cash 实际划转到这些池，消费从这些池实际扣款。
 	// 修订前居民没有任何账户，工资只作为成本从利润里扣减而从未付出，
-	// 导致货币每 tick 净损 15%~34%（见 docs/AUDIT-1.0.md §3）。
+	// 导致货币每 tick 净损 15%~34%（见 docs/ACTIVE.md §6.5）。
 	Houses *cohort.Ledger
 
 	Params model.Params
@@ -188,6 +384,107 @@ type State struct {
 	// calibration 保存标定结果，供报告输出与触发式重算 P_cost 使用。
 	calibration *calibrate.Result
 
+	// ===== §4.2 修订 / §4.5.5：自给农场与宅邸庄园 =====
+
+	// SubsistenceLevels 是当期自给农场级数（= 未使用耕地 × SubsistenceScale）。
+	SubsistenceLevels float64
+	// SubsistenceHireRate 是自给农场的雇佣率（备用劳动力池填充率 ∈[0,1]）。
+	//
+	// 就业顺序：一般生产建筑（含金融区与宅邸庄园）→ 自给农场 → 失业。
+	SubsistenceHireRate float64
+	// LaborMarketRatio 是本 tick 的**劳动力配给系数** ∈ (0,1]（§5.2 第 23 轮人口约束）。
+	//
+	// acquireCommitted 是**本 tick 为收购订单留存的资本额**（§4.5.1a 第 27 轮）。
+	// ⑨b 把资本净额转入投资池之前先扣掉它，使"收购有钱、扩建用剩下的钱"。
+	acquireCommitted float64	//
+	// 当"各场地申报雇佣人口之和 > 总人口"时，本值为 人口 / 申报量，所有场地的
+	// **有效雇佣率**按它等比缩放（见 allocateSubsistenceLabor）。= 1 表示未触限。
+	// 零值（新建 State）由 step 开头的 allocateSubsistenceLabor 立即改写。
+	// 它只影响本 tick 的实际用工/工资/产出，**不写回** `Building.HireRate`——
+	// 后者仍由 §5.2 的利润率信号驱动。
+	LaborMarketRatio float64
+	// SubsidyPaidTick 是本 tick 支付的政府补贴总额（§4.5.7）。
+	subsidyPaidTick float64
+
+	// ===== 2026-09-19 第 15 轮裁决新增的三条资金流（每 tick 流量）=====
+
+	// savingTick 是本 tick 居民**结余全额进入储蓄固定账户**的金额（§5.3 第一步）。
+	savingTick float64
+	// savingInvestTick 是本 tick 从储蓄账户**实际转入投资池**的金额（§5.3 第二步，
+	// = σ_save × savingTick）。σ_save = 1 时两者相等、储蓄账户期末归零。
+	savingInvestTick float64
+	// welfarePaidTick 是本 tick 政府发放的福利金总额（§4.5.8）。
+	welfarePaidTick float64
+	// publicWorksSpendTick 是本 tick 公共工程采购建造力的国库支出（§4.5.8）。
+	publicWorksSpendTick float64
+	// publicWorksUnitsTick 是本 tick 公共工程新建的订单等级数（诊断）。
+	publicWorksUnitsTick float64
+	// publicWorksSoldTick 是本 tick 公共工程实际投入队列的建造力量（诊断；
+	// 下一 tick 会在 ⓪ 被抓取到 powerPublicWorksPrev，用于建造部门的收入确认）。
+	publicWorksSoldTick float64
+	// budgetShareManor 是本 tick 投资池预算中**庄园栈的份额**（§4.5.1b 修订：
+	// 由累计贡献 K_m:K_f 改为**当期意向需求**比例）。
+	budgetShareManor float64
+	// demandManorTick / demandFinanceTick 是本 tick 两条栈的**当期意向需求**
+	// （建造力单位，已按每工地上限裁剪）——预算分配比例就是二者的比值（§4.5.1b）。
+	// 保留为显式字段，供审计直接核对"预算比例 = 需求比例"，不必从日志反解。
+	demandManorTick   float64
+	demandFinanceTick float64
+	// ShortageStart 标记本次开局是否采用"短缺起步"布点（§3.2/§8.6 第 15 轮裁决）。
+	// 口径：起点产能远小于平衡产能（统一起始等级 N0 > 0 即视为短缺起步；
+	// 物质平衡布点 N0 = 0 则不是）。它被显式标注在报告与快照里，
+	// 使"从短缺起步"成为**声明的设计选择**，而不是看起来像标定误差。
+	ShortageStart bool
+
+	// ===== §4.5.6 仓库与消费代理（2026-09-19 第 16 轮落地）=====
+
+	// tradeVolumeTick 是本 tick 通过仓库的**贸易量**（单位数，单向过手量）。
+	//
+	// 口径：入库量 = 出库量（同一 tick 内完成），故按单向计，不重复计双向。
+	// 它只统计**经仓库**的商品（建造力走 §4.5.3 的政府直接采购，不经仓库）。
+	tradeVolumeTick float64
+	// warehouseQuotaTick 是本 tick 的贸易额度 = 仓库级数 × 每级额度。
+	warehouseQuotaTick float64
+	// warehouseGoodsInTick 是仓库本 tick **收到**的出库货款（含加价、不含消费税）。
+	warehouseGoodsInTick float64
+	// warehouseGoodsOutTick 是仓库本 tick **付出**的入库货款（含增值税）。
+	warehouseGoodsOutTick float64
+	// warehouseVATTick / warehouseConsumeTaxTick 是本 tick 两段税的税额（诊断）。
+	warehouseVATTick         float64
+	warehouseConsumeTaxTick  float64
+	// warehouseExpandUnitsTick 是本 tick 因额度不足而下达的仓库扩建订单等级数。
+	warehouseExpandUnitsTick float64
+	// warehouseExpandSpendTick 是本 tick 为仓库扩建而采购的建造力金额（国库支出）。
+	warehouseExpandSpendTick float64
+	// warehouseProfitTick 是仓库本 tick 的纯利（全归政府；亏损为负）。
+	warehouseProfitTick float64
+	// warehouseWageTick 是仓库本 tick 的工资支出（⑥ 计算纯利时用的那一份）。
+	//
+	// 【为什么必须单独存】仓库的等级可能在**同一 tick 的后半段**（⑫ 完工）增加，
+	// 故 tick 末读到的 Level 与 ⑥ 计算纯利时用的 Level 可能差一级；
+	// 审计要用"记账当时的工资额"才能逐位核对纯利。
+	warehouseWageTick float64
+	// lastManorDeposit 是宅邸庄园本 tick 从入库中分得的净额（§4.5.5 的收入）。
+	//
+	// 仓库落地后庄园的收入不再是"消费者货款里的自给份额"，而是**入库款里的自给份额**
+	// （中间投入那一路也一并计入——这正是 R21 记录缺口的关闭处）。
+	lastManorDeposit float64
+
+	// ===== §7.2 实际工农生产总值（2026-09-19 第 18 轮）=====
+
+	// productTick 是本 tick 的**实际工农生产总值**核算结果（按固定 P_ref 计价）。
+	//
+	// 它与 §7 的名义 GDP 并列：名义口径随价格水平漂移，本口径只依赖实物量，
+	// 故用于"去除货币的干扰"地判断经济是否真的在增长（见 internal/product 包注释）。
+	productTick product.Result
+	// productBaseAdded 是**首个 tick** 的工农增加值，用作指数的基期。
+	//
+	// 取首 tick 而不是"开局理论值"：开局尚未生产，理论值为 0，无法作分母。
+	productBaseAdded float64
+	// Unemployed 是既有劳动力中未被任何人雇佣的人数（诊断用）。
+	Unemployed float64
+	// 旧口径的"消费者货款全部记给专业生产者"的残差修正见 consumerSellerShares。
+
 	// Flow 累计本 tick 的资金流，供诊断"政府现金池为何被砸穿"。
 	//
 	// 只看政府现金池余额无法区分亏损来自运营、采购还是建设支出，
@@ -212,23 +509,67 @@ type State struct {
 	// 每级对价与所用建造力价格，供测试对账（§4.5.1 修订）。
 	privatizePriceSeen float64
 	privatizePriceTick float64
-	privatizePaid  float64
+	privatizePaid      float64
+
+	// ===== §4.5.1b 投资池与两条投资栈 =====
+
+	// KManor / KFinance 是两条栈的**累计贡献**（各自历次入池额之和）。
+	//
+	// 投资池的可动用额按 K_m : K_f 分配给两条栈（§4.5.1b）：
+	// 庄园栈 = P·K_m/(K_m+K_f)，金融栈 = P − 庄园栈；K_m+K_f ≤ 0 时各 0.5。
+	KManor   float64
+	KFinance float64
+
+	// tickInflowManor / tickInflowFinance 是本 tick 两条栈的入池额（流量）。
+	tickInflowManor   float64
+	tickInflowFinance float64
+	// tickInvestmentPaid 是本 tick 投资池付给政府的建造力货款（G6）。
+	tickInvestmentPaid float64
+	// powerPaidManor / powerPaidFinance 是本 tick 各栈支付的建造力货款（诊断）。
+	powerPaidManor   float64
+	powerPaidFinance float64
+
+	// powerNeedTick 是本 tick 队列**实际需要的建造力量**（已按每工地上限与
+	// 各栈预算裁剪，但**未**按产出/可动用资金裁剪）——G2 的采购量是它的进一步裁剪。
+	powerNeedTick float64
+	// powerAvailTick 是采购时刻政府可动用的资金（§4.5.4），供审计复算采购量。
+	powerAvailTick float64
+
+	// ===== §七 R28：投资池与国库恒 ∞ 的诊断开关 =====
+
+	// unlimitedFunds 见 Options.UnlimitedFunds。开启时投资池每 tick 补到哨兵水位、
+	// 且 G2 的「可动用资金」裁剪被解除（采购只受队列需要量与当期产出限制）。
+	unlimitedFunds bool
+	// dynamicPcost 见 Options.DynamicPcost（§七 R32 的当期零利润价口径）。
+	dynamicPcost bool
+	// infusionTick / infusionTotal 是诊断注入的流量与累计（元）。
+	//
+	// 它们与 §4.3 的营运本金分开计量：开启 UnlimitedFunds 时，
+	// A8 的货币守恒恒等式读作 `ΔM == NewCapital + 诊断注入`；
+	// 开关关闭时两值恒为 0，原恒等式逐位不变。
+	infusionTick  float64
+	infusionTotal float64
+	// powerBoughtPrev 是【上一 tick】的建造力采购量（在 ⓪ 清零流量前抓取）。
+	//
+	// 用途：建造部门的收入确认。采购发生在 ⑩（利润归属 ⑥ 之后），
+	// 故本期 ⑥ 只能用上一期的采购量作为它的销量（详见 step ⑥ 的说明）。
+	powerBoughtPrev float64
+
+	// powerPublicWorksPrev 是【上一 tick】公共工程（§4.5.8）采购的建造力量。
+	//
+	// 与 powerBoughtPrev 同理：公共工程的采购发生在 ⑩，而建造部门的收入确认在 ⑥，
+	// 故本期 ⑥ 只能看到上一期的量。二者相加构成建造部门上期的全部销量。
+	powerPublicWorksPrev float64
 
 	// 政府池资金流分解的三路【账户实际变动】（每 tick 开头清零）。
 	//
 	// 全部用"钱真的动了多少"计量，不用公式推算——这样
 	// "政府池 Δ = 各路之和"按构造成立，留下的残差一定是真正的未知资金流。
 	flowGovOperatingDelta float64
-	flowGovBuildoutDelta  float64
-	// flowGovSaleDelta 是售力给外部付款方的含税入账（实际）。
-	flowGovSaleDelta float64
-	// flowGovPurchaseSelfTax 是政府采购建造力里"政府收自己的税"。
-	flowGovPurchaseSelfTax float64
-	// flowGovBuildoutSelfTax 是政府自建付款里"政府收自己的税"。
-	//
-	// 它计入 GovTax，但不是政府池的净流入（买方与卖方都在政府账内），
-	// 故在政府池的资金流分解式中必须单独扣除，否则同一笔钱算两遍。
-	flowGovBuildoutSelfTax float64
+	// flowGovPurchaseDelta 是政府采购建造力【实际流出政府池】的金额（G2）。
+	flowGovPurchaseDelta float64
+	// flowGovInvestDelta 是投资池偿还政府的金额（G6，实际入账）。
+	flowGovInvestDelta float64
 
 	// tickNewCapital 累计本 tick 因新建建筑完工而注入的营运本金（§4.3）。
 	// 每 tick 开头清零；它是货币守恒审计中唯一允许的 Δ 来源。
@@ -288,6 +629,71 @@ func (s *State) PostInjection(t *ledger.Txn) {
 	s.Aud.PostInjection(t)
 }
 
+// infuse 给账户注入**诊断资金**（仅 Options.UnlimitedFunds 的对照实验使用，§七 R28）。
+//
+// 它与 §4.3 的营运本金走同一机制（PostInjection：允许借贷不等的单边分录），
+// 但累计到 infusionTotal 而不是 book 的营运本金计数器，理由是让货币守恒的
+// 恒等式在开启该开关时仍然可写、可核：
+//
+//	关闭开关：ΔM == NewCapital
+//	开启开关：ΔM == NewCapital + 诊断注入
+//
+// 这样"无限资金"是一个**被显式计量**的外部假设，而不是一笔来路不明的钱。
+func (s *State) infuse(acc ledger.Account, amount float64) {
+	if amount <= 0 || s.Aud == nil {
+		return
+	}
+	t := &ledger.Txn{Name: "诊断注入（无限资金实验）"}
+	t.Credit(acc, amount)
+	s.PostInjection(t)
+	s.infusionTick += amount
+	s.infusionTotal += amount
+}
+
+// InfusionTotal 返回累计的诊断注入额（UnlimitedFunds 关闭时恒为 0）。
+func (s *State) InfusionTotal() float64 { return s.infusionTotal }
+
+// refreshPzero 重算全部商品的**当期零利润价**（§七 R32）。
+//
+//	P⁰_j(t) = Σ_i A[i][j]·P_i(t) + l_j
+//
+//   - A[i][j] = 商品 i 每单位商品 j 的投入（calibrate.InputMatrix，**含自投入**，
+//     例如煤矿烧煤——故必须用**当期**价格估值，不能解固定点）；
+//   - l_j = 单位劳动成本 = b.WagePerLevel() / 单级产出（满编口径，§3.4）；
+//     其中 WagePerLevel() 随建筑的劳动结构而不同（§5 第 20 轮：农业 28,250、
+//     城镇 33,750）。
+//   - P_i(t) = **上一 tick 结算后的当期价格**（本 tick 的价格方程尚未跑）。
+//
+// 这就是"让人均满编的该生产单位恰好 0 利润"的售价。它与静态 P_cost 的差别在于：
+// 静态解用"全部投入品也处于各自零利润价"这一长期条件（Leontief 固定点），
+// 当期解只用**今天的实际投入价格**。当上游价格偏离长期值（例如被钳制带截住）时，
+// 两者会分叉——这正是 §3.4 记录的"地板脱节（P2）"的机制。
+func (s *State) refreshPzero() {
+	if s.calibration == nil {
+		return
+	}
+	a := s.calibration.A
+	prices := s.Market.Prices()
+	for j, b := range s.Buildings {
+		if j >= model.Goods || !b.Spec.Produces() || b.Spec.Recipe.Qty <= 0 {
+			continue
+		}
+		var pz float64
+		for i := 0; i < model.Goods && i < len(a); i++ {
+			if j < len(a[i]) && i < len(prices) {
+				pz += a[i][j] * prices[i]
+			}
+		}
+		// 【§4.5.6】投入按**买家的实际成本**计：仓库加价与消费税都落在买家身上，
+		// 故零利润价方程是 P⁰ = w·Σ A·P + l（w = 买家加载系数）。
+		pz = s.Params.BuyerWedge()*pz + b.Spec.WagePerLevel()/b.Spec.Recipe.Qty
+		s.Market.SetPzero(j, pz)
+	}
+}
+
+// UnlimitedFundsDiagnostic 报告"无限资金"诊断开关是否开启（§七 R28）。
+func (s *State) UnlimitedFundsDiagnostic() bool { return s.unlimitedFunds }
+
 // Bk 是统一记账簿（book.Book），包住同一个审计账本。
 //
 // 所有资金流动都应通过它：book 里每一类流动只有一个方法、借贷两侧写在同一处，
@@ -307,8 +713,14 @@ func (s *State) bal(i int) float64 { return s.Aud.Balance(ledger.Building(i)) }
 // balGov 返回政府现金池余额。
 func (s *State) balGov() float64 { return s.Aud.Balance(ledger.Gov()) }
 
-// balCap 返回资本现金池余额。
+// balCap 返回资本现金池余额（= 金融区的营运现金池，§4.5.1b）。
 func (s *State) balCap() float64 { return s.Aud.Balance(ledger.Capital()) }
+
+// balInvest 返回投资池余额（§4.5.1b）。
+func (s *State) balInvest() float64 { return s.Aud.Balance(ledger.Investment()) }
+
+// balSavings 返回居民储蓄固定账户余额（§5.3 第 20 轮）。
+func (s *State) balSavings() float64 { return s.Aud.Balance(ledger.Savings()) }
 
 // balHouse 返回某人群池余额。
 func (s *State) balHouse(i int) float64 {
@@ -321,6 +733,13 @@ func (s *State) balBuildingTotal() float64 { return s.Aud.TotalOf(ledger.KindBui
 // TickNewCapitalTotal 返回累计注入的营运本金（§4.3，唯一合法的货币注入）。
 func (s *State) TickNewCapitalTotal() float64 { return s.totalNewCapital }
 
+// InvestmentPool 返回投资池余额（§4.5.1b）。
+func (s *State) InvestmentPool() float64 { return s.balInvest() }
+
+// KManorTotal / KFinanceTotal 返回两条投资栈的累计贡献（§4.5.1b）。
+func (s *State) KManorTotal() float64   { return s.KManor }
+func (s *State) KFinanceTotal() float64 { return s.KFinance }
+
 // TotalLevels 返回全部建筑的等级之和。
 func (s *State) TotalLevels() float64 {
 	var t float64
@@ -330,18 +749,18 @@ func (s *State) TotalLevels() float64 {
 	return t
 }
 
-// TickRecon 记录一个 tick 内四个货币持有池的实际 Δ 与应有 Δ。
+// TickRecon 记录一个 tick 内五个货币持有池的实际 Δ 与应有 Δ。
 //
 // 用途：定位货币守恒缺口【落在哪一个池】。
-// 四者残差之和必须等于总货币的实际 Δ；残差非零的池即为漏点所在。
+// 五者残差之和必须等于总货币的实际 Δ；残差非零的池即为漏点所在。
 type TickRecon struct {
-	GovDelta, CapDelta, HouseDelta, BuildDelta float64
-	BuildExpected                              float64
+	GovDelta, CapDelta, HouseDelta, BuildDelta, InvestDelta float64
+	BuildExpected                                           float64
 }
 
-// TotalDelta 返回四池实际 Δ 之和（即总货币的真实变化）。
+// TotalDelta 返回五池实际 Δ 之和（即总货币的真实变化）。
 func (t *TickRecon) TotalDelta() float64 {
-	return t.GovDelta + t.CapDelta + t.HouseDelta + t.BuildDelta
+	return t.GovDelta + t.CapDelta + t.HouseDelta + t.BuildDelta + t.InvestDelta
 }
 
 // Recon 是建筑现金池的对账明细。
@@ -355,6 +774,35 @@ type Recon struct {
 	IntermediateOut float64
 	PowerSpend      float64
 	NewCapital      float64
+	// ===== §4.5.6 仓库路径（2026-09-19 第 16 轮）=====
+	//
+	// ConsumerRevenue 现在是"仓库从消费代理收到的 base"（消费者实付的税前部分），
+	// IntermediateIn 是"仓库从生产买家收到的 base"，二者都是仓库的**流入**；
+	// 仓库的流出是 DepositGross，生产者的流入是 DepositNet。
+	//
+	//	DepositNet   —— 入库净额（生产者实收合计，正向）
+	//	DepositGross —— 入库含税总额（仓库实付合计，负向）
+	//	ConsumerTaxWh / InputTaxWh —— 两段税的税额（诊断，已含在 Gov.TaxCollected）
+	DepositNet     float64
+	DepositGross   float64
+	ConsumerTaxWh  float64
+	InputTaxWh     float64
+	// SubsidyPaid 是政府补贴入账合计（§4.5.7；建筑池的流入，聚合口径）。
+	//
+	// 【为什么必须进汇总式】补贴是"借政府 / 贷建筑"的转移支付，建筑池确有流入；
+	// 漏记它会让聚合对账残差恰等于当期补贴额。
+	SubsidyPaid float64
+	// InvestmentOut 是**建筑池**流向投资池的金额（只有宅邸庄园有这一腿）。
+	//
+	// 金融区的入池款从 ledger.Capital() 转出，不经过任何建筑池，
+	// 故不计入本项（它体现在 TickRecon.CapDelta 上）。
+	InvestmentOut float64
+	// ProfitIn 是本 tick 利润归属中**作为所属资本建筑**收到的私人份额合计
+	// （§4.5.1；只有宅邸庄园这一路进建筑池，见 BuildingRecon.ProfitIn）。
+	ProfitIn float64
+	// ManorInflow / FinanceInflow 是本 tick 两条栈的入池额（管理口径报表字段）。
+	ManorInflow   float64
+	FinanceInflow float64
 
 	// ProfitLegTotal 是利润划分对【全部建筑现金池】的净影响合计
 	// （= Σ(留存份额 − 全额利润)，含金融区那一腿）。
@@ -378,20 +826,22 @@ type Recon struct {
 type BuildingRecon struct {
 	// Actual 是该建筑现金池的实际 Δ。
 	Actual float64
-	// Retained 是利润划分给该建筑的留存份额（正值 = 贷方份额）。
+	// Retained 是利润归属给该建筑的**补足额** R_i（正值 = 贷方份额）。
 	//
-	// 【注意它不是建筑池的净腿】book.ProfitSplit 的记账是
-	// 「借 建筑[i] 全额利润、贷 建筑[i] 留存份额」，故建筑池的净腿恰为
-	// `留存 − 利润 = −(政府份额 + 资本份额)`，由 ProfitLeg 单独记录。
-	// 用 Retained 直接当净腿是错的（利润为负时符号会反）。
+	// 【注意它不是建筑池的净腿】book.ProfitAllocate 的记账是
+	// 「借 建筑[i] 纯利、贷 建筑[i] 补足额」，故建筑池的净腿恰为
+	// `补足 − 纯利 = −(政府份额 + 所有者份额)`，由 ProfitLeg 单独记录。
 	Retained float64
-	// ProfitLeg 是利润划分对【该建筑现金池】的净影响（= 留存 − 利润）。
+	// ProfitLeg 是利润归属对【该建筑现金池】的净影响（= 补足额 − 纯利）。
 	//
 	// 之所以必须单列：Retained 只是三份额之一，而现金池实际发生的是
-	// 借全额、贷留存两腿相抵后的净额。把 Retained 当净额会让逐建筑对账
+	// 借全额、贷补足两腿相抵后的净额。把 Retained 当净额会让逐建筑对账
 	// 在利润为负时出现 2×|利润| 量级的假残差（实测 213 万）。
 	ProfitLeg float64
 	// Wage 是工资支出（负向）。
+	//
+	// 【金融区除外】金融区的工资从 ledger.Capital() 支付（§4.5.1b 的场地账户
+	// 口径），不动任何建筑池，故不计入本项，也不计入 Recon.WagePaid。
 	Wage float64
 	// InputOut 是中间投入付款含税（负向）。
 	InputOut float64
@@ -399,24 +849,55 @@ type BuildingRecon struct {
 	InputIn float64
 	// ConsumerIn 是作为卖方收到的消费者货款（正向）。
 	ConsumerIn float64
+	// ===== §4.5.6 仓库路径（2026-09-19 第 16 轮）=====
+	//
+	// 仓库落地后，生产者的销售收入**不再**直接来自买家（ConsumerIn / InputIn 因此
+	// 在生产建筑上恒为 0），而是来自仓库的**入库款**；买家也不再付给生产者，
+	// 而是付给仓库（出库款）。三者是三条独立的腿，必须分别登记：
+	//
+	//	DepositIn    —— 生产建筑从入库中分得的净额（正向）
+	//	WarehouseIn  —— 仓库从出库中收到的 base（正向，只有仓库有）
+	//	WarehouseOut —— 仓库付出的入库款（含增值税，负向，只有仓库有）
+	DepositIn    float64
+	WarehouseIn  float64
+	WarehouseOut float64
 	// PowerNet 是建造力买卖的净额（正向为收入）。
 	PowerNet float64
 	// NewCapital 是新完工建筑的营运本金注入。
 	NewCapital float64
+	// Subsidy 是政府补贴入账（§4.5.7，正向 = 贷方）。
+	//
+	// 补贴是转移支付：它使建筑现金池增加，必须进入逐建筑对账的应得 Δ，
+	// 否则逐建筑残差会恰好多出一笔补贴额（与当年漏记消费税款同类）。
+	Subsidy float64
+	// InvestmentOut 是流向投资池的入池款（§4.5.1b，负向；只有宅邸庄园有）。
+	InvestmentOut float64
+	// ProfitIn 是该建筑**作为所属资本建筑**收到的私人份额纯利（§4.5.1，正向）。
+	//
+	// 【只有宅邸庄园有这一腿】农业建筑的私人份额纯利由 ProfitAllocate 贷记
+	// ledger.Building(ManorIndex)；金融区的同类收入直接进 ledger.Capital()，
+	// 不经过任何建筑池，故不计入本项（它体现在 TickRecon.CapDelta 上）。
+	// 漏记它的后果与漏记消费税款同类：逐建筑残差恰好等于该笔利润（实测 761,834）。
+	ProfitIn float64
 }
 
 // Expected 返回该建筑按明细算出的应有 Δ。
 //
 // 【口径】逐条列出该建筑现金池本 tick 实际发生的资金腿：
 //
-//	+ 消费收入、中间投入收入、建造力净额、新资本（唯一注入）、利润划分净腿
-//	− 工资、中间投入付款（含税）
+//	+ 消费收入、中间投入收入、**入库净额**、**出库收款**、建造力净额、
+//	  新资本（唯一注入）、利润归属净腿、补贴、作为所属资本建筑收到的私人份额纯利
+//	− 工资、中间投入付款（含税）、**入库付款（含税）**、入池款（§4.5.1b）
 //
-// 其中利润划分净腿是 ProfitLeg（= 留存 − 利润），**不是** Retained——
-// 记账用的是"借全额利润、贷留存份额"两条腿，见 BuildingRecon.ProfitLeg 的说明。
+// 其中利润归属净腿是 ProfitLeg（= 补足额 − 纯利），**不是** Retained——
+// 记账用的是"借全额纯利、贷补足额"两条腿，见 BuildingRecon.ProfitLeg 的说明。
+//
+// 【§4.5.6 仓库路径】生产建筑的 ConsumerIn / InputIn 恒为 0（销售收入改走 DepositIn），
+// 仓库则有 WarehouseIn（出库收款）与 WarehouseOut（入库付款）。
 func (b BuildingRecon) Expected() float64 {
-	return b.ConsumerIn + b.InputIn + b.PowerNet + b.NewCapital + b.ProfitLeg -
-		b.Wage - b.InputOut
+	return b.ConsumerIn + b.InputIn + b.DepositIn + b.WarehouseIn + b.PowerNet +
+		b.NewCapital + b.ProfitLeg + b.Subsidy + b.ProfitIn -
+		b.Wage - b.InputOut - b.WarehouseOut - b.InvestmentOut
 }
 
 // Residual 返回实际 Δ 与应有 Δ 的残差。
@@ -432,8 +913,13 @@ func (r Recon) Residual() float64 { return r.actual - r.ExpectedDelta() }
 //
 // 【口径】汇总层面同样逐条列出实际资金腿：
 //
-//	+ 消费收入 + 中间投入收入 + 建造力收入(净) + 新资本 + 利润划分净腿
-//	− 工资 − 中间投入付款(含税) − 建造力支出(净)
+//	+ 消费收入(仓库从消费代理收到) + 中间投入收入(仓库从生产买家收到)
+//	  + 入库净额(生产者收到) + 建造力收入(净) + 新资本 + 利润划分净腿
+//	− 工资 − 中间投入付款(含税) − 入库付款(含税) − 建造力支出(净)
+//
+// 【§4.5.6】仓库路径把"销售"拆成两条腿：买家付给仓库（IntermediateIn / ConsumerRevenue）、
+// 仓库付给生产者（DepositNet / DepositGross）。两条腿都发生在**建筑池内部**，
+// 故汇总式必须同时计入，否则残差恰等于"仓库付出 − 仓库收到"。
 //
 // 【单一真相来源】这里的每一项都必须由【同一个循环】写入，不得另起口径。
 // 历史上这里踩过两次坑：
@@ -447,9 +933,9 @@ func (r Recon) Residual() float64 { return r.actual - r.ExpectedDelta() }
 //
 // 因此汇总使用 ProfitLegTotal（记账口径），RetainedProfit 只作管理口径的报表字段。
 func (r Recon) ExpectedDelta() float64 {
-	return r.ConsumerRevenue + r.IntermediateIn + r.PowerRevenue +
-		r.ProfitLegTotal + r.NewCapital -
-		r.WagePaid - r.IntermediateOut - r.PowerSpend
+	return r.ConsumerRevenue + r.IntermediateIn + r.DepositNet + r.PowerRevenue +
+		r.ProfitLegTotal + r.NewCapital + r.ProfitIn + r.SubsidyPaid -
+		r.WagePaid - r.IntermediateOut - r.DepositGross - r.PowerSpend - r.InvestmentOut
 }
 
 // FlowDiag 记录一个 tick 内的资金流分解。
@@ -458,33 +944,38 @@ type FlowDiag struct {
 	GovOperating float64
 	// GovTax 是税收。
 	GovTax float64
-	// GovPowerSpend 是政府采购建造力的支出。
+	// GovPowerSpend 是政府采购建造力的支出（G2，按需采购，不计税）。
 	GovPowerSpend float64
-	// GovPowerRevenue 是政府售出建造力的【含税】入账总额（净额 + 税额）。
+	// GovPowerRevenue 是投资池偿还的建造力货款（G6，全部进政府池）。
 	//
-	// 用含税口径的原因：税额由步骤 ⑨ 从付款方另行扣除后同时计入政府池，
-	// 故资金流分解式必须与账户实际变动一致，否则会留下净额·t 的残差。
+	// 【恒等式（供审计断言）】§4.5.3 改写后，建造力交易不计税、也不存在
+	// "政府自己收自己"的自反税腿；2026-09-19 第 15 轮裁决又给政府补上了
+	// 支出端（福利金 + 公共工程），故政府池的分解式现为：
+	//
+	//	Δ政府 = GovTax + GovOperating + GovPowerRevenue
+	//	        − GovPowerSpend − GovSubsidy − GovWelfare − GovPublicWorks − GovWarehouseExpand
+	//	        + PrivatizePaid
+	//
+	// 前值（本轮之前）的分解式含 GovSelfTax 与 GovBuildoutPaid 两项，
+	// 二者对应"整批采购 + 转售 + 政府自建"的旧口径；该口径已删除。
 	GovPowerRevenue float64
-	// GovSelfTax 是"政府收自己的税"（政府采购与自建付款中的税额）。
-	//
-	// 它计入 GovTax，却【不是政府池的净流入】（买方与卖方都在政府账内），
-	// 故政府池的资金流分解式必须写成
-	//
-	//	Δ政府 = (GovTax − GovSelfTax) + GovOperating + GovPowerRevenue
-	//	        − GovPowerSpend − GovBuildoutPaid
-	//
-	// 少了这个扣除，同一笔税会被算两遍，留下 Net·t 量级的假残差。
-	GovSelfTax float64
-	// CapitalProfit 是私有建筑的运营纯利合计（可为负）。
+	// CapitalProfit 是归金融区的私人份额纯利合计（非农业建筑，可为负）。
 	CapitalProfit float64
+	// ManorProfit 是归宅邸庄园的私人份额纯利 + 自给产出货款（农业建筑，可为负）。
+	ManorProfit float64
 	// WageTotal 是全社会工资。
 	WageTotal float64
 	// SpendNet 是消费者税前支出。
 	SpendNet float64
 	// PowerOut 是建造部门当期产出。
 	PowerOut float64
-	// PowerBought 是政府采购量，PowerSold 是售出量。
+	// PowerBought 是政府采购量，PowerSold 是即买即用投入队列的量。
 	PowerBought, PowerSold float64
+	// PowerNeed 是本 tick 队列实际需要的建造力量（G2 的采购量是它被
+	// 产出与可动用资金裁剪后的结果）。
+	PowerNeed float64
+	// PowerAvail 是采购时刻政府可动用的资金（§4.5.4）。
+	PowerAvail float64
 	// WorstSector / WorstMargin 是本期利润率最低的部门。
 	WorstSector int
 	WorstMargin float64
@@ -492,33 +983,66 @@ type FlowDiag struct {
 	BestSector int
 	BestMargin float64
 
-	// ===== §4.5.3 修订新增：全过程交易税与人群池的诊断字段 =====
-	//
-	// 这些字段的作用是让政府现金池的变化能被【完整的】已知资金流解释。
-	// 修订前的分解漏掉了"非政府付款方购买建造力的税"与"政府自有项目付款"，
-	// 使残差不为零——残差非零即意味着存在未记账的货币创造/销毁。
-	//
-	// 恒等式（供 TestGovCashFlowIsFullyExplained 断言）：
-	//
-	//	ΔGovCash = GovTax + GovOperating + GovPowerRevenue − GovPowerSpend
-	//	         − GovBuildoutPaid
-
 	// ConsumerTax 是消费环节收取的交易税（已含在 GovTax 内，单列供核对）。
 	ConsumerTax float64
 	// InputNet / InputTax 是中间投入环节的货款净额与税额。
 	InputNet, InputTax float64
-	// PowerPurchaseTax 是政府采购建造力时收取的交易税（资金不离开政府，
-	// 故不进入 ΔGovCash，但属于税收，必须计入 GovTax 以保持税基口径完整）。
-	PowerPurchaseTax float64
-	// PowerSaleTax 是向扩建方售出建造力时收取的交易税（资金留在政府）。
-	PowerSaleTax float64
-	// GovBuildoutPaid 是政府为【自有项目】支付的建造力货款。
-	// 这是内部转账，但确实减少政府现金池，必须出现在分解式里。
-	GovBuildoutPaid float64
+	// GovSubsidy 是本 tick 支付的政府补贴（§4.5.7，政府池的【净流出】，正数表示流出）。
+	GovSubsidy float64
+	// ===== §4.5.6 仓库路径（2026-09-19 第 16 轮）=====
+	//
+	// 贸易量、额度、仓库收支与两段税，全部取【记账事实】而不是公式推算。
+	TradeVolume    float64 // 本 tick 过库贸易量（单位数，单向）
+	TradeQuota     float64 // 贸易额度 = 仓库级数 × 每级额度
+	WarehouseIn    float64 // 仓库出库收款（含加价、不含消费税）
+	WarehouseOut   float64 // 仓库入库付款（含增值税）
+	VATCollected   float64 // 增值税 ν（入库环节，已含在 GovTax 内，单列供核对）
+	ConsumeTaxCollected float64 // 消费税 τ（出库环节，已含在 GovTax 内，单列供核对）
+	WarehouseCash  float64 // 仓库期末现金池
+	AgentCash      float64 // 消费代理期末余额（恒为 0）
+	WarehouseExpandSpend float64 // 本 tick 因额度不足而下达的仓库扩建采购额
+	WarehouseExpandUnits float64 // 本 tick 新建的仓库扩建订单等级数
+	// GovWarehouseExpand 是仓库自动扩建的国库支出（§4.5.6）。
+	//
+	// 【为什么单列】它与公共工程同性质（政府订单、不被投资池偿还），
+	// 但由**额度规则**触发而不是公共工程预算。政府现金流分解式必须计入它，
+	// 否则残差恰等于当期仓库扩建支出（实测 tick 1 残差 −242,205.03）。
+	GovWarehouseExpand float64
+	// GovWelfare 是本 tick 支付的福利金（§4.5.8，政府池净流出，正数表示流出）。
+	GovWelfare float64
+	// GovPublicWorks 是本 tick 公共工程采购建造力的支出（§4.5.8，政府池净流出；
+	// 与 G2 不同，它**没有**投资池偿还，故是政府的真实支出）。
+	GovPublicWorks float64
+	// HouseSaving 是本 tick 居民工资结余**全额**进入储蓄固定账户的金额（§5.3 第一步，
+	// 人群池净流出）。
+	HouseSaving float64
+	// SavingsToInvest 是本 tick 从储蓄固定账户转入投资池的金额（§5.3 第二步
+	// = σ_save × HouseSaving；σ_save = 1 时两者相等）。
+	SavingsToInvest float64
+	// Happiness 是按人口加权的幸福度（§6.5：四组满足度均值）。
+	Happiness float64
+	// HappinessByClass 是各阶级的幸福度（失业者算劳工）。
+	HappinessByClass [3]float64
+	// NoIncomePools 是"有人口但无收入、无法消费"的池数（§6.5 诊断）。
+	NoIncomePools int
 	// HouseCash 是期末人群现金池总额（居民的货币存量）。
 	HouseCash float64
 	// Sat 是按人口加权的四组满足度（§6.5 人口增长的输入）。
 	Sat [4]float64
+
+	// ===== §4.5.1b 投资池诊断字段 =====
+
+	// InvestmentInflowManor / InvestmentInflowFinance 是本 tick 两条栈的入池额。
+	InvestmentInflowManor   float64
+	InvestmentInflowFinance float64
+	// InvestmentPaid 是本 tick 投资池付给政府的建造力货款（G6）。
+	InvestmentPaid float64
+	// InvestmentPool 是期末投资池余额。
+	InvestmentPool float64
+	// KManor / KFinance 是两条栈的累计贡献（含本期）。
+	KManor, KFinance float64
+	// PowerPaidManor / PowerPaidFinance 是本 tick 各栈支付的建造力货款。
+	PowerPaidManor, PowerPaidFinance float64
 
 	// ===== §4.5.1 修订：私有化诊断字段 =====
 
@@ -530,7 +1054,7 @@ type FlowDiag struct {
 	PrivatizePaid float64
 	// GovShareAfter 是期末政府持股比例（按级数加权，诊断用）。
 	//
-	// 它的下降速度直接反映私有化强度；配合逐建筑的 AllowPrivatize，
+	// 它的下降速度直接反映私有化强度与扩建稀释；配合逐建筑的 AllowPrivatize，
 	// 可以观察"哪些部门被市场接手"。
 	GovShareAfter float64
 }
@@ -553,6 +1077,24 @@ const powerGoodIndex = 10
 // Calibration 返回本次运行的标定结果（只读用途）。
 func (s *State) Calibration() *calibrate.Result { return s.calibration }
 
+// refPrices 返回**固定的参考价向量** P_ref（§3.4 的零利润价解）。
+//
+// 【为什么用它给实际产出计价】P_ref 在开局解一次后**不再随价格变动**，
+// 故"实物量 × P_ref"是一个与货币量、价格水平、税率无关的**实际**口径。
+// 标定缺失时回退到契约表格的 GoodSpecs（同样固定）。
+func (s *State) refPrices() []float64 {
+	if s.calibration != nil && len(s.calibration.Pcost) >= model.Goods {
+		return s.calibration.Pcost
+	}
+	out := make([]float64, model.Goods)
+	for i, g := range s.Goods {
+		if i < model.Goods {
+			out[i] = g.Pcost
+		}
+	}
+	return out
+}
+
 // DemandScale 返回三表联合标定系数。
 func (s *State) DemandScale() float64 { return s.demandScale }
 
@@ -565,10 +1107,47 @@ type Options struct {
 	WealthTier float64
 	// DemandScale 是三表联合标定系数；0 表示采用 calibrate 的解。
 	DemandScale float64
+	// AnchorExpenditureShare 覆盖 §3.4 的方案 A 开关（nil = 用契约默认：开启）。
+	//
+	// 契约已裁决采用 A + C′，故默认开启；显式传 false 可回退到历史常弹性锚（对照实验用）。
+	AnchorExpenditureShare *bool
+	// AnchorDerivedDemand 覆盖 §3.4 的方案 C′ 开关（nil = 用契约默认：开启）。
+	AnchorDerivedDemand *bool
+	// InitPriceMult 是**诊断开关**（§七 R31 的对照实验，不是契约参数）：
+	// 把**开局价 P_init 整体放大**该倍数（0 或 1 = 契约默认）。
+	//
+	// §3.4 的开局价由加成价方程解出（`openerMarkup = 1/6` ⇒ P_init ≈ 1.2·P_cost），
+	// 本开关作用在**解出来的 P_init 上**，并同时生效于：
+	//
+	//	① 市场初价（market.State 的 Price）；
+	//	② 需求锚 a = S₀·(P_init/P_cost)^ε（§3.4 步骤 3）——故长期均衡价同倍放大；
+	//	③ 报告里的开局利润率（P_init 下的 margin）。
+	//
+	// 它**不动** P_cost（零利润价由工资与配方反推，是价格体系的地板基准），
+	// 故倍数 = 3 意味着"开局加成从 1.2× 抬到 3.6×"；开局利润率不是统一的 200%，
+	// 而是 **38.9%~260%**——因为成本里的**工资项不随价格缩放**，
+	// 劳动密集部门（谷物/织物）抬得最多，原料密集部门（钢）抬得最少。
+	InitPriceMult float64
+
+	// StaticPcost 是**对照开关**（契约 §2.4 / §3.4 的"零利润价两个角色"）。
+	//
+	// 默认 false = **现行 1.0 口径**：价格钳制带与 A1/A3 判据的参考价用
+	// **当期零利润价**（"让该生产单位在当期投入价格与满编工资下恰好 0 利润的售价"）
+	//
+	//	P⁰_j(t) = Σ_i A[i][j]·P_i(t) + l_j
+	//
+	// 置 true 可回退到 2026-09-19 之前的旧口径（钳制带与判据都用固定 P_cost），
+	// 仅用于对照实验。
+	//
+	// 【两个角色，只有 B 可以动态】需求归一化的参考价 $P_{ref}$ 必须**固定**：
+	// 把它也换成当期成本会形成"价格 → 成本 → 需求 → 价格"的自指正反馈
+	// （实测税收 ×5、价格水平自我抬升，见 docs/ACTIVE.md §七 R32）。
+	StaticPcost bool
 	// FinanceLaborPerLevel 是金融区每级雇佣人数（G5，默认 1000）。
+	//
+	// 【2026-09-19 裁决】金融区不建造，故**没有**建造成本参数
+	// （原 FinanceBuildCost 已删除）。
 	FinanceLaborPerLevel float64
-	// FinanceBuildCost 是金融区建造成本（建造力）。
-	FinanceBuildCost float64
 	// GovStartupFraction 是政府现金池初值占债务上限的比例（G7）。
 	//
 	// 债务机制下不能用"若干个周期的税收"来定初始货币——那会超出债务上限，
@@ -601,6 +1180,60 @@ type Options struct {
 	// 之所以不能沿用"0 表示不覆盖"：那样命令行就【永远无法】选中物质平衡布点，
 	// 而它正是"统一等级布点偏离多少"这一对照实验的另一臂。
 	ProductionInitLevel float64
+
+	// UnlimitedFunds 是**诊断开关**（§七 R28 的对照实验，不是契约参数）：	// 把"投资池"与"国库"都当作恒 ∞，使建造链只受【实物产能】限制。
+	//
+	// 开启后的行为：
+	//   - 每 tick 把投资池补到哨兵水位（1e12），故两条投资栈的预算永不成为约束；
+	//   - 解除 G2 的「可动用资金」裁剪，故国库（含债务上限）不再约束采购量，
+	//     采购只由**队列需要量**与**建造力当期产出**决定。
+	//
+	// 【记账纪律】注入额单独计量（State.InfusionTotal），不走 §4.3 的营运本金计数器；
+	// 开启时 A8 的恒等式读作 `ΔM == NewCapital + 诊断注入`，关闭时与原来完全一致。
+	UnlimitedFunds bool
+
+	// ===== §5.2 增雇口径（2026-09-19 第 22 轮）=====
+
+	// NoExpandDilution 关闭"扩招压价折现"，使 §5.2 的增雇判定退化为
+	// **第 20 轮旧口径**（只看当期利润率 EMA > 0）。它是审计用的历史对照臂。
+	NoExpandDilution bool
+	// ExpectedMarginFloor 是增雇判定的下限（默认 0 = 期望扩招后利润率严格为正）。
+	ExpectedMarginFloor float64
+	// ExpandPlanHorizon 是增雇的前瞻步数（默认 1；见 model.Params 的字段说明）。
+	ExpandPlanHorizon int
+	// BasketScale 是 §6.3 需求篮子的整体缩放系数（默认 1.0；见 model.Params 字段说明）。
+	BasketScale float64
+	// CapStartupFraction 覆盖资本（金融区）现金池的初始规模（单位：周工资倍数）。
+	//
+	// 【为什么需要它】§4.5.1a 的私有化可行性直接由**资本池规模**决定
+	// （对价 = 建造成本 × 建造力价；资本池没钱就一笔都成交不了）。
+	// 默认值由包内常量 `startupCapFraction = 0.25` 给出；> 0 时本字段覆盖它，
+	// 用于把"资本池不足"这一闸门单独隔离出来做对照实验（第 26 轮新增）。
+	CapStartupFraction float64
+	// PowerByQueue / PowerAnchorByQueue 是 §4.1/§3.4 第 23 轮的建造部门队列口径开关。
+	//
+	// 【零值语义】两者在 `DefaultParams` 里都是 **true**，故本字段用"指针 = 显式覆盖"：
+	// nil 表示沿用默认（true），&false 才是"关掉它做对照"。
+	PowerByQueue       *bool
+	PowerAnchorByQueue *bool
+
+	// ===== §4.5.6 税制与仓库加价（2026-09-19 第 17 轮：让税制可替换）=====
+	//
+	// 【为什么必须有这三个入口】现行两段税（增值税 ν + 消费税 τ）与 5% 加价是
+	// **抽象替身**，后续会改成具体税种。它们只在三处进入模型：
+	//
+	//	① 买家的实际付款（出库与入库交易的记账腿）；
+	//	② §3.4 的标定（价格方程 p = w·Aᵀp + l、加成价、§3.1 的价格两列）；
+	//	③ 决策/判据用的利润率口径（`fullCapacityCosts`）。
+	//
+	// 后两者共用 **买家加载系数** w = (1+加价)(1+消费税)，所以只要能在**标定之前**
+	// 改掉这三个参数，换税种就退化为"改一个 w + 改交易腿"。若只在 New 之后改
+	// Params（旧做法），标定与运行时口径就会分叉（价格表按旧 w 解、交易按新 w 记）。
+	//
+	// 三个字段用**指针**：nil = 用契约默认（ν=τ=2.5%、加价 5%）；显式 0 表示免税/不加价。
+	VATRate         *float64
+	ConsumeTaxRate  *float64
+	WarehouseMarkup *float64
 }
 
 // New 构造一个完成标定与开局布点的仿真状态。
@@ -610,6 +1243,17 @@ func New(opt Options) (*State, error) {
 		return nil, err
 	}
 	p := model.DefaultParams()
+	// 【§4.5.6 / 第 17 轮】税制与加价必须在**标定之前**生效：
+	// 它们进入 §3.4 的买家加载系数 w = (1+加价)(1+消费税)，而 w 决定价格表与利润率。
+	if opt.VATRate != nil {
+		p.VATRate = *opt.VATRate
+	}
+	if opt.ConsumeTaxRate != nil {
+		p.ConsumeTaxRate = *opt.ConsumeTaxRate
+	}
+	if opt.WarehouseMarkup != nil {
+		p.WarehouseMarkup = *opt.WarehouseMarkup
+	}
 	if opt.SubsistenceScale != nil {
 		p.SubsistenceScale = *opt.SubsistenceScale
 	}
@@ -619,15 +1263,49 @@ func New(opt Options) (*State, error) {
 	if opt.ProductionInitLevel >= 0 {
 		p.ProductionInitLevel = opt.ProductionInitLevel
 	}
-	specs := model.BuildingSpecs(opt.FinanceLaborPerLevel, opt.FinanceBuildCost)
+	// §5.2 第 22 轮：增雇口径（默认沿用 Params 的第 22 轮值）
+	if opt.NoExpandDilution {
+		p.NoExpandDilution = true
+	}
+	if opt.ExpectedMarginFloor != 0 {
+		p.ExpectedMarginFloor = opt.ExpectedMarginFloor
+	}
+	if opt.ExpandPlanHorizon > 1 {
+		p.ExpandPlanHorizon = opt.ExpandPlanHorizon
+	}
+	if opt.PowerByQueue != nil {
+		p.PowerByQueue = *opt.PowerByQueue
+	}
+	if opt.PowerAnchorByQueue != nil {
+		p.PowerAnchorByQueue = *opt.PowerAnchorByQueue
+	}
+	if opt.BasketScale > 0 {
+		p.BasketScale = opt.BasketScale
+	}
+	// §3.4 已裁决采用方案 A + C′（契约默认开启）；显式传值可回退到历史口径做对照。
+	if opt.AnchorExpenditureShare != nil {
+		p.AnchorExpenditureShare = *opt.AnchorExpenditureShare
+	}
+	if opt.AnchorDerivedDemand != nil {
+		p.AnchorDerivedDemand = *opt.AnchorDerivedDemand
+	}
+	specs := model.BuildingSpecs(opt.FinanceLaborPerLevel)
 
-	cal, err := calibrate.Run(specs, 1.0/6.0)
+	cal, err := calibrate.Run(specs, 1.0/6.0, p.BuyerWedge())
 	if err != nil {
 		return nil, fmt.Errorf("标定失败: %w", err)
 	}
 	if opt.DemandScale > 0 {
 		cal.DemandScale = opt.DemandScale
 	}
+
+	// §七 R31 的诊断开关：把开局价整体放大 InitPriceMult 倍（0/1 = 契约默认）。
+	// 口径见 Options.InitPriceMult 与 scaleOpeningPrices 的注释。
+	priceMult := opt.InitPriceMult
+	if priceMult <= 0 {
+		priceMult = 1.0
+	}
+	scaleOpeningPrices(goods, cal, specs, priceMult)
 
 	st := &State{
 		Goods:       goods,
@@ -637,23 +1315,55 @@ func New(opt Options) (*State, error) {
 		Market:      market.NewState(goods, p),
 		demandScale: cal.DemandScale,
 		calibration: cal,
+
+		// §七 R28 的诊断开关：投资池与国库恒 ∞ 的对照实验。
+		unlimitedFunds: opt.UnlimitedFunds,
+		// §七 R32 / 契约 §2.4：钳制带与判据的参考价 = **当期零利润价**（默认口径）。
+		// StaticPcost = true 时回退到旧的固定 P_cost 口径（对照实验）。
+		dynamicPcost: !opt.StaticPcost,
+
+		// §3.2 / §8.6（2026-09-19 第 15 轮裁决）：**显式标注短缺起步**。
+		// 统一起始等级（N0 > 0）意味着起点产能远小于平衡产能（20m 口径约 1/19.7），
+		// 经济**有意**从短缺状态开始——这是设计选择（让扩建、投资、财政等功能
+		// 在开局就被激活），不是标定误差。取物质平衡布点（N0 = 0）时标注为 false。
+		ShortageStart: p.ProductionInitLevel > 0,
 	}
 	st.Buildings = make([]BuildingState, len(specs))
 	for i, sp := range specs {
-		st.Buildings[i] = BuildingState{Spec: sp, HireRate: 1.0, MarginEMA: 0.2}
+		// 两个利润率 EMA 的初值必须相同（0.2 = §3.4 标定给出的开局 20% 利润率）：
+		// 它们衡量的是同一个量（满编口径即时利润率），只是一个含补贴、一个不含。
+		// 【前值 → 后值】ProfitEMA 是本次新增字段；若保留零值，扩建判定会被
+		// 人为推迟约一个 EMA 窗口（12 期）才越过 10% 阈值——那不是契约语义。
+		st.Buildings[i] = BuildingState{Spec: sp, HireRate: 1.0, MarginEMA: 0.2, ProfitEMA: 0.2}
 	}
 
 	// 开局布点：由 §6.3 的最终需求经 Leontief 完全需求反推每种建筑的级数。
 	if err := st.initialLayout(cal); err != nil {
 		return nil, err
 	}
+	// 开局劳动力分配（§4.2 修订）：必须先算出自给农场雇佣率，否则 subsistence()
+	// 在 t=0 会返回 0（未分配劳动力 ⇒ 雇佣率 0），使净供给与需求标定都少了自给产出。
+	st.syncManorLevel()
+	{
+		lv := st.levels()
+		hr := st.hireRates()
+		st.allocateSubsistenceLabor(lv, hr)
+	}
 
 	// 标定需求常数 a = S₀·(Pinit/Pcost)^ε（§3.4 步骤 3）。
 	// 注意 S₀ 必须是【净供给】Y − A·Y，而不是总产出——否则会把中间投入重复算作可售量。
+	//
+	// 方案 A（支出份额锚，实验开关）取 ε ≡ 1，故 a = S₀·P_init/P_cost，
+	// 于是 P*(λ) = P_init/λ。
 	net := st.netSupply(cal)
+	st.Market.UnitElastic = p.AnchorExpenditureShare
 	for i := range st.Goods {
 		mk := &st.Market.Markets[i]
-		mk.A = calibrate.DemandConstant(goods[i], net[i])
+		eps := goods[i].Eps
+		if st.Market.UnitElastic {
+			eps = 1
+		}
+		mk.A = calibrate.DemandConstantAt(goods[i], net[i], eps)
 	}
 
 	// 【唯一记账账本】（§4.5.3 修订）
@@ -663,11 +1373,13 @@ func New(opt Options) (*State, error) {
 	st.Aud = ledger.NewAuditor()
 	// 统一记账簿与审计账本共用同一实例——这是"只有一份余额"的落地处。
 	st.bk = &book.Book{
-		Aud:        st.Aud,
-		Buildings:  len(specs),
-		Classes:    cohort.ClassCount,
-		PowerIdx:   powerGoodIndex,
-		FinanceIdx: model.FinanceIndex,
+		Aud:          st.Aud,
+		Buildings:    len(specs),
+		Classes:      cohort.ClassCount,
+		PowerIdx:     powerGoodIndex,
+		FinanceIdx:   model.FinanceIndex,
+		WarehouseIdx: model.WarehouseIndex,
+		AgentIdx:     model.AgentIndex,
 	}
 	st.Gov = fiscal.Government{Cash: fiscal.NewLedger(st.Aud, ledger.Gov())}
 	st.Cap = fiscal.Capital{Cash: fiscal.NewLedger(st.Aud, ledger.Capital())}
@@ -687,7 +1399,12 @@ func New(opt Options) (*State, error) {
 
 	// 人群现金池账本（§5.1 修订）。初始现金为 0——居民的第一次收入来自第一期工资；
 	// 给初始现金等于凭空注入一笔没有来源的货币，违反 §4.5.3 的货币守恒。
-	st.Houses = cohort.NewLedger(st.Aud, len(specs))
+	//
+	// 【2026-09-19 第 15 轮裁决】多开一个**虚拟劳动场地**：失业（§6.5）。
+	// 失业人口算劳工（阶级 0），其资金池与就业者严格分开——它只能收到福利金
+	// （§4.5.8），没有工资收入；福利金关闭时预算为 0 ⇒ 无法消费 ⇒ 幸福度 0。
+	// 故 worksites = len(specs) + 1，最后一个场地下标 = model.UnemployedSite。
+	st.Houses = cohort.NewLedger(st.Aud, len(specs)+1)
 
 	// 初始货币存量：必须由【流量】导出，而不是取任意数值。
 	//
@@ -705,15 +1422,31 @@ func New(opt Options) (*State, error) {
 	// 合计 = 1.75 × 周工资，即全社会的货币存量约为 1.75 周的工资流量。
 	// 这个量级是"工资能真实付出、且货币周转速度合理"的最低要求。
 	wageBill := st.wageBillNow()
-	st.Gov.Cash.SetInitial(startupGovFraction * wageBill)
-	st.Cap.Cash.SetInitial(startupCapFraction * wageBill)
+	// 政府现金池规模：契约默认 0.50 × 周工资；Options.GovStartupFraction > 0 时覆盖它
+	// （2026-09-19 修复：此前该选项被忽略，`-gov-startup` 是个空旗标）。
+	govFraction := startupGovFraction
+	if opt.GovStartupFraction > 0 {
+		govFraction = opt.GovStartupFraction
+	}
+	st.Gov.Cash.SetInitial(govFraction * wageBill)
+	// 资本现金池规模：契约默认 0.25 × 周工资；Options.CapStartupFraction > 0 时覆盖它
+	// （第 26 轮新增，用于隔离"资本池不足 ⇒ 私有化零成交"这一闸门）。
+	capFraction := startupCapFraction
+	if opt.CapStartupFraction > 0 {
+		capFraction = opt.CapStartupFraction
+	}
+	st.Cap.Cash.SetInitial(capFraction * wageBill)
 	// 建筑现金池按【基数 + 按级数】分摊。
 	//
 	// 不能只按级数分摊：建造部门默认只有 20 级，而它要垫付钢/铁/工具的
 	// 中间投入（每级 25×P钢 + 25×P铁 + 20×P工具 ≈ 8.8 万），
 	// 按级数分到的钱不足以做第一笔采购，会立刻透支并让整条扩建链断掉。
 	const firmBasePerType = 0.05 // 每类建筑的基数，单位为"周工资"
-	firmStock := startupFirmFraction * wageBill
+	// 宅邸庄园（§4.5.5）单独给一份起步流动性：它不参与"按级数分摊"，
+	// 否则 ~2,000 级庄园会吃掉几乎全部建筑现金池（实测占比 96%），
+	// 使真正的生产建筑开局就无钱采购。总额仍为契约 §4.3 的 1.75 × 周工资，
+	// 只是在"建筑"与"庄园"两行之间重新分配（0.75 / 0.25）。
+	firmStock := (startupFirmFraction - startupManorFraction) * wageBill
 	base := firmBasePerType * wageBill
 	perLevelPool := firmStock - base*float64(len(st.Buildings))
 	if perLevelPool < 0 {
@@ -721,12 +1454,30 @@ func New(opt Options) (*State, error) {
 	}
 	totalLevels := maxLevels(st.Buildings)
 	for i := range st.Buildings {
+		if st.Buildings[i].Spec.IsManor {
+			st.Aud.SetBalance(ledger.Building(i), startupManorFraction*wageBill)
+			continue
+		}
+		// 消费代理是**零余额**的透传主体（§4.5.6）：不给它任何起步现金，
+		// 否则"代理余额恒为 0"这条审计断言在开局就不成立。
+		if st.Buildings[i].Spec.IsAgent {
+			continue
+		}
 		share := base
 		if totalLevels > 0 {
 			share += perLevelPool * st.Buildings[i].Level / totalLevels
 		}
+		// 【§4.5.1b 场地账户口径】金融区的营运现金池就是 ledger.Capital()，
+		// 故它那一份起步流动性直接加进资本池，不进 Building[FinanceIndex]
+		// （后者本版不再承载任何资金流）。
+		if i == model.FinanceIndex {
+			st.Aud.SetBalance(ledger.Capital(), st.Aud.Balance(ledger.Capital())+share)
+			continue
+		}
 		st.Aud.SetBalance(ledger.Building(i), share)
 	}
+	// 投资池开局为 0：它的资金只能来自资本建筑的当期净额（§4.5.1b），
+	// 给它初始现金等于凭空注入一笔没有来源的货币，违反 §4.5.3 的货币守恒。
 	return st, nil
 }
 
@@ -742,6 +1493,11 @@ const (
 	startupCapFraction = 0.25
 	// startupFirmFraction 是建筑现金池总规模。
 	startupFirmFraction = 1.00
+	// startupManorFraction 是宅邸庄园现金池的初始规模（§4.5.5）。
+	//
+	// 从"建筑"那一份里划出 0.25：契约 §4.3 的初始货币总量仍是 1.75 × 周工资，
+	// 只是分配表多了一行（政府 0.50 / 资本 0.25 / 建筑 0.75 / 庄园 0.25 / 人群 0）。
+	startupManorFraction = 0.25
 )
 
 // maxLevels 返回建筑总级数（用于把建筑现金池按规模分摊）。
@@ -764,7 +1520,7 @@ func (s *State) wageBillNow() float64 {
 	var total float64
 	for i := range s.Buildings {
 		b := &s.Buildings[i]
-		total += b.Level * b.Spec.LaborPerLevel * model.AverageWage()
+		total += b.Level * b.Spec.WagePerLevel()
 	}
 	if total <= 0 {
 		// 兜底：布点为空时至少给一个正存量，避免零货币的死局。
@@ -783,7 +1539,7 @@ func (s *State) wageBillNow() float64 {
 //
 //	若按"完全需求 (I−A)⁻¹f"布点，得到的产能与 S₀ 无关，二者一般不等。
 //	后果是开局即有大量部门产能过剩 → 价格崩向地板 → 这些部门长期亏损 →
-//	政府（持有 70% 的亏损部门）现金池被砸穿 → 建造力采购归零 →
+//	政府（按当期持股承担亏损份额，§4.5.1）现金池被砸穿 → 建造力采购归零 →
 //	建造部门失去唯一买家 → 全经济崩解。
 //
 //	正确做法：让每种商品的产能恰好等于其需求曲线的要求值 D_i(Pinit) = a_i。
@@ -831,7 +1587,9 @@ func (s *State) initialLayout(cal *calibrate.Result) error {
 	levels := make([]float64, len(s.Buildings))
 	output := make([]int, len(s.Buildings))
 	for i := range s.Buildings {
-		if s.Buildings[i].Spec.IsFinance {
+		// 【§4.5.6】仓库与消费代理**没有配方**（Recipe.Qty = 0）：若把它们当作
+		// 生产者，下面的 need/Qty 会除以 0。故这里的判据是 Produces() 而不是 IsNonMarket()。
+		if !s.Buildings[i].Spec.Produces() {
 			output[i] = -1
 			continue
 		}
@@ -848,7 +1606,7 @@ func (s *State) initialLayout(cal *calibrate.Result) error {
 		// 各商品被中间投入消耗的总量
 		used := make([]float64, model.Goods)
 		for j := range s.Buildings {
-			if s.Buildings[j].Spec.IsFinance || levels[j] <= 0 {
+			if !s.Buildings[j].Spec.Produces() || levels[j] <= 0 {
 				continue
 			}
 			for good, qty := range s.Buildings[j].Spec.Recipe.Inputs {
@@ -859,7 +1617,7 @@ func (s *State) initialLayout(cal *calibrate.Result) error {
 		maxChange := 0.0
 		for i := range s.Buildings {
 			b := &s.Buildings[i]
-			if b.Spec.IsFinance || i == powerIdx {
+			if !b.Spec.Produces() || i == powerIdx {
 				continue
 			}
 			need := finalDemand[output[i]] + used[output[i]]
@@ -904,7 +1662,7 @@ func (s *State) initialLayout(cal *calibrate.Result) error {
 			}
 			// 中间消耗
 			for j := range s.Buildings {
-				if s.Buildings[j].Spec.IsFinance {
+				if !s.Buildings[j].Spec.Produces() {
 					continue
 				}
 				if q, ok := s.Buildings[j].Spec.Recipe.Inputs[g]; ok {
@@ -927,7 +1685,7 @@ func (s *State) initialLayout(cal *calibrate.Result) error {
 	}
 
 	for i := range s.Buildings {
-		if s.Buildings[i].Spec.IsFinance {
+		if !s.Buildings[i].Spec.Produces() {
 			continue
 		}
 		s.Buildings[i].Level = levels[i]
@@ -943,7 +1701,7 @@ func (s *State) initialLayout(cal *calibrate.Result) error {
 	if s.Params.ProductionInitLevel > 0 {
 		for i := range s.Buildings {
 			b := &s.Buildings[i]
-			if b.Spec.IsFinance || i == powerGoodIndex {
+			if !b.Spec.Produces() || i == powerGoodIndex {
 				continue
 			}
 			lv := s.Params.ProductionInitLevel
@@ -954,23 +1712,34 @@ func (s *State) initialLayout(cal *calibrate.Result) error {
 		}
 	}
 
-	// ── 第 4 步：金融区按掌控比布点（G5）──────────────────────
-	var other float64
-	for i := range s.Buildings {
-		if !s.Buildings[i].Spec.IsFinance {
-			other += s.Buildings[i].Level
-		}
-	}
-	fin := &s.Buildings[model.FinanceIndex]
-	fin.Level = other / s.Params.ControlPerFinance
-	if fin.Level < 1 {
-		fin.Level = 1
-	}
+	// ── 第 4 步：金融区按掌控比推导（G5）──────────────────────
+	// 【2026-09-19 裁决】金融区不建造，级数是所有权的显式表达。
+	s.syncFinanceLevel()
+	// 宅邸庄园同样按推导布点（§4.5.5）：级数 = 自给农场级数 ÷ 掌控比。
+	s.syncManorLevel()
 
-	// ── 第 5 步：所有权拆分（G3）：默认政府占 70%，金融区全归私有 ──
+	// ── 第 4b 步：仓库的起步等级（§4.5.6）───────────────────
+	//
+	// 仓库是**可建造**的国有贸易枢纽，但其起步规模不由需求反推（它不生产商品），
+	// 而由 Params.InitialWarehouseLevel 给定（建模值，与 InitialPowerLevel 同性质）。
+	// 消费代理恒为 0 级（它是虚构的记账主体）。
+	if w := &s.Buildings[model.WarehouseIndex]; w.Level <= 0 {
+		w.Level = s.Params.InitialWarehouseLevel
+	}
+	s.Buildings[model.AgentIndex].Level = 0
+
+	// ── 第 5 步：所有权拆分（G3）────────────────────────────────
+	//
+	// 【2026-09-19 裁决（§4.5.1）】初始政府持股 s_gov 由 0.70 下调到 0.30
+	// （Params.GovInitialShare）。金融区与宅邸庄园全归私有（不持政府股份），
+	// 它们是"资本所有权 / 农业资本"的显式表达。
+	// 【§4.5.6】仓库**归国有**（s_gov = 1）：它是国有的贸易枢纽，利润全部进政府池。
 	for i := range s.Buildings {
-		share := 0.70
-		if s.Buildings[i].Spec.IsFinance {
+		share := s.Params.GovInitialShare
+		switch {
+		case s.Buildings[i].Spec.IsWarehouse:
+			share = 1
+		case !s.Buildings[i].Spec.Produces():
 			share = 0
 		}
 		s.Buildings[i].GovLevel = s.Buildings[i].Level * share
@@ -989,7 +1758,7 @@ func cottonBuildingIndex(bs []BuildingState) int { return buildingByOutput(bs, 2
 
 func buildingByOutput(bs []BuildingState, good int) int {
 	for i := range bs {
-		if !bs[i].Spec.IsFinance && bs[i].Spec.Recipe.Output == good {
+		if bs[i].Spec.Produces() && bs[i].Spec.Recipe.Output == good {
 			return i
 		}
 	}
@@ -1001,6 +1770,142 @@ func absf(v float64) float64 {
 		return -v
 	}
 	return v
+}
+
+// syncFinanceLevel 按 §3.2/§4.5.2 的裁决重算金融区级数。
+//
+// 【2026-09-19 裁决】金融区是"所有权的显式表达"：不建造、不进入建造队列、
+// 不消耗建造力、不参与缩编，其级数恒由掌控比反推：
+//
+//	N_finance = max(1, Σ_{非农业} 生产建筑 Level / c_ctrl)
+//
+// 求和取**非农业**生产建筑等级：农业建筑归宅邸庄园掌控（§4.5.5），
+// 且不含金融区自身（否则自我指涉）。
+//
+// 由此掌控上限 = N_finance × c_ctrl ≡ Σ其余等级，恒不小于实际持有量，
+// 故 G5 的掌控上限在"推导口径"下**不再是约束**——这是"无需建造"的直接后果，
+// 已在契约 §4.5.2 与 docs/ACTIVE.md 中明示。
+//
+// 所有权拆分同步维护：金融区天然 100% 私有（GovLevel = 0）。
+func (s *State) syncFinanceLevel() {
+	var other float64
+	for i := range s.Buildings {
+		b := &s.Buildings[i]
+		if !b.Spec.Produces() || b.Spec.LandKind == "arable" {
+			continue
+		}
+		other += b.Level
+	}
+	lv := other / s.Params.ControlPerFinance
+	if lv < 1 {
+		lv = 1
+	}
+	fin := &s.Buildings[model.FinanceIndex]
+	fin.Level = lv
+	fin.GovLevel = 0
+	fin.PrivLevel = lv
+}
+
+// syncManorLevel 按 §4.5.5 重算宅邸庄园级数。
+//
+// 【农业版金融区】宅邸庄园是自给农场与农业建筑的所有权载体：不建造、
+// 不消耗建造力、不进入建造队列、不参与缩编，级数由它掌控的**全部农业等级**推导：
+//
+//	N_manor = max(1, (N_subsistence + Σ_{农业建筑} N_i) / c_ctrl)
+//
+// 【2026-09-19 改写】求和里**含自给农场级数**（前值只取农业建筑）：
+// 自给农场从此不只是"分母上的一项"，而与庄园自有农业建筑一起决定庄园规模。
+//
+// 它每级雇 1,000 人（劳工 75% / 教士 20% / 贵族 5%，工资 5/10/20 ⇒ 6,750 元/级），
+// 拿货币工资并在市场消费；收入是自给农场产出的全部销售收入 + 农业建筑的私人份额纯利。
+func (s *State) syncManorLevel() {
+	subs := s.subsistenceFarmLevels()
+	var arable float64
+	for i := range s.Buildings {
+		if s.Buildings[i].Spec.LandKind == "arable" {
+			arable += s.Buildings[i].Level
+		}
+	}
+	lv := (subs + arable) / s.Params.ControlPerFinance
+	if lv < 1 {
+		lv = 1
+	}
+	m := &s.Buildings[model.ManorIndex]
+	m.Level = lv
+	m.GovLevel = 0
+	m.PrivLevel = lv
+	s.SubsistenceLevels = subs
+}
+
+// subsistenceFarmLevels 返回当期自给农场级数（未使用耕地 × SubsistenceScale）。
+func (s *State) subsistenceFarmLevels() float64 {
+	var used float64
+	for i := range s.Buildings {
+		if s.Buildings[i].Spec.LandKind == "arable" {
+			used += s.Buildings[i].Level
+		}
+	}
+	idle := s.Params.ArableCap - used
+	if idle < 0 {
+		idle = 0
+	}
+	return idle * s.Params.SubsistenceScale
+}
+
+// allocateSubsistenceLabor 实现 §4.2 修订的就业顺序：
+//
+//	① 一般生产建筑（含金融区、宅邸庄园）按其雇佣率占用劳动力；
+//	② 余量（备用劳动力池）配置给自给农场，每级需要 5,000 自给农；
+//	③ 仍有余量即为失业。
+//
+// 自给农场的产出按此雇佣率缩放（见 subsistence）；自给农不领货币工资、
+// 不进市场购买——他们的消费已经在 §3.3 的配方里约去。
+func (s *State) allocateSubsistenceLabor(levels, hire []float64) {
+	var market float64
+	for i, b := range s.buildingSpecs() {
+		if i >= len(levels) || i >= len(hire) {
+			break
+		}
+		market += levels[i] * hire[i] * b.LaborPerLevel
+	}
+	// 【§5.2 第 23 轮：人口约束（兜底）】各场地雇佣人口之和**不得**超过总人口。
+	//
+	// 【为什么必须有这条】§5.2 的增雇只由利润率驱动，没有任何全局劳动力上限。
+	// 实测（R45/R46）：tick 1,500 市场用工 519 万 > 总人口 229 万，其中建造部门一家
+	// 430 万 ⇒ 备用劳动力恒为 0 ⇒ 自给农场雇佣率归零 ⇒ 断粮 ⇒ 人口 −8.49%/年 到 0。
+	//
+	// 【口径：按比例配给，不改雇佣率状态】超出时把**本 tick 的有效雇佣率**整体乘一个
+	// 系数 k = 人口 / 市场需求，于是"谁也不会被单独惩罚"，且 `HireRate` 的演化仍由
+	// §5.2 的利润率信号驱动（k 只是本 tick 的配给闸门）。被裁掉的那部分人口登记为失业。
+	//
+	// 返回 k（≤ 1）。调用方必须把它一致地用于工资、产出与快照——
+	// 否则"付了 5,000 人的工资、只报了 2,000 人就业"会让货币闭环与人群池对不上。
+	ratio := 1.0
+	if market > s.Population && market > 1e-9 {
+		ratio = s.Population / market
+		market = s.Population
+	}
+	reserve := s.Population - market
+	if reserve < 0 {
+		reserve = 0
+	}
+	capacity := s.SubsistenceLevels * s.Params.SubsistenceLaborPerLevel
+	if capacity <= 0 {
+		s.SubsistenceHireRate = 0
+		s.Unemployed = reserve
+		s.LaborMarketRatio = ratio
+		return
+	}
+	hr := reserve / capacity
+	if hr > 1 {
+		hr = 1
+	}
+	if hr < 0 {
+		hr = 0
+	}
+	s.SubsistenceHireRate = hr
+	s.Unemployed = reserve - hr*capacity
+	s.LaborMarketRatio = ratio
 }
 
 // subsistenceAtLevels 计算给定等级下的自给农场产出（不修改状态）。
@@ -1042,7 +1947,7 @@ func (s *State) output() []float64 {
 	out := make([]float64, model.Goods)
 	for i := range s.Buildings {
 		b := &s.Buildings[i]
-		if b.Spec.IsFinance {
+		if !b.Spec.Produces() {
 			continue
 		}
 		out[b.Spec.Recipe.Output] += b.Level * b.Spec.Recipe.Qty * b.HireRate
@@ -1053,19 +1958,23 @@ func (s *State) output() []float64 {
 	return out
 }
 
-// subsistence 返回自给农场的产出（§3.3/§4.2：未利用耕地自动生成，不耗劳动力、不发工资）。
+// subsistence 返回自给农场的产出（§3.3/§4.2 修订）。
+//
+// 【口径】① 级数 = 未使用耕地 × SubsistenceScale（1:1）；
+//
+//	② 产出按【自给农场雇佣率】缩放——自给农场是备用劳动力池，
+//	   每级需要 5,000 自给农，劳动力不足则同比例减产；
+//	③ 表中的 谷物2/织物1/服装0.5 是**已约去自给农自身消费的净产出**，
+//	   故自给农不领货币工资、不进市场购买。
 func (s *State) subsistence() map[int]float64 {
-	var used float64
-	for i := range s.Buildings {
-		if s.Buildings[i].Spec.LandKind == "arable" {
-			used += s.Buildings[i].Level
-		}
+	hr := s.SubsistenceHireRate
+	if hr < 0 {
+		hr = 0
 	}
-	idle := s.Params.ArableCap - used
-	if idle < 0 {
-		idle = 0
+	if hr > 1 {
+		hr = 1
 	}
-	return model.SubsistenceOutput(idle * s.Params.SubsistenceScale)
+	return model.SubsistenceOutput(s.subsistenceFarmLevels() * hr)
 }
 
 // netSupply 计算净供给 Y − A·Y（可售量），用于需求标定。
@@ -1087,10 +1996,14 @@ func (s *State) netSupply(cal *calibrate.Result) []float64 {
 
 // Snapshot 是一次 tick 结束后的诊断快照（报告与 §8.4 判据的输入）。
 type Snapshot struct {
-	Tick           int64
-	Prices         []float64
-	PriceRatio     []float64
-	Supply         []float64
+	Tick   int64
+	Prices []float64
+	// PriceRatio = P / P⁰，其中 P⁰ 是**当期零利润价**（§七 R32：
+	// 动态模式为每 tick 重算值，静态模式为契约的 P_cost）。
+	PriceRatio []float64
+	// Pzero 是当期的零利润价切片（§七 R32），供 A1/A3 判据与报告使用。
+	Pzero  []float64
+	Supply []float64
 	Demand         []float64
 	Margins        []float64
 	Levels         []float64
@@ -1108,7 +2021,7 @@ type Snapshot struct {
 	// CashTotal 是全部现金池期末总额（§7 GDP 的存量口径）。
 	//
 	// 口径（契约 §7 修订后）：建筑现金池 + 政府现金池（取 max(0,·)）
-	// + 金融区现金池 + 人群现金池（§5.1 修订新增）。
+	// + 金融区现金池 + 人群现金池（§5.1）+ **投资池**（§4.5.1b）。
 	CashTotal float64
 	// TotalMoney 是全社会货币存量（政府现金池【按实际值】计入，可为负）。
 	//
@@ -1126,10 +2039,134 @@ type Snapshot struct {
 	GovDebtCap float64
 	// GovPowerOutput 是建造部门当期产出，债务上限的资产基数来源。
 	GovPowerOutput float64
+	// ManorCash 是宅邸庄园现金池余额（§4.5.5）。
+	ManorCash float64
+	// SubsistenceHire 是自给农场雇佣率；Unemployed 是失业人数（§4.2 修订）。
+	SubsistenceHire float64
+	Unemployed      float64
 	// PrivatizeUnits / PrivatizePaid / GovShareAfter 是私有化诊断（§4.5.1 修订）。
 	PrivatizeUnits float64
 	PrivatizePaid  float64
 	GovShareAfter  float64
 	// Flow 是本期的资金流分解，用于诊断政府现金池的变化来源。
 	Flow FlowDiag
+
+	// ===== §4.5.1b 投资池快照 =====
+
+	// InvestmentPool 是期末投资池余额。
+	InvestmentPool float64
+	// KManor / KFinance 是两条投资栈的累计贡献（含本期）。
+	KManor, KFinance float64
+	// InvestmentInflowManor / InvestmentInflowFinance 是本 tick 两条栈的入池额。
+	InvestmentInflowManor   float64
+	InvestmentInflowFinance float64
+	// InvestmentPaid 是本 tick 投资池付给政府的建造力货款（G6）。
+	InvestmentPaid float64
+	// PowerNeed 是本 tick 队列实际需要的建造力量（G2 的采购量由它裁剪而来）。
+	PowerNeed float64
+	// PowerInventory 是政府公共储备，**恒为 0**（§4.5.3 G2 即买即用）。
+	PowerInventory float64
+	// ProfitEMAs 是逐建筑【不含补贴】的利润率 EMA（§4.5.7）。
+	//
+	// 它与 Margins（含补贴的即时利润率）并列输出：扩建判定用本字段，
+	// 雇佣调整用 MarginEMA。
+	ProfitEMAs []float64
+	// ProfitMargins 是逐建筑【不含补贴】的即时利润率。
+	ProfitMargins []float64
+	// MarginsEMA 是逐建筑**含补贴**的利润率 EMA（§5.2 的雇佣调整输入）。
+	MarginsEMA []float64
+	// ManorConsumerIn 是宅邸庄园本 tick 从消费者货款中分得的自给产出收入（§4.5.5）。
+	ManorConsumerIn float64
+
+	// ===== §4.5.6 仓库与消费代理（2026-09-19 第 16 轮）=====
+
+	// TradeVolume 是本 tick 过库的贸易量（单位数，单向过手）。
+	TradeVolume float64
+	// TradeQuota 是本 tick 的贸易额度 = 仓库级数 × WarehouseQuotaPerLevel。
+	TradeQuota float64
+	// WarehouseCash / AgentCash 是两个贸易节点的期末现金池（代理恒为 0）。
+	WarehouseCash float64
+	AgentCash     float64
+	// WarehouseLevel 是仓库当期级数。
+	WarehouseLevel float64
+	// WarehouseIn / WarehouseOut 是仓库本 tick 的出库收款与入库付款（含税）。
+	WarehouseIn  float64
+	WarehouseOut float64
+	// WarehouseProfit 是仓库本 tick 的纯利（加价 − 增值税 − 自身工资；全归政府）。
+	WarehouseProfit float64
+	// WarehouseWage 是仓库本 tick 的工资支出（⑥ 计算纯利时用的那一份；
+	// 与 tick 末 Level 派生的工资可能差一级——完工发生在纯利计算之后）。
+	WarehouseWage float64
+	// VAT / ConsumeTax 是本 tick 两段税的税额（已含在 Tax 内，单列供核对）。
+	VAT        float64
+	ConsumeTax float64
+	// WarehouseExpandSpend / WarehouseExpandUnits 是本 tick 的仓库自动扩建支出与新建订单等级数。
+	WarehouseExpandSpend float64
+	WarehouseExpandUnits float64
+
+	// ===== §7.2 实际工农生产总值（2026-09-19 第 18 轮）=====
+
+	// GrossAgri / GrossIndustry 是实际总产值（实物产出 × 固定 P_ref）。
+	GrossAgri     float64
+	GrossIndustry float64
+	// GrossProduct 是工农总产值（= 农业 + 工业，含中间投入，会重复计算）。
+	GrossProduct float64
+	// ProductInput 是中间投入价值（实物取用量 × 固定 P_ref）。
+	ProductInput float64
+	// ProductAdded 是**工农增加值**（= 总产值 − 中间投入），即"实际口径的 GDP"。
+	ProductAdded float64
+	// ProductAddedAgri / ProductAddedIndustry 是两部门的增加值。
+	ProductAddedAgri     float64
+	ProductAddedIndustry float64
+	// ProductPerCapita 是人均实际增加值（ProductAdded / 人口）。
+	ProductPerCapita float64
+	// ProductIndex 是实际增加值相对**首个 tick** 的指数（基期 = 1）。
+	ProductIndex float64
+	// ProductBaseAdded 是首 tick 的实际工农增加值（指数基期值，供报告标注）。
+	ProductBaseAdded float64
+	// ProductSubsistence 是自给农场那一部分实际产出（已含在农业里，单列供分离观察）。
+	ProductSubsistence float64
+
+	// ===== 2026-09-19 第 15 轮裁决新增的快照字段 =====
+
+	// Saving 是本 tick 居民工资结余**全额**进入储蓄固定账户的金额（§5.3 第一步）。
+	Saving float64
+	// SavingInvest 是本 tick 从储蓄账户转入投资池的金额（§5.3 第二步
+	// = σ_save × Saving）。σ_save = 1 时两者相等，储蓄账户期末归零。
+	SavingInvest float64
+	// SavingsAccount 是期末**居民储蓄固定账户**余额（§5.3）。
+	// 默认 σ_save = 1 时恒为 0；σ < 1 时它是"已储蓄未投资"的挂账。
+	SavingsAccount float64
+	// AcquirePaid 是本 tick **投资池出资收购政府股权**的支出（§4.5.1a 第 28 轮）。
+	//
+	// 它是投资池的一条**新增流出腿**（借 投资池、贷 政府，`ledger.InvestmentBuyEquity`）：
+	// 投资池的余额恒等式因此是
+	//
+	//	Δ投资池 = 储蓄转入 + 资本建筑入池 − 付政府(建造力) − **本项**
+	//
+	// 把它单列（而不是并入"付政府"）是为了让审计能分开核对两条完全不同的语义：
+	// 前者是"偿还建造力货款"，本项是"买存量股权"。
+	AcquirePaid float64
+	// Welfare 是本 tick 政府发放的福利金总额（§4.5.8）。
+	Welfare float64
+	// PublicWorks 是本 tick 公共工程采购建造力的国库支出（§4.5.8）。
+	PublicWorks float64
+	// PublicWorksUnits 是本 tick 公共工程新建订单的等级数（§4.5.8）。
+	PublicWorksUnits float64
+	// NoIncomePools 是"有人口但无收入 ⇒ 无法消费"的池数（§6.5 诊断）。
+	NoIncomePools int
+	// Happiness 是按人口加权的幸福度 = 四组满足度均值（§6.5）。
+	Happiness float64
+	// HappinessByClass 是各阶级的幸福度（失业者算劳工，§6.5）。
+	HappinessByClass [3]float64
+	// BudgetShareManor 是本 tick 投资池预算中庄园栈的份额（§4.5.1b 修订后
+	// 由**当期意向需求**比例决定，不再是累计贡献比例）。
+	BudgetShareManor float64
+	// ShortageStart 标记本次运行是"短缺起步"布点（§3.2/§8.6 第 15 轮裁决）。
+	ShortageStart bool
+	// Infusion 是累计的诊断注入额（§七 R28 的 UnlimitedFunds；正常为 0）。
+	//
+	// §8.4 的 A8（货币守恒）判定需要它：恒等式读作
+	// `ΔM == NewCapital 累计 + Infusion 累计`。
+	Infusion float64
 }
