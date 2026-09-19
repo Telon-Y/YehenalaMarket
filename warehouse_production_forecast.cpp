@@ -53,6 +53,35 @@ Money WarehouseNetwork::forecastSupplyRate(
     return std::max(Money(0), result);
 }
 
+Money WarehouseNetwork::requiredDemand(WarehouseId warehouseId,
+                                       int goodIndex) const {
+    if (!hasWarehouse(warehouseId) || !validGood(goodIndex)) return Money(0);
+    Money required = std::max(
+        Money(0),
+        warehouseStock(warehouseId, goodIndex).policy.plannedFinalDemand);
+    // Local producers that consume this good carry their own anchored
+    // requirement, so their input requirement is anchored as well. Without this
+    // term a good that a market only imports - whose local final demand is zero
+    // - would have no requirement at all.
+    for (const ProductionRecipe& recipe : producerList) {
+        if (recipe.warehouseId != warehouseId) continue;
+        const Money perBatch =
+            recipe.inputs[static_cast<std::size_t>(goodIndex)];
+        if (perBatch <= Money(0)) continue;
+        required += productionForecastDemand(
+                        warehouseId, recipe.buildingType, recipe.outputGood) *
+                    perBatch / recipe.outputPerBatch;
+    }
+    const ProductionRecipe* local = findProducer(warehouseId, goodIndex);
+    if (local != nullptr) {
+        required = std::max(
+            required,
+            productionForecastDemand(warehouseId, local->buildingType,
+                                     goodIndex));
+    }
+    return required;
+}
+
 Money WarehouseNetwork::expectedOutboundDemand(
     WarehouseId warehouseId, int goodIndex) const {
     if (!hasWarehouse(warehouseId) || !validGood(goodIndex) ||
@@ -81,44 +110,65 @@ Money WarehouseNetwork::expectedOutboundDemand(
 
 void WarehouseNetwork::refreshProductionForecasts() {
     std::unordered_map<std::uint64_t, Money> baseForecast;
+    baseForecast.reserve(producerList.size());
     std::unordered_map<std::uint64_t, const ProductionRecipe*> recipes;
+    recipes.reserve(producerList.size());
     for (const ProductionRecipe& recipe : producerList) {
         recipes.emplace(productionOrderKey(recipe.warehouseId,
                                             recipe.buildingType,
                                             recipe.outputGood), &recipe);
     }
 
-    auto sourceKeysFor = [this](WarehouseId destinationId, int good) {
-        std::vector<std::uint64_t> keys;
-        const ProductionRecipe* local = findProducer(destinationId, good);
-        if (local != nullptr) {
-            keys.push_back(productionOrderKey(destinationId,
-                                               local->buildingType, good));
-            return keys;
-        }
+    std::unordered_map<std::uint64_t, std::vector<std::uint64_t>>
+        sourceKeysByWarehouseGood;
+    sourceKeysByWarehouseGood.reserve(warehouses.size() * NUM_GOODS);
+    std::unordered_set<std::uint64_t> localSourceKeys;
+    localSourceKeys.reserve(producerList.size());
+    for (const ProductionRecipe& recipe : producerList) {
+        const std::uint64_t destinationKey = warehouseGoodKey(
+            recipe.warehouseId, recipe.outputGood);
+        sourceKeysByWarehouseGood[destinationKey] = {
+            productionOrderKey(recipe.warehouseId, recipe.buildingType,
+                               recipe.outputGood)};
+        localSourceKeys.insert(destinationKey);
+    }
 
-        int bestTransit = std::numeric_limits<int>::max();
-        std::unordered_set<std::uint64_t> seen;
-        for (const SupplyRoute& route : routeList) {
-            if (!route.active || route.destinationWarehouseId != destinationId ||
-                route.goodIndex != good) {
-                continue;
-            }
-            const ProductionRecipe* producer =
-                findProducer(route.sourceWarehouseId, good);
-            if (producer == nullptr) continue;
-            const int transit = std::max(1, route.transitCycles);
-            const std::uint64_t key = productionOrderKey(
-                route.sourceWarehouseId, producer->buildingType, good);
-            if (transit < bestTransit) {
-                bestTransit = transit;
-                keys.clear();
-                seen.clear();
-            }
-            if (transit == bestTransit && seen.insert(key).second)
-                keys.push_back(key);
+    std::unordered_map<std::uint64_t, int> bestTransitByWarehouseGood;
+    bestTransitByWarehouseGood.reserve(routeList.size());
+    for (const SupplyRoute& route : routeList) {
+        if (!route.active) continue;
+        const std::uint64_t destinationKey = warehouseGoodKey(
+            route.destinationWarehouseId, route.goodIndex);
+        if (localSourceKeys.find(destinationKey) != localSourceKeys.end())
+            continue;
+        const ProductionRecipe* producer =
+            findProducer(route.sourceWarehouseId, route.goodIndex);
+        if (producer == nullptr) continue;
+
+        const int transit = std::max(1, route.transitCycles);
+        auto best = bestTransitByWarehouseGood.find(destinationKey);
+        std::vector<std::uint64_t>& keys =
+            sourceKeysByWarehouseGood[destinationKey];
+        if (best == bestTransitByWarehouseGood.end() ||
+            transit < best->second) {
+            bestTransitByWarehouseGood[destinationKey] = transit;
+            keys.clear();
+        } else if (transit > best->second) {
+            continue;
         }
-        return keys;
+        const std::uint64_t sourceKey = productionOrderKey(
+            route.sourceWarehouseId, producer->buildingType, route.goodIndex);
+        if (std::find(keys.begin(), keys.end(), sourceKey) == keys.end())
+            keys.push_back(sourceKey);
+    }
+
+    const std::vector<std::uint64_t> noSourceKeys;
+    auto sourceKeysFor = [&](WarehouseId destinationId, int good)
+        -> const std::vector<std::uint64_t>& {
+        const auto keys = sourceKeysByWarehouseGood.find(
+            warehouseGoodKey(destinationId, good));
+        return keys == sourceKeysByWarehouseGood.end()
+            ? noSourceKeys : keys->second;
     };
 
     // Seed the graph with the construction department's planned weekly draw.
@@ -134,11 +184,32 @@ void WarehouseNetwork::refreshProductionForecasts() {
                 input.policy.weeklyDemand <= Money(1e-9)) {
                 continue;
             }
-            const std::vector<std::uint64_t> keys =
+            const std::vector<std::uint64_t>& keys =
                 sourceKeysFor(destinationId, good);
             if (keys.empty()) continue;
             const Money share = input.policy.weeklyDemand /
                                 Money(static_cast<int>(keys.size()));
+            for (const std::uint64_t key : keys)
+                baseForecast[key] += share;
+        }
+    }
+
+    // Final demand is the anchor of the requirement graph. Consumer demand for
+    // a good is a requirement on this warehouse's own producer, or - when the
+    // good is imported - on its nearest upstream sources, so propagating it
+    // through the recipes gives every intermediate good a demand floor that does
+    // not depend on how much of that demand the chain actually served.
+    for (const auto& [destinationId, warehouse] : warehouses) {
+        (void)warehouse;
+        for (int good = 0; good < NUM_GOODS; ++good) {
+            const Money finalDemand = warehouseStock(destinationId, good)
+                                          .policy.plannedFinalDemand;
+            if (finalDemand <= Money(1e-9)) continue;
+            const std::vector<std::uint64_t>& keys =
+                sourceKeysFor(destinationId, good);
+            if (keys.empty()) continue;
+            const Money share =
+                finalDemand / Money(static_cast<int>(keys.size()));
             for (const std::uint64_t key : keys)
                 baseForecast[key] += share;
         }
@@ -157,7 +228,7 @@ void WarehouseNetwork::refreshProductionForecasts() {
                     recipe.inputs[static_cast<std::size_t>(good)] /
                     recipe.outputPerBatch;
                 if (inputPerOutput <= Money(0)) continue;
-                const std::vector<std::uint64_t> keys =
+                const std::vector<std::uint64_t>& keys =
                     sourceKeysFor(recipe.warehouseId, good);
                 if (keys.empty()) continue;
                 const Money share = demand * inputPerOutput /

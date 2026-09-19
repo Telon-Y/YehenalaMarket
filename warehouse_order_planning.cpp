@@ -5,16 +5,6 @@
 #include <stdexcept>
 #include <utility>
 
-namespace {
-
-bool isStorableGood(int goodIndex) {
-    return goodIndex >= 0 && goodIndex < NUM_GOODS &&
-           goodIndex != CONSTR_GOOD_INDEX &&
-           goodIndex != TRANSPORT_CAPACITY_GOOD_INDEX;
-}
-
-}  // namespace
-
 WarehouseOrderId WarehouseNetwork::createOrder(WarehouseOrder order,
                                                 bool countAsEconomicDemand) {
     if (!order.idempotencyKey.empty()) {

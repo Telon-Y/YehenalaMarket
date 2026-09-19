@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <string>
 
+#include "constants.h"
 #include "scenario_config.h"
 
 class World;
@@ -40,10 +41,22 @@ struct ProvinceDefinition {
     const char* countryKey;
 };
 
+struct ProvinceScenarioDefinition {
+    const char* provinceKey;
+    double population;
+    std::array<int, TYPE_COUNT> buildings;
+    // -1 means the building is not resource-limited. Extractive buildings
+    // use a non-negative province-specific development ceiling.
+    std::array<int, TYPE_COUNT> resourceCaps;
+};
+
 const std::array<ContinentDefinition, CONTINENT_COUNT>& continents();
 const std::array<RegionDefinition, REGION_COUNT>& regions();
 const std::array<CountryDefinition, COUNTRY_COUNT>& countries();
 const std::array<ProvinceDefinition, PROVINCE_COUNT>& provinces();
+const std::array<ProvinceScenarioDefinition, PROVINCE_COUNT>&
+provinceScenarios();
+bool validateProvinceScenarios(std::string* error = nullptr);
 
 // The map, political relations, and UI documentation all consume the same
 // explicit scenario contract. This is intentionally not inferred from a

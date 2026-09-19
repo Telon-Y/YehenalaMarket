@@ -10,15 +10,47 @@ World& World::Instance() {
     return instance;
 }
 
+Money World::totalMoneyInSystem() const {
+    Money total = Money(0);
+    for (const auto& province : provinces)
+        total += province->getLocalMarket().moneyPoolsTotal();
+    for (const auto& country : countries) total += country->getTreasury();
+    total += warehouseNetwork.escrowBalance();
+    return total;
+}
+
+Money World::getLaborerCashTotal() const {
+    Money total = Money(0);
+    for (const auto& province : provinces)
+        total += province->getLocalMarket().getClassCash(LABORER);
+    return total;
+}
+
 World& World::DebugFiveMarkets() {
     static World instance(true);
     return instance;
 }
 
+std::unique_ptr<World> World::CreateDebugWorldForTesting() {
+    return std::unique_ptr<World>(new World(true));
+}
+
 World::World() : World(false) {}
 
 World::World(bool debugFiveMarkets)
-    : debugFiveMarketScenario(debugFiveMarkets) {
+    : constructionService(*this),
+      constructionSystem(*this),
+      debugFiveMarketScenario(debugFiveMarkets) {
+    // The domestic-market contract is enforced at the command layer
+    // (addTradePath/addRailTradePath). Installing the same ownership rule on the
+    // warehouse network stops any internal caller from creating a route that
+    // crosses a country border.
+    warehouseNetwork.setCountryResolver([this](WarehouseId marketId) {
+        const auto indexIt = provinceIndexByMarketId.find(marketId);
+        if (indexIt == provinceIndexByMarketId.end()) return -1;
+        return provinces[static_cast<std::size_t>(indexIt->second)]
+            ->getCountryId();
+    });
     if (debugFiveMarkets) {
         populateDebugFiveMarkets();
     } else {
@@ -117,18 +149,6 @@ void World::populateDebugFiveMarkets() {
         }
     }
 }
-namespace {
-
-const std::array<std::vector<int>, 5> kFiveMarketSpecialties = {{
-    {FARM_GRAIN, FOOD_PROC},
-    {COTTON, CLOTHES, LUXURY_CLOTHES},
-    {COAL_MINE, IRON_MINE},
-    {STEEL_MILL, TOOL_FACT},
-    {HOUSING, CONST_DEPT, GOLD_MINE},
-}};
-
-
-}  // namespace
 void World::populateStandardCountryMarkets() {
     const Money maxRailVolume = Money(1000000);
     const Money railCapacityCoefficient =
@@ -140,57 +160,23 @@ void World::populateStandardCountryMarkets() {
         if (provinceIds.empty()) continue;
 
         const std::size_t marketCount = provinceIds.size();
-        std::vector<std::vector<int>> groupsForMarket(marketCount);
-        if (marketCount >= kFiveMarketSpecialties.size()) {
-            for (std::size_t marketIndex = 0; marketIndex < marketCount;
-                 ++marketIndex) {
-                groupsForMarket[marketIndex].push_back(
-                    static_cast<int>(marketIndex % kFiveMarketSpecialties.size()));
-            }
-        } else {
-            // A small country keeps all five specialties by allowing multiple
-            // template groups to share a local market.
-            for (std::size_t groupIndex = 0;
-                 groupIndex < kFiveMarketSpecialties.size(); ++groupIndex) {
-                groupsForMarket[groupIndex % marketCount].push_back(
-                    static_cast<int>(groupIndex));
-            }
-        }
-
         for (std::size_t marketIndex = 0; marketIndex < marketCount;
              ++marketIndex) {
             LocalMarket& market = getProvinceById(
                 provinceIds[marketIndex]).getLocalMarket();
-            for (int type = FARM_GRAIN; type <= GOLD_MINE; ++type) {
-                const OwnerType owner = type == CONST_DEPT
-                    ? OWNER_GOVERNMENT : OWNER_INITIAL;
-                market.setBuildingCountForSetup(type, 0, owner);
-            }
-            for (const int groupIndex : groupsForMarket[marketIndex]) {
-                for (const int type : kFiveMarketSpecialties[
-                         static_cast<std::size_t>(groupIndex)]) {
-                    const OwnerType owner = type == CONST_DEPT
-                        ? OWNER_GOVERNMENT : OWNER_INITIAL;
-                    market.setBuildingCountForSetup(type, 60, owner);
-                }
-            }
-            market.setBuildingCountForSetup(
-                RAILWAY, INITIAL_RAILWAY_LEVELS, OWNER_INITIAL);
-
             for (int good = 0; good < NUM_GOODS; ++good) {
                 market.setPriceForSetup(
                     good, Money(referencePrice[good] * 1.20));
             }
-            for (const int groupIndex : groupsForMarket[marketIndex]) {
-                for (const int type : kFiveMarketSpecialties[
-                         static_cast<std::size_t>(groupIndex)]) {
-                    const int outputGood =
-                        market.getBuildingTemplates()[type].outputGood;
-                    if (outputGood >= 0) {
-                        market.setPriceForSetup(
-                            outputGood,
-                            Money(referencePrice[outputGood] * 0.65));
-                    }
+            const auto& counts = market.getBuildingCounts();
+            for (int type = 0; type < TYPE_COUNT; ++type) {
+                if (counts[type] <= 0) continue;
+                const int outputGood =
+                    market.getBuildingTemplates()[type].outputGood;
+                if (outputGood >= 0) {
+                    market.setPriceForSetup(
+                        outputGood,
+                        Money(referencePrice[outputGood] * 0.65));
                 }
             }
         }
@@ -222,6 +208,28 @@ void World::populateStandardCountryMarkets() {
 
         for (const int provinceId : provinceIds) {
             getProvinceById(provinceId).getLocalMarket().finalizeStandardSetup();
+        }
+    }
+
+    // Opening inventories are part of the model, not decoration: a market that
+    // opens holding weeks of capacity-sized surplus throttles its producers to
+    // zero within a few cycles and then never restarts them, because the same
+    // throttle has stopped the consumers that would have drawn the surplus down.
+    // Evaluate the requirement graph once every market has published its final
+    // demand, then size the opening policy and stock on that requirement.
+    for (int countryIndex = 0; countryIndex < getCountryCount(); ++countryIndex) {
+        for (const int provinceId : getCountry(countryIndex).getProvinceIds()) {
+            getProvinceById(provinceId)
+                .getLocalMarket()
+                .publishInitialFinalDemand();
+        }
+    }
+    warehouseNetwork.refreshProductionForecasts();
+    for (int countryIndex = 0; countryIndex < getCountryCount(); ++countryIndex) {
+        for (const int provinceId : getCountry(countryIndex).getProvinceIds()) {
+            getProvinceById(provinceId)
+                .getLocalMarket()
+                .reconcileInitialWarehouseDemand();
         }
     }
 }

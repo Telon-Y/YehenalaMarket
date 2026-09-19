@@ -45,7 +45,11 @@ struct MarketFlowSnapshot {
     Money constructionValue = Money(0);
     Money grossOutputValue = Money(0);
     Money intermediateCost = Money(0);
+    // Published GDP is floored at a small positive value for markets that own
+    // productive buildings. rawGdp keeps the unfloored production-approach
+    // result (which may be negative) for diagnostics and health gating.
     Money gdp = Money(0);
+    Money rawGdp = Money(0);
     bool inventoryBalanced = true;
 };
 
@@ -104,24 +108,37 @@ struct MarketSnapshot {
 
 struct ConstructionProjectSnapshot {
     std::uint64_t id = 0;
+    std::uint64_t clientRequestId = 0;
+    std::uint64_t sequence = 0;
     int payerCountryId = -1;
     std::string payerCountryTag;
     int targetProvinceId = -1;
     int typeIndex = -1;
     int quantity = 0;
+    int completedUnits = 0;
     Money totalBudget = Money(0);
     Money unitPrice = Money(0);
+    Money maximumUnitPrice = Money(0);
     Money reservedBudget = Money(0);
     Money paidBudget = Money(0);
+    Money startupCapitalPerUnit = Money(0);
+    Money reservedStartupCapital = Money(0);
+    Money paidStartupCapital = Money(0);
     Money totalConstruction = Money(0);
     Money remainingConstruction = Money(0);
+    Money currentUnitProgress = Money(0);
     double expectedProfitPriority = 0.0;
     Money progress = Money(0);
+    int priority = 0;
+    int fundingKind = 0;
+    int ownerType = OWNER_GOVERNMENT;
     int createdStep = 0;
     int lastSettledStep = -1;
+    int finishedStep = -1;
     int status = 0;
+    int blockReason = 0;
+    bool historical = false;
 };
-
 struct BuildingSnapshot {
     int typeIndex = -1;
     int count = 0;
@@ -143,6 +160,7 @@ struct BuildingSnapshot {
     double profitRate = 0.0;
     bool operational = false;
     int pending = 0;
+    int resourceCap = -1;
 };
 
 struct PopulationClassSnapshot {
@@ -187,6 +205,7 @@ struct CountrySnapshot {
     std::string name;
     std::vector<int> provinceIds;
     double population = 0.0;
+    double averageSatisfaction = 0.0;
     Money gdp = Money(0);
     Money treasury = Money(0);
     Money reservedConstructionBudget = Money(0);
@@ -196,8 +215,12 @@ struct CountrySnapshot {
     Money baseConstructionSupplement = Money(0);
     Money industrialConstructionUsed = Money(0);
     Money baseConstructionUsed = Money(0);
+    Money totalConstructionCapacity = Money(0);
+    Money totalConstructionAvailable = Money(0);
+    Money totalConstructionUsed = Money(0);
     Money baseConstructionExpenditure = Money(0);
     std::vector<ConstructionProjectSnapshot> constructionProjects;
+    std::vector<ConstructionProjectSnapshot> constructionHistory;
 };
 
 struct WarehouseOrderSnapshot {

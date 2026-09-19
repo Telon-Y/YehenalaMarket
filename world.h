@@ -1,6 +1,7 @@
 // ==================== world.h ====================
 #pragma once
 
+#include "construction_service.h"
 #include "country.h"
 #include "province.h"
 #include "sim_types.h"
@@ -17,6 +18,7 @@ class World {
 public:
     static World& Instance();
     static World& DebugFiveMarkets();
+    static std::unique_ptr<World> CreateDebugWorldForTesting();
     bool isDebugFiveMarketScenario() const { return debugFiveMarketScenario; }
 
     int createContinent(const std::string& name,
@@ -77,6 +79,37 @@ public:
         int countryId, int provinceId, int typeIndex, int count,
         std::uint64_t* projectId = nullptr,
         Money alreadyReservedBudget = Money(0));
+    ConstructionCommandResult evaluateNationalConstruction(
+        int countryId, int provinceId, int typeIndex, int count) const;
+    ConstructionCommandResult queueNationalConstructionCommand(
+        int countryId, int provinceId, int typeIndex, int count,
+        Money alreadyReservedBudget = Money(0));
+    ConstructionQuote quoteConstruction(
+        const ConstructionRequest& request) const {
+        return constructionService.quote(request);
+    }
+    ConstructionCommandResult submitConstruction(
+        const ConstructionRequest& request) {
+        return constructionService.submit(request);
+    }
+    bool pauseConstructionProject(int countryId, ConstructionProjectId id) {
+        return constructionService.pause(countryId, id);
+    }
+    bool resumeConstructionProject(int countryId, ConstructionProjectId id) {
+        return constructionService.resume(countryId, id);
+    }
+    bool setConstructionProjectPriority(
+        int countryId, ConstructionProjectId id, int priority) {
+        return constructionService.setPriority(countryId, id, priority);
+    }
+    bool moveConstructionProject(int countryId, ConstructionProjectId id,
+                                 bool up, bool toEdge = false) {
+        return constructionService.move(countryId, id, up, toEdge);
+    }
+    bool addConstructionProjectBudget(
+        int countryId, ConstructionProjectId id, Money amount) {
+        return constructionService.addBudget(countryId, id, amount);
+    }
     std::uint64_t createNationalConstructionProject(
         int countryId, int provinceId, int typeIndex, int count);
     std::uint64_t createConstructionProject(
@@ -121,7 +154,7 @@ public:
     LocalMarket& getMarketById(int marketId);
     const LocalMarket& getMarketById(int marketId) const;
     MarketSnapshot getMarketSnapshot(int index) const;
-    TransportationSnapshot getTransportationSnapshot(
+    const TransportationSnapshot& getTransportationSnapshot(
         int warehouseId = -1) const;
     // Exposed for deterministic GUI/cache regression tests.
     std::uint64_t transportationSnapshotBuildCount() const {
@@ -135,6 +168,21 @@ public:
     const WarehouseNetwork& getWarehouseNetwork() const {
         return warehouseNetwork;
     }
+    // ===== 资金审计 =====
+    // Every pool the system holds: each market's pools and in-flight
+    // accumulators, every country treasury, and the warehouse escrow.
+    // Seigniorage is the only creation path, so the conserved identity is
+    //   total(t) - total(0) == created(0..t) - residual(0..t)
+    // and a residual other than zero is money that moved without a receiver.
+    Money totalMoneyInSystem() const;
+    Money getMoneyOpeningTotal() const { return moneyOpeningTotal; }
+    Money getMoneyCreatedTotal() const { return moneyCreatedTotal; }
+    Money getMoneyResidual() const { return moneyResidual; }
+    Money getMoneyLastCycleResidual() const { return moneyLastCycleResidual; }
+    Money getMoneyWorstCycleResidual() const { return moneyWorstCycleResidual; }
+    int getMoneyWorstCycle() const { return moneyWorstCycle; }
+    Money getMoneyEscrow() const { return warehouseNetwork.escrowBalance(); }
+    Money getLaborerCashTotal() const;
     int getCurrentIndex() const { return getCurrentProvinceIndex(); }
     int getMarketCount() const { return getProvinceCount(); }
 
@@ -155,16 +203,26 @@ public:
 private:
     World();
     explicit World(bool debugFiveMarkets);
+    friend class ConstructionService;
+    friend class ConstructionSystem;
     void populateDebugFiveMarkets();
     void populateStandardCountryMarkets();
     void runNationalExpansionAI();
-
     std::vector<std::unique_ptr<Continent>> continents;
     std::vector<std::unique_ptr<Region>> regions;
     std::vector<std::unique_ptr<Province>> provinces;
     void prepareNationalConstructionPlans();
     void processNationalConstruction();
     std::uint64_t nextNationalConstructionProjectId = 1;
+    // Money audit state, accumulated by stepAll.
+    Money moneyOpeningTotal = Money(0);
+    Money moneyCreatedTotal = Money(0);
+    Money moneyResidual = Money(0);
+    Money moneyLastCycleResidual = Money(0);
+    Money moneyWorstCycleResidual = Money(0);
+    int moneyWorstCycle = -1;
+    ConstructionService constructionService;
+    ConstructionSystem constructionSystem;
     std::vector<std::unique_ptr<Country>> countries;
     WarehouseNetwork warehouseNetwork;
     std::vector<TradePath> tradePaths;
@@ -172,6 +230,7 @@ private:
     std::unordered_map<int, int> regionIndexById;
     std::unordered_map<int, int> provinceIndexById;
     std::unordered_map<int, int> countryIndexById;
+    std::unordered_map<int, int> lastExpansionAICycleByCountry;
     std::unordered_map<int, int> provinceIndexByMarketId;
     std::unordered_map<std::string, int> continentIndexByKey;
     std::unordered_map<std::string, int> regionIndexByKey;

@@ -3,16 +3,6 @@
 #include <algorithm>
 #include <stdexcept>
 
-namespace {
-
-bool isStorableGood(int goodIndex) {
-    return goodIndex >= 0 && goodIndex < NUM_GOODS &&
-           goodIndex != CONSTR_GOOD_INDEX &&
-           goodIndex != TRANSPORT_CAPACITY_GOOD_INDEX;
-}
-
-}  // namespace
-
 InventoryState& WarehouseNetwork::warehouseStock(WarehouseId warehouseId,
                                                   int goodIndex) {
     if (!validGood(goodIndex)) throw std::out_of_range("good index out of range");
@@ -82,6 +72,8 @@ void WarehouseNetwork::setWarehouseStateForSetup(WarehouseId warehouseId,
     target.policy.targetStock = nonNegative(target.policy.targetStock);
     target.policy.reorderPoint = nonNegative(target.policy.reorderPoint);
     target.policy.weeklyDemand = nonNegative(target.policy.weeklyDemand);
+    target.policy.plannedFinalDemand =
+        nonNegative(target.policy.plannedFinalDemand);
 }
 
 void WarehouseNetwork::setWarehousePolicy(WarehouseId warehouseId,
@@ -96,6 +88,7 @@ void WarehouseNetwork::setWarehousePolicy(WarehouseId warehouseId,
     state.policy.reorderPoint = nonNegative(policy.reorderPoint);
     state.policy.weeklyDemand = nonNegative(policy.weeklyDemand);
     state.policy.baseStockReplenishment = policy.baseStockReplenishment;
+    state.policy.plannedFinalDemand = nonNegative(policy.plannedFinalDemand);
 }
 
 void WarehouseNetwork::setBuildingOnHandForSetup(WarehouseId warehouseId,
@@ -147,5 +140,6 @@ void WarehouseNetwork::setBuildingPolicy(WarehouseId warehouseId,
     state.policy.reorderPoint = nonNegative(policy.reorderPoint);
     state.policy.weeklyDemand = nonNegative(policy.weeklyDemand);
     state.policy.baseStockReplenishment = policy.baseStockReplenishment;
+    state.policy.plannedFinalDemand = nonNegative(policy.plannedFinalDemand);
 }
 

@@ -44,7 +44,23 @@ BoundMapData& GetMapData(World& world) {
     return data;
 }
 
-map_model::MapView GetMapView(float scrollX, float zoom) {
+bool TryWarehouseWorldPoint(int warehouseId, const BoundMapData& data,
+                            const World& world,
+                            map_model::Point* result) {
+    if (result == nullptr) return false;
+    for (const map_layout::ProvinceShape& shape : data.shapes) {
+        if (shape.provinceId < 0) continue;
+        if (world.getProvinceById(shape.provinceId).getLocalMarketId() !=
+            warehouseId) {
+            continue;
+        }
+        *result = shape.labelAnchor;
+        return true;
+    }
+    return false;
+}
+
+map_model::MapView GetMapView(float scrollX, float scrollY, float zoom) {
     constexpr float toolbarHeight = 108.0f;
     const map_model::Rect viewport = {
         0.0f, toolbarHeight, static_cast<float>(GetScreenWidth()),
@@ -56,8 +72,11 @@ map_model::MapView GetMapView(float scrollX, float zoom) {
     const float scale = baseScale * safeZoom;
     const float visibleWorldHeight = scale > 0.0f
         ? viewport.height / scale : map_model::kWorldHeight;
-    const float offsetY = std::max(
-        0.0f, (map_model::kWorldHeight - visibleWorldHeight) * 0.5f);
+    const float maxOffsetY = std::max(
+        0.0f, map_model::kWorldHeight - visibleWorldHeight);
+    const float safeScrollY = std::isfinite(scrollY)
+        ? std::clamp(scrollY, 0.0f, 1.0f) : 0.5f;
+    const float offsetY = maxOffsetY * safeScrollY;
     return {viewport, scrollX, map_model::kWorldWidth,
             map_model::kWorldHeight, offsetY, safeZoom};
 }
@@ -446,6 +465,7 @@ CachedWorldPolygon CacheWorldPolygon(
     const std::vector<map_model::Point>& vertices, float tolerance) {
     CachedWorldPolygon cached;
     cached.outline = SimplifyClosedPolygon(vertices, tolerance);
+    cached.bounds = map_model::PolygonBounds(cached.outline);
     if (TriangulateWorldPolygonStable(cached.outline, cached.triangles))
         return cached;
     if (cached.outline.size() < 3) return cached;
@@ -474,8 +494,10 @@ void CountCachedPolygon(BoundMapData& data,
 
 void BuildMapRenderCache(BoundMapData& data) {
     const float worldUnitsPerDegree = map_model::kWorldWidth / 360.0f;
-    const float basemapTolerance = worldUnitsPerDegree * 0.10f;
-    const float provinceTolerance = worldUnitsPerDegree * 0.05f;
+    // Preserve roughly sub-pixel detail at the maximum supported zoom instead
+    // of submitting source vertices that cannot affect the final image.
+    const float basemapTolerance = worldUnitsPerDegree * 0.30f;
+    const float provinceTolerance = worldUnitsPerDegree * 0.15f;
 
     data.renderTriangleCount = 0;
     data.renderPointCount = 0;
@@ -521,9 +543,35 @@ void BuildMapRenderCache(BoundMapData& data) {
     }
 }
 
+namespace {
+
+bool CachedPolygonVisible(const CachedWorldPolygon& polygon,
+                          const map_model::MapView& view, int repeatIndex) {
+    if (polygon.outline.size() < 3) return false;
+    const map_model::Point first = map_model::WorldToScreen(
+        view, {polygon.bounds.x, polygon.bounds.y}, repeatIndex);
+    const map_model::Point second = map_model::WorldToScreen(
+        view,
+        {polygon.bounds.x + polygon.bounds.width,
+         polygon.bounds.y + polygon.bounds.height},
+        repeatIndex);
+    constexpr float margin = 4.0f;
+    const float left = std::min(first.x, second.x);
+    const float right = std::max(first.x, second.x);
+    const float top = std::min(first.y, second.y);
+    const float bottom = std::max(first.y, second.y);
+    return right >= view.viewport.x - margin &&
+           left <= view.viewport.x + view.viewport.width + margin &&
+           bottom >= view.viewport.y - margin &&
+           top <= view.viewport.y + view.viewport.height + margin;
+}
+
+}  // namespace
+
 bool DrawCachedPolygonFill(const CachedWorldPolygon& polygon,
                            const map_model::MapView& view, int repeatIndex,
                            Color color) {
+    if (!CachedPolygonVisible(polygon, view, repeatIndex)) return false;
     if (polygon.usesTriangleFan) {
         const std::vector<Vector2> screen =
             ScreenPolygon(polygon.outline, view, repeatIndex);
@@ -560,7 +608,28 @@ bool DrawCachedPolygonFill(const CachedWorldPolygon& polygon,
 void DrawCachedPolygonOutline(const CachedWorldPolygon& polygon,
                               const map_model::MapView& view, int repeatIndex,
                               float thickness, Color color) {
-    if (polygon.outline.size() < 2) return;
+    if (polygon.outline.size() < 2 ||
+        !CachedPolygonVisible(polygon, view, repeatIndex)) return;
+    if (thickness <= 1.05f) {
+        static thread_local std::vector<Vector2> screen;
+        screen.clear();
+        screen.reserve(polygon.outline.size() + 1);
+        for (const map_model::Point point : polygon.outline) {
+            const map_model::Point current =
+                map_model::WorldToScreen(view, point, repeatIndex);
+            screen.push_back({current.x, current.y});
+        }
+        screen.push_back(screen.front());
+        constexpr std::size_t maxStripPoints = 2048;
+        for (std::size_t begin = 0; begin + 1 < screen.size();
+             begin += maxStripPoints - 1) {
+            const std::size_t count = std::min(
+                maxStripPoints, screen.size() - begin);
+            DrawLineStrip(screen.data() + begin,
+                          static_cast<int>(count), color);
+        }
+        return;
+    }
     map_model::Point previous = map_model::WorldToScreen(
         view, polygon.outline.back(), repeatIndex);
     for (const map_model::Point point : polygon.outline) {

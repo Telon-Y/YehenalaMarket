@@ -5,15 +5,6 @@
 #include <limits>
 #include <unordered_map>
 
-namespace {
-int FloorAffordableUnits(double ratio) {
-    if (!std::isfinite(ratio) || ratio < 1.0) return 0;
-    const double floored = std::floor(ratio + 1.0e-9);
-    return static_cast<int>(std::min(
-        floored, static_cast<double>(std::numeric_limits<int>::max())));
-}
-}
-
 int World::addTradePath(int sourceMarketId, int targetMarketId, int goodIndex,
                         Money maxVolumePerWeek, Money transportCostPerUnit) {
     if (sourceMarketId == targetMarketId) return -1;
@@ -22,6 +13,13 @@ int World::addTradePath(int sourceMarketId, int targetMarketId, int goodIndex,
         provinceIndexByMarketId.end()) return -1;
     if (provinceIndexByMarketId.find(targetMarketId) ==
         provinceIndexByMarketId.end()) return -1;
+    const Province& sourceProvince = *provinces[static_cast<std::size_t>(
+        provinceIndexByMarketId.at(sourceMarketId))];
+    const Province& targetProvince = *provinces[static_cast<std::size_t>(
+        provinceIndexByMarketId.at(targetMarketId))];
+    if (sourceProvince.getCountryId() < 0 ||
+        sourceProvince.getCountryId() != targetProvince.getCountryId())
+        return -1;
 
     const Money unitPrice =
         getMarketById(sourceMarketId).getPrices()[goodIndex] +
@@ -60,6 +58,13 @@ int World::addRailTradePath(int sourceMarketId, int targetMarketId,
             provinceIndexByMarketId.end()) {
         return -1;
     }
+    const Province& sourceProvince = *provinces[static_cast<std::size_t>(
+        provinceIndexByMarketId.at(sourceMarketId))];
+    const Province& targetProvince = *provinces[static_cast<std::size_t>(
+        provinceIndexByMarketId.at(targetMarketId))];
+    if (sourceProvince.getCountryId() < 0 ||
+        sourceProvince.getCountryId() != targetProvince.getCountryId())
+        return -1;
 
     const int routeId = warehouseNetwork.addRailRoute(
         sourceMarketId, targetMarketId, goodIndex, maxVolumePerWeek,
@@ -83,85 +88,54 @@ int World::addRailTradePath(int sourceMarketId, int targetMarketId,
     return path.id;
 }
 
+ConstructionCommandResult World::evaluateNationalConstruction(
+    int countryId, int provinceId, int typeIndex, int count) const {
+    ConstructionRequest request;
+    request.countryId = countryId;
+    request.targetProvinceId = provinceId;
+    request.typeIndex = typeIndex;
+    request.quantity = count;
+    request.funding = {
+        ConstructionFundingKind::CountryTreasury, countryId, -1};
+    request.owner = {OWNER_GOVERNMENT, countryId, provinceId};
+    const ConstructionQuote quoted = constructionService.quote(request);
+    ConstructionCommandResult result;
+    result.error = quoted.error;
+    result.acceptedCount = quoted.acceptedCount;
+    result.unitBudget =
+        quoted.constructionPointsPerUnit * quoted.observedUnitPrice;
+    result.totalBudget = quoted.totalBudget;
+    return result;
+}
+ConstructionCommandResult World::queueNationalConstructionCommand(
+    int countryId, int provinceId, int typeIndex, int count,
+    Money alreadyReservedBudget) {
+    if (alreadyReservedBudget > Money(0)) {
+        ConstructionCommandResult rejected;
+        rejected.error = ConstructionCommandError::InvalidReservation;
+        return rejected;
+    }
+    ConstructionRequest request;
+    request.playerInitiated = true;
+    request.countryId = countryId;
+    request.targetProvinceId = provinceId;
+    request.typeIndex = typeIndex;
+    request.quantity = count;
+    request.funding = {
+        ConstructionFundingKind::CountryTreasury, countryId, -1};
+    request.owner = {OWNER_GOVERNMENT, countryId, provinceId};
+    return constructionService.submit(request);
+}
 int World::queueNationalConstruction(
     int countryId, int provinceId, int typeIndex, int count,
     std::uint64_t* projectId, Money alreadyReservedBudget) {
     if (projectId != nullptr) *projectId = 0;
-    if (count <= 0 || typeIndex < 0 || typeIndex >= TYPE_COUNT)
-        return 0;
-    auto countryIt = countryIndexById.find(countryId);
-    auto provinceIt = provinceIndexById.find(provinceId);
-    if (countryIt == countryIndexById.end() ||
-        provinceIt == provinceIndexById.end()) return 0;
-
-    Country& country = *countries[static_cast<std::size_t>(countryIt->second)];
-    Province& province = *provinces[static_cast<std::size_t>(provinceIt->second)];
-    if (province.getCountryId() != countryId ||
-        province.getLocalMarket().getBuildingTemplates()[typeIndex].isFinancial)
-        return 0;
-
-    const Money constructionPrice =
-        province.getLocalMarket().getPrices()[CONSTR_GOOD_INDEX];
-    Money unitBudget = constructionPrice * Money(buildingCost[typeIndex]);
-    if (!isfinite(unitBudget) || unitBudget <= Money(0)) return 0;
-
-    if (!isfinite(alreadyReservedBudget) || alreadyReservedBudget < Money(0))
-        return 0;
-
-    const bool preReserved = alreadyReservedBudget > Money(0);
-    int affordable = count;
-    if (preReserved) {
-        if (country.getReservedConstructionBudget() < alreadyReservedBudget)
-            return 0;
-        affordable = std::min(
-            affordable, FloorAffordableUnits((alreadyReservedBudget / unitBudget).toDouble()));
-    } else {
-        affordable = std::min(
-            affordable, FloorAffordableUnits((country.getAvailableTreasury() / unitBudget).toDouble()));
-    }
-    if (affordable <= 0) return 0;
-
-    // A national order is atomic: the requested quantity either receives a
-    // complete reservation or is rejected. This keeps the project identity
-    // and the requested quantity stable across retries.
-    if (affordable < count) return 0;
-    const Money totalBudget = unitBudget * Money(affordable);
-    if (preReserved && alreadyReservedBudget > totalBudget)
-        country.releaseConstructionBudget(alreadyReservedBudget - totalBudget);
-    if (!preReserved && !country.reserveConstructionBudget(totalBudget))
-        return 0;
-    if (preReserved && country.getReservedConstructionBudget() < totalBudget)
-        return 0;
-
-    NationalConstructionProject project;
-    project.id = nextNationalConstructionProjectId++;
-    project.payerCountryId = countryId;
-    project.payerCountryTag = country.getCountryCode();
-    project.targetProvinceId = provinceId;
-    project.typeIndex = typeIndex;
-    project.quantity = affordable;
-    project.totalBudget = totalBudget;
-    project.unitPrice = unitBudget / Money(buildingCost[typeIndex]);
-    project.reservedBudget = totalBudget;
-    project.totalConstruction = Money(buildingCost[typeIndex]) *
-                                Money(affordable);
-    project.remainingConstruction = project.totalConstruction;
-    const LocalMarket& targetMarket = province.getLocalMarket();
-    if (targetMarket.getBuildingCounts()[typeIndex] > 0) {
-        project.expectedProfitPriority =
-            targetMarket.getActualUnitProfits()[typeIndex].toDouble();
-    } else {
-        project.expectedProfitPriority =
-            targetMarket.getSmoothedProfitRate()[typeIndex];
-    }
-    project.createdStep = province.getLocalMarket().getStepCount();
-    if (!country.enqueueConstructionProject(std::move(project))) {
-        country.releaseConstructionBudget(totalBudget);
-        return 0;
-    }
-    if (projectId != nullptr)
-        *projectId = country.getConstructionQueue().back().id;
-    return affordable;
+    const ConstructionCommandResult result =
+        queueNationalConstructionCommand(
+            countryId, provinceId, typeIndex, count,
+            alreadyReservedBudget);
+    if (projectId != nullptr) *projectId = result.projectId;
+    return result.acceptedCount;
 }
 
 std::uint64_t World::createNationalConstructionProject(
@@ -174,266 +148,14 @@ std::uint64_t World::createNationalConstructionProject(
 
 bool World::cancelNationalConstructionProject(int countryId,
                                                std::uint64_t projectId) {
-    auto countryIt = countryIndexById.find(countryId);
-    if (countryIt == countryIndexById.end() || projectId == 0) return false;
-    Country& country = *countries[static_cast<std::size_t>(countryIt->second)];
-    for (NationalConstructionProject& project : country.constructionQueue) {
-        if (project.id != projectId || !project.active()) continue;
-        country.releaseConstructionBudget(project.reservedBudget);
-        project.reservedBudget = Money(0);
-        project.status = ConstructionProjectStatus::Cancelled;
-        return true;
-    }
-    return false;
+    return constructionService.cancel(countryId, projectId);
 }
-
 void World::prepareNationalConstructionPlans() {
-    for (const auto& province : provinces)
-        province->getLocalMarket().setConstructionOutputPlan(
-            Money(0), Money(0), false);
-
-    for (const auto& countryPtr : countries) {
-        struct PlanRef {
-            LocalMarket* market = nullptr;
-            Money capacity = Money(0);
-            Money sustainable = Money(0);
-        };
-        std::vector<PlanRef> refs;
-        Money totalCapacity = Money(0);
-        Money totalSustainable = Money(0);
-        for (const int provinceId : countryPtr->getProvinceIds()) {
-            const auto provinceIt = provinceIndexById.find(provinceId);
-            if (provinceIt == provinceIndexById.end()) continue;
-            LocalMarket& market = provinces[static_cast<std::size_t>(
-                provinceIt->second)]->getLocalMarket();
-            const Money capacity = std::max(
-                Money(0), market.constructionCapacityForPlan());
-            const Money sustainable = std::min(
-                capacity,
-                std::max(Money(0),
-                         market.constructionSustainableCapacityForPlan()));
-            refs.push_back({&market, capacity, sustainable});
-            totalCapacity += capacity;
-            totalSustainable += sustainable;
-        }
-        if (refs.empty()) continue;
-
-        // The queue is the single demand signal. Each project contributes at
-        // most 30 construction units per building this cycle and cannot ask
-        // for more than its still-reserved budget can settle.
-        Money queueDemand = Money(0);
-        for (const NationalConstructionProject& project :
-             countryPtr->getConstructionQueue()) {
-            if (!project.active()) continue;
-            const Money price = project.unitPrice > Money(0)
-                ? project.unitPrice : Money(0.01);
-            const Money budgetCapacity = project.reservedBudget / price;
-            const Money projectLimit =
-                Money(CONSTRUCTION_MAX_PER_BUILDING_PER_CYCLE) *
-                Money(std::max(1, project.quantity));
-            queueDemand += std::min({project.remainingConstruction,
-                                     projectLimit, budgetCapacity});
-        }
-
-        // Keep a bounded public standing capacity when no national project is
-        // queued. This preserves a recoverable construction department, while
-        // avoiding the old full-capacity/25%-inventory mismatch.
-        const Money requested = queueDemand > Money(0)
-            ? queueDemand
-            : Money(COUNTRY_BASE_CONSTRUCTION_CAPACITY);
-        // Material feasibility limits this cycle's output, but it must not
-        // erase the queue-derived input forecast. Keeping those plans
-        // separate lets an empty buffer place the shipments needed to recover.
-        const Money inputTarget = std::min(requested, totalCapacity);
-        const Money target = std::min(inputTarget, totalSustainable);
-        Money remaining = std::max(Money(0), target);
-        Money inputRemaining = std::max(Money(0), inputTarget);
-        for (std::size_t index = 0; index < refs.size(); ++index) {
-            PlanRef& ref = refs[index];
-            Money allocation = Money(0);
-            if (index + 1 == refs.size()) {
-                allocation = remaining;
-            } else if (totalSustainable > Money(0)) {
-                allocation = target * ref.sustainable / totalSustainable;
-            }
-            allocation = std::clamp(allocation, Money(0), ref.capacity);
-
-            Money inputAllocation = Money(0);
-            if (index + 1 == refs.size()) {
-                inputAllocation = inputRemaining;
-            } else if (totalCapacity > Money(0)) {
-                inputAllocation =
-                    inputTarget * ref.capacity / totalCapacity;
-            }
-            inputAllocation = std::clamp(
-                inputAllocation, Money(0), ref.capacity);
-            ref.market->setConstructionOutputPlan(
-                allocation, inputAllocation, true);
-            remaining = std::max(Money(0), remaining - allocation);
-            inputRemaining = std::max(
-                Money(0), inputRemaining - inputAllocation);
-        }
-    }
+    constructionSystem.preparePlans();
 }
-
 void World::processNationalConstruction() {
-    for (const auto& countryPtr : countries) {
-        Country& country = *countryPtr;
-        struct IndustrialSource {
-            LocalMarket* market = nullptr;
-            Money remaining = Money(0);
-            std::size_t stateIndex = 0;
-        };
-
-        NationalConstructionPoolState& pool = country.constructionPoolState;
-        pool = NationalConstructionPoolState{};
-        std::vector<IndustrialSource> industrialSources;
-        for (const int provinceId : country.getProvinceIds()) {
-            const auto provinceIt = provinceIndexById.find(provinceId);
-            if (provinceIt == provinceIndexById.end()) continue;
-            LocalMarket& source = provinces[static_cast<std::size_t>(
-                provinceIt->second)]->getLocalMarket();
-            const Money capacity = std::max(
-                Money(0), source.getAvailableNationalConstructionCapacity());
-            const Money available = std::min(capacity,
-                                             source.getLastConstrProduced());
-            // Construction power is a special, non-storable good. Only output
-            // generated by this province during the current cycle can enter
-            // the industrial national pool; warehouse stock is irrelevant.
-            pool.industrialCapacity += available;
-            NationalConstructionPoolSource sourceState;
-            sourceState.provinceId = provinceId;
-            sourceState.available = available;
-            pool.industrialSources.push_back(sourceState);
-            pool.industrialAvailable += available;
-            if (available > Money(0)) {
-                industrialSources.push_back({
-                    &source, available, pool.industrialSources.size() - 1});
-            }
-        }
-
-        // The base allocation is national, non-storable and non-transferable:
-        // it fills an insufficient industrial capacity, but never replaces
-        // stocked industrial construction goods above the floor.
-        pool.baseSupplement = std::max(
-            Money(0), Money(COUNTRY_BASE_CONSTRUCTION_CAPACITY) -
-                          pool.industrialCapacity);
-        Money industrialRemaining = pool.industrialAvailable;
-        Money baseRemaining = pool.baseSupplement;
-
-        for (NationalConstructionProject& project : country.constructionQueue) {
-            if (!project.active()) continue;
-            auto provinceIt = provinceIndexById.find(project.targetProvinceId);
-            if (provinceIt == provinceIndexById.end() ||
-                provinces[static_cast<std::size_t>(provinceIt->second)]
-                        ->getCountryId() != country.getId()) {
-                country.releaseConstructionBudget(project.reservedBudget);
-                project.reservedBudget = Money(0);
-                project.status = ConstructionProjectStatus::Blocked;
-                continue;
-            }
-
-            LocalMarket& market = provinces[static_cast<std::size_t>(
-                provinceIt->second)]->getLocalMarket();
-            // The reservation locks the quoted construction price. A later
-            // market-price change must not consume more budget than the
-            // project identity reserved at enqueue time.
-            const Money price = project.unitPrice > Money(0)
-                ? project.unitPrice
-                : std::max(Money(0.01),
-                           market.getPrices()[CONSTR_GOOD_INDEX]);
-            const Money budgetCapacity = project.reservedBudget / price;
-            const Money treasuryCapacity = country.getTreasury() / price;
-            // A national project may represent several buildings. Each
-            // building has the same per-cycle construction throughput cap as
-            // a local construction order.
-            const Money projectCycleLimit =
-                Money(CONSTRUCTION_MAX_PER_BUILDING_PER_CYCLE) *
-                Money(std::max(1, project.quantity));
-            Money requested = std::min({project.remainingConstruction,
-                                        projectCycleLimit,
-                                        industrialRemaining + baseRemaining,
-                                        budgetCapacity, treasuryCapacity});
-            if (requested <= Money(0)) continue;
-
-            if (!country.canSettleConstructionPayment(requested * price))
-                continue;
-
-            struct ConsumedSource {
-                LocalMarket* market = nullptr;
-                Money amount = Money(0);
-                std::size_t stateIndex = 0;
-            };
-            std::vector<ConsumedSource> consumedSources;
-            Money industrialUsed = Money(0);
-            Money remainingIndustrialRequest =
-                std::min(requested, industrialRemaining);
-            for (IndustrialSource& source : industrialSources) {
-                if (remainingIndustrialRequest <= Money(0)) break;
-                const Money planned = std::min(
-                    source.remaining, remainingIndustrialRequest);
-                const Money consumed =
-                    source.market->consumeNationalConstruction(planned);
-                if (consumed <= Money(0)) continue;
-                source.remaining = std::max(Money(0), source.remaining - consumed);
-                remainingIndustrialRequest -= consumed;
-                industrialUsed += consumed;
-                consumedSources.push_back(
-                    {source.market, consumed, source.stateIndex});
-            }
-            const Money baseUsed = std::min(
-                baseRemaining, std::max(Money(0), requested - industrialUsed));
-            const Money used = industrialUsed + baseUsed;
-            if (used <= Money(0)) continue;
-
-            const Money payment = used * price;
-            if (!country.settleConstructionPayment(payment)) {
-                for (const ConsumedSource& source : consumedSources)
-                    source.market->rollbackNationalConstruction(source.amount);
-                continue;
-            }
-
-            industrialRemaining = std::max(
-                Money(0), industrialRemaining - industrialUsed);
-            baseRemaining = std::max(Money(0), baseRemaining - baseUsed);
-            pool.industrialUsed += industrialUsed;
-            pool.baseUsed += baseUsed;
-            pool.baseExpenditure += baseUsed * price;
-            for (const ConsumedSource& source : consumedSources) {
-                NationalConstructionPoolSource& sourceState =
-                    pool.industrialSources[source.stateIndex];
-                sourceState.available = std::max(
-                    Money(0), sourceState.available - source.amount);
-                sourceState.used += source.amount;
-                source.market->recordNationalConstructionSale(
-                    source.amount, source.amount * price);
-            }
-            if (baseUsed > Money(0)) {
-                market.recordNationalConstructionBase(
-                    baseUsed, baseUsed * price);
-            }
-            project.reservedBudget = std::max(Money(0),
-                                               project.reservedBudget - payment);
-            project.paidBudget += payment;
-            project.remainingConstruction = std::max(
-                Money(0), project.remainingConstruction - used);
-            project.status = ConstructionProjectStatus::Active;
-            project.lastSettledStep = market.getStepCount();
-
-            if (project.remainingConstruction <= Money(1e-9)) {
-                market.completeNationalConstruction(project.typeIndex,
-                                                    project.quantity);
-                country.releaseConstructionBudget(project.reservedBudget);
-                project.reservedBudget = Money(0);
-                project.status = ConstructionProjectStatus::Completed;
-            }
-        }
-        // Terminal projects are no longer live queue entries. Removing them
-        // here prevents completed work from appearing as pending forever.
-        country.pruneFinishedConstructionProjects();
-    }
+    constructionSystem.processCycle();
 }
-
 void World::executeTrade() {
     warehouseNetwork.beginLogisticsBatch();
     warehouseNetwork.routeShortages();
@@ -449,23 +171,23 @@ void World::runNationalExpansionAI() {
         AIExpansionCandidate candidate;
     };
 
-    constexpr int maxProjectsPerCountry = 200;
+    constexpr int maxNewProjectsPerCountry = 20;
+    constexpr int maxActiveProjectsPerCountry = 200;
     constexpr int maxProjectsPerType = 50;
     for (const auto& countryPtr : countries) {
         Country& country = *countryPtr;
         const auto& provinceIds = country.getProvinceIds();
         if (provinceIds.empty()) continue;
 
-        bool due = false;
-        for (const int provinceId : provinceIds) {
-            const LocalMarket& market =
-                getProvinceById(provinceId).getLocalMarket();
-            if (market.getStepCount() % AI_INTERVAL == 0) {
-                due = true;
-                break;
-            }
+        const int currentCycle =
+            getProvinceById(provinceIds.front()).getLocalMarket().getStepCount();
+        const auto lastCycle =
+            lastExpansionAICycleByCountry.find(country.getId());
+        if (lastCycle != lastExpansionAICycleByCountry.end() &&
+            currentCycle - lastCycle->second < AI_INTERVAL) {
+            continue;
         }
-        if (!due) continue;
+        lastExpansionAICycleByCountry[country.getId()] = currentCycle;
 
         int activeProjects = 0;
         std::array<int, TYPE_COUNT> activeProjectsByType{};
@@ -476,133 +198,128 @@ void World::runNationalExpansionAI() {
             if (project.typeIndex >= 0 && project.typeIndex < TYPE_COUNT)
                 ++activeProjectsByType[project.typeIndex];
         }
-        // National projects do not live in a province's legacy private
-        // construction queue. Track their quantities explicitly so the
-        // candidate list cannot be reused repeatedly within this same AI
-        // pass against unchanged building counts.
-        std::unordered_map<std::uint64_t, int> pendingUnits;
-        const auto candidateKey = [](int provinceId, int typeIndex) {
-            return (static_cast<std::uint64_t>(
-                        static_cast<std::uint32_t>(provinceId)) << 32) |
-                   static_cast<std::uint32_t>(typeIndex);
-        };
+        std::unordered_map<int, std::array<int, TYPE_COUNT>>
+            pendingUnitsByProvince;
+        Money totalRemainingConstruction = Money(0);
         for (const NationalConstructionProject& project :
              country.getConstructionQueue()) {
-            if (!project.active() || project.typeIndex < 0 ||
+            if (!project.live() || project.typeIndex < 0 ||
                 project.typeIndex >= TYPE_COUNT) {
                 continue;
             }
-            pendingUnits[candidateKey(project.targetProvinceId,
-                                       project.typeIndex)] += project.quantity;
+            pendingUnitsByProvince[project.targetProvinceId][project.typeIndex] +=
+                project.remainingUnits();
+            totalRemainingConstruction += project.remainingConstruction;
         }
-        int placedProjects = 0;
-        while (placedProjects < maxProjectsPerCountry &&
-               activeProjects < maxProjectsPerCountry) {
-            std::vector<CandidateRef> candidates;
-            for (const int provinceId : provinceIds) {
-                LocalMarket& market =
-                    getProvinceById(provinceId).getLocalMarket();
-                for (const AIExpansionCandidate& candidate :
-                     market.getAIExpansionCandidates()) {
-                    if (candidate.maxUnits <= 0) continue;
+        if (activeProjects >= maxActiveProjectsPerCountry) continue;
+
+        std::vector<CandidateRef> candidates;
+        candidates.reserve(provinceIds.size() * TYPE_COUNT);
+        for (const int provinceId : provinceIds) {
+            LocalMarket& market =
+                getProvinceById(provinceId).getLocalMarket();
+            const auto pendingIt = pendingUnitsByProvince.find(provinceId);
+            const std::array<int, TYPE_COUNT> emptyPending{};
+            const auto& pendingCounts = pendingIt == pendingUnitsByProvince.end()
+                ? emptyPending : pendingIt->second;
+            for (const AIExpansionCandidate& candidate :
+                 market.getAIExpansionCandidates(
+                     pendingCounts, totalRemainingConstruction)) {
+                if (candidate.maxUnits > 0)
                     candidates.push_back({&market, provinceId, candidate});
-                }
             }
+        }
 
-            std::sort(candidates.begin(), candidates.end(),
-                      [](const CandidateRef& left, const CandidateRef& right) {
-                const auto isProductionExpansion =
-                    [](const CandidateRef& ref) {
-                    if (ref.market == nullptr || ref.candidate.typeIndex < 0 ||
-                        ref.candidate.typeIndex >= TYPE_COUNT)
-                        return false;
-                    const BuildingTemplate& building =
-                        ref.market->getBuildingTemplates()[ref.candidate.typeIndex];
-                    return ref.market->getBuildingCounts()[ref.candidate.typeIndex] > 0 &&
-                           !building.isDevelopment() && !building.isFinancial;
-                };
-                const bool leftExpansion = isProductionExpansion(left);
-                const bool rightExpansion = isProductionExpansion(right);
-                if (leftExpansion != rightExpansion)
-                    return leftExpansion > rightExpansion;
-                if (left.candidate.priority != right.candidate.priority)
-                    return left.candidate.priority > right.candidate.priority;
-                if (left.provinceId != right.provinceId)
-                    return left.provinceId < right.provinceId;
-                return left.candidate.typeIndex < right.candidate.typeIndex;
-            });
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const CandidateRef& left, const CandidateRef& right) {
+            const auto isProductionExpansion = [](const CandidateRef& ref) {
+                if (ref.market == nullptr || ref.candidate.typeIndex < 0 ||
+                    ref.candidate.typeIndex >= TYPE_COUNT) {
+                    return false;
+                }
+                const BuildingTemplate& building =
+                    ref.market->getBuildingTemplates()[ref.candidate.typeIndex];
+                return ref.market->getBuildingCounts()[ref.candidate.typeIndex] > 0 &&
+                       !building.isDevelopment() && !building.isFinancial;
+            };
+            const bool leftExpansion = isProductionExpansion(left);
+            const bool rightExpansion = isProductionExpansion(right);
+            if (leftExpansion != rightExpansion)
+                return leftExpansion > rightExpansion;
+            if (left.candidate.priority != right.candidate.priority)
+                return left.candidate.priority > right.candidate.priority;
+            if (left.provinceId != right.provinceId)
+                return left.provinceId < right.provinceId;
+            return left.candidate.typeIndex < right.candidate.typeIndex;
+        });
 
-            bool approved = false;
-            for (const CandidateRef& ref : candidates) {
-                const std::uint64_t key =
-                    candidateKey(ref.provinceId, ref.candidate.typeIndex);
-                const int queuedUnits = pendingUnits[key];
-                const int availableCandidateUnits =
-                    ref.candidate.maxUnits - queuedUnits;
-                if (availableCandidateUnits <= 0) continue;
-                if (ref.market == nullptr ||
-                    ref.candidate.unitConstructionCost <= Money(0) ||
-                    ref.candidate.typeIndex < 0 ||
-                    ref.candidate.typeIndex >= TYPE_COUNT ||
-                    activeProjectsByType[ref.candidate.typeIndex] >=
-                        maxProjectsPerType) {
-                    continue;
-                }
-                const bool privateExpansion =
-                    ref.market->getBuildingCounts()[ref.candidate.typeIndex] > 0;
-                const Money startup = privateExpansion
-                    ? expansionStartupCapital(ref.candidate.typeIndex)
-                    : Money(0);
-                if (startup > Money(0) &&
-                    (!isfinite(ref.market->getInvestmentPool()) ||
-                     ref.market->getInvestmentPool() < startup))
-                    continue;
-                const Money constructionPrice =
-                    ref.market->getPrices()[CONSTR_GOOD_INDEX];
-                Money unitBudget =
-                    constructionPrice * ref.candidate.unitConstructionCost;
-                if (unitBudget < Money(0.01)) unitBudget = Money(0.01);
-                if (!isfinite(unitBudget) || unitBudget <= Money(0))
-                    continue;
-
-                const Money available = country.getAvailableTreasury();
-                const double affordableDouble =
-                    (available / unitBudget).toDouble();
-                if (!std::isfinite(affordableDouble) ||
-                    affordableDouble < 1.0) {
-                    continue;
-                }
-                const int affordable = std::min(
-                    availableCandidateUnits,
-                    FloorAffordableUnits(affordableDouble));
-                if (affordable <= 0) continue;
-
-                const Money reservation = unitBudget * Money(affordable);
-                if (!country.reserveConstructionBudget(reservation))
-                    continue;
-                const int actual = ref.market->placeGovernmentExpansion(
-                    ref.candidate.typeIndex, affordable, unitBudget);
-                if (actual < affordable) {
-                    country.releaseConstructionBudget(
-                        unitBudget * Money(affordable - actual));
-                }
-                if (actual > 0) {
-                    if (startup > Money(0))
-                        ref.market->payAIExpansionStartup(ref.candidate.typeIndex);
-                    ++placedProjects;
-                    ++activeProjects;
-                    ++activeProjectsByType[ref.candidate.typeIndex];
-                    pendingUnits[key] += actual;
-                    approved = true;
-                    break;
-                }
-                country.releaseConstructionBudget(reservation);
+        int placedProjects = 0;
+        for (const CandidateRef& ref : candidates) {
+            if (placedProjects >= maxNewProjectsPerCountry ||
+                activeProjects >= maxActiveProjectsPerCountry) {
+                break;
             }
-            if (!approved) break;
+            if (ref.market == nullptr ||
+                ref.candidate.unitConstructionCost <= Money(0) ||
+                ref.candidate.typeIndex < 0 ||
+                ref.candidate.typeIndex >= TYPE_COUNT) {
+                continue;
+            }
+            const int availableUnits = std::min({
+                ref.candidate.maxUnits,
+                maxNewProjectsPerCountry - placedProjects,
+                maxActiveProjectsPerCountry - activeProjects,
+                maxProjectsPerType -
+                    activeProjectsByType[ref.candidate.typeIndex]});
+            if (availableUnits <= 0) continue;
+
+            const bool privateExpansion =
+                ref.market->getBuildingCounts()[ref.candidate.typeIndex] > 0;
+            for (int unit = 0; unit < availableUnits; ++unit) {
+                ConstructionRequest request;
+                request.countryId = country.getId();
+                request.targetProvinceId = ref.provinceId;
+                request.typeIndex = ref.candidate.typeIndex;
+                request.quantity = 1;
+                request.priority = static_cast<int>(std::clamp(
+                    ref.candidate.priority * 1000.0,
+                    static_cast<double>(std::numeric_limits<int>::min()),
+                    static_cast<double>(std::numeric_limits<int>::max())));
+                if (privateExpansion) {
+                    request.funding = {
+                        ConstructionFundingKind::ProvinceInvestmentPool,
+                        country.getId(), ref.provinceId};
+                    request.owner = {
+                        OWNER_FINANCE, country.getId(), ref.provinceId};
+                } else {
+                    request.funding = {
+                        ConstructionFundingKind::CountryTreasury,
+                        country.getId(), -1};
+                    request.owner = {
+                        OWNER_GOVERNMENT, country.getId(), ref.provinceId};
+                }
+                if (!constructionService.submit(request)) break;
+
+                ++placedProjects;
+                ++activeProjects;
+                ++activeProjectsByType[ref.candidate.typeIndex];
+                ++pendingUnitsByProvince[ref.provinceId]
+                                            [ref.candidate.typeIndex];
+                totalRemainingConstruction +=
+                    Money(buildingCost[ref.candidate.typeIndex]);
+            }
         }
     }
 }
 void World::stepAll(bool runAI) {
+    // Money audit. Seigniorage is the only path that creates money, so any
+    // other change in the total is money that moved without a receiver.
+    const Money moneyBefore = totalMoneyInSystem();
+    if (moneyOpeningTotal <= Money(0) && moneyCreatedTotal <= Money(0) &&
+        moneyResidual == Money(0)) {
+        moneyOpeningTotal = moneyBefore;
+    }
+    Money createdThisCycle = Money(0);
     prepareNationalConstructionPlans();
     for (auto& province : provinces) {
         province->getLocalMarket().beginFlowTrace(
@@ -638,5 +355,18 @@ void World::stepAll(bool runAI) {
         LocalMarket& market = province->getLocalMarket();
         market.finalizeFlowTrace(
             warehouseNetwork.lastCompletedFlow(market.getMarketId()));
+    }
+
+    for (const auto& province : provinces)
+        createdThisCycle +=
+            province->getLocalMarket().getSeigniorageThisCycle();
+    const Money moneyAfter = totalMoneyInSystem();
+    const Money cycleResidual = (moneyAfter - moneyBefore) - createdThisCycle;
+    moneyCreatedTotal += createdThisCycle;
+    moneyResidual += cycleResidual;
+    moneyLastCycleResidual = cycleResidual;
+    if (cycleResidual.abs() > moneyWorstCycleResidual.abs()) {
+        moneyWorstCycleResidual = cycleResidual;
+        moneyWorstCycle = warehouseNetwork.currentCycle();
     }
 }

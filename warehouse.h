@@ -23,6 +23,13 @@ struct InventoryPolicy {
     Money reorderPoint = Money(0);
     bool baseStockReplenishment = false;
     Money weeklyDemand = Money(0);
+    // Final demand for this good at this warehouse: consumer demand plus the
+    // construction plan. It is the anchor of the requirement graph. Unlike
+    // weeklyDemand, which is a mean of realized - and therefore supply-limited -
+    // flows, this quantity stays defined when production stops, so feeding it
+    // through the recipe forecast gives every intermediate good a demand floor
+    // that cannot ratchet down to zero.
+    Money plannedFinalDemand = Money(0);
 };
 
 struct InventoryState {
@@ -231,6 +238,18 @@ public:
     bool addWarehouse(WarehouseId warehouseId);
     bool attachWarehouse(Warehouse& warehouse);
     bool hasWarehouse(WarehouseId warehouseId) const;
+    // Optional ownership guard. World installs a resolver mapping a warehouse to
+    // its owning country; once installed, addRoute/addRailRoute reject a route
+    // whose endpoints belong to different countries. The World command layer
+    // already refuses cross-country paths, so this only guarantees that no
+    // internal caller can create one by reaching past that layer. Fixtures that
+    // build a bare network without a resolver keep the previous behaviour.
+    using CountryResolver = std::function<int(WarehouseId)>;
+    void setCountryResolver(CountryResolver resolver) {
+        countryResolver = std::move(resolver);
+    }
+    bool sameCountry(WarehouseId sourceWarehouseId,
+                     WarehouseId destinationWarehouseId) const;
     int addRoute(WarehouseId sourceWarehouseId,
                  WarehouseId destinationWarehouseId,
                  int goodIndex, Money capacityPerCycle,
@@ -336,6 +355,11 @@ public:
     Money productionForecastDemand(WarehouseId warehouseId, int buildingType,
                                  int outputGood) const;
     Money forecastSupplyRate(WarehouseId warehouseId, int goodIndex) const;
+    // Requirement for a good at a warehouse, anchored on final demand rather
+    // than on realized flow: the recursive forecast of the local producer when
+    // the warehouse produces the good itself, and the local final demand
+    // otherwise. Returns zero when neither is known.
+    Money requiredDemand(WarehouseId warehouseId, int goodIndex) const;
     Money expectedOutboundDemand(WarehouseId warehouseId,
                                  int goodIndex) const;
     void refreshProductionForecasts();
@@ -370,6 +394,7 @@ public:
 
 private:
     std::unordered_map<WarehouseId, Warehouse*> warehouses;
+    CountryResolver countryResolver;
     std::vector<std::unique_ptr<Warehouse>> ownedWarehouses;
     std::vector<SupplyRoute> routeList;
     std::vector<ProductionRecipe> producerList;
@@ -444,6 +469,9 @@ private:
     std::uint64_t backlogRebuilds = 0;
 
     static bool validGood(int goodIndex);
+    // In-range and actually stockable: construction capacity and transport
+    // capacity are goods indices but are flows, not inventory.
+    static bool isStorableGood(int goodIndex);
     static bool validBuilding(int buildingType);
     static Money nonNegative(Money value);
     static std::uint64_t producerKey(WarehouseId warehouseId,

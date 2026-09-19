@@ -1,6 +1,8 @@
 #include "world.h"
+#include "construction_queue.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 MarketSnapshot World::getMarketSnapshot(int index) const {
@@ -46,6 +48,7 @@ ProvinceSnapshot World::getProvinceSnapshot(int provinceId) const {
     const auto& materialAvailability = market.getMaterialAvailability();
     const auto& staffedCapacity = market.getStaffedCapacity();
     const auto& productionTarget = market.getProductionTarget();
+    const auto localPending = market.getPendingConstructionCounts();
     snapshot.buildings.reserve(TYPE_COUNT);
     for (int type = 0; type < TYPE_COUNT; ++type) {
         BuildingSnapshot building;
@@ -73,15 +76,8 @@ ProvinceSnapshot World::getProvinceSnapshot(int provinceId) const {
         building.output = output[type].toDouble();
         building.profitRate = profits[type];
         building.operational = counts[type] > 0 && supply[type] > 0.0;
-        if (province.getCountryId() >= 0) {
-            const Country& owner = getCountryById(province.getCountryId());
-            for (const NationalConstructionProject& project :
-                 owner.getConstructionQueue()) {
-                if (project.active() && project.targetProvinceId == provinceId &&
-                    project.typeIndex == type)
-                    building.pending += project.quantity;
-            }
-        }
+        building.pending = localPending[type];
+        building.resourceCap = market.getResourceCap(type);
         snapshot.buildings.push_back(building);
     }
 
@@ -119,12 +115,21 @@ CountrySnapshot World::getCountrySnapshot(int countryId) const {
     snapshot.baseConstructionSupplement = pool.baseSupplement;
     snapshot.industrialConstructionUsed = pool.industrialUsed;
     snapshot.baseConstructionUsed = pool.baseUsed;
+    snapshot.totalConstructionCapacity =
+        NationalConstructionTotalCapacity(pool.industrialCapacity);
+    snapshot.totalConstructionAvailable =
+        pool.industrialAvailable +
+        std::max(Money(0), pool.baseSupplement - pool.baseUsed);
+    snapshot.totalConstructionUsed =
+        pool.industrialUsed + pool.baseUsed;
     snapshot.baseConstructionExpenditure = pool.baseExpenditure;
     std::vector<ProvinceSnapshot> provinceSnapshots;
     provinceSnapshots.reserve(country.getProvinceIds().size());
     for (const int provinceId : country.getProvinceIds())
         provinceSnapshots.push_back(getProvinceSnapshot(provinceId));
     if (!provinceSnapshots.empty()) {
+        double satisfactionPopulation = 0.0;
+        double satisfactionWeight = 0.0;
         snapshot.cycle = provinceSnapshots.front().cycle;
         for (const ProvinceSnapshot& province : provinceSnapshots)
             snapshot.cycle = std::min(snapshot.cycle, province.cycle);
@@ -136,42 +141,86 @@ CountrySnapshot World::getCountrySnapshot(int countryId) const {
                 ? province.population : market.getPopulationAtCycle(snapshot.cycle);
             snapshot.gdp += province.cycle == snapshot.cycle
                 ? province.gdp : market.getGDPAtCycle(snapshot.cycle);
+            if (std::isfinite(province.population) &&
+                province.population > 0.0 &&
+                std::isfinite(province.satisfaction)) {
+                satisfactionPopulation +=
+                    province.population * province.satisfaction;
+                satisfactionWeight += province.population;
+            }
+        }
+        if (satisfactionWeight > 0.0) {
+            snapshot.averageSatisfaction = std::clamp(
+                satisfactionPopulation / satisfactionWeight, 0.0, 1.0);
         }
     }
-    snapshot.constructionProjects.reserve(country.getConstructionQueue().size());
-    for (const NationalConstructionProject& project : country.getConstructionQueue()) {
+    const auto makeConstructionSnapshot = [](
+        const ConstructionProject& project, bool historical) {
         ConstructionProjectSnapshot value;
         value.id = project.id;
+        value.clientRequestId = project.clientRequestId;
+        value.sequence = project.sequence;
         value.payerCountryId = project.payerCountryId;
         value.payerCountryTag = project.payerCountryTag;
         value.targetProvinceId = project.targetProvinceId;
         value.typeIndex = project.typeIndex;
         value.quantity = project.quantity;
+        value.completedUnits = project.completedUnits;
         value.totalBudget = project.totalBudget;
         value.unitPrice = project.unitPrice;
+        value.maximumUnitPrice = project.maximumUnitPrice;
         value.reservedBudget = project.reservedBudget;
         value.paidBudget = project.paidBudget;
+        value.startupCapitalPerUnit = project.startupCapitalPerUnit;
+        value.reservedStartupCapital = project.reservedStartupCapital;
+        value.paidStartupCapital = project.paidStartupCapital;
         value.totalConstruction = project.totalConstruction;
         value.remainingConstruction = project.remainingConstruction;
+        value.currentUnitProgress = project.currentUnitProgress;
         value.expectedProfitPriority = project.expectedProfitPriority;
         value.progress = project.totalConstruction > Money(0)
             ? (project.totalConstruction - project.remainingConstruction) /
-              project.totalConstruction
+                  project.totalConstruction
             : Money(0);
+        value.priority = project.priority;
+        value.fundingKind = static_cast<int>(project.funding.kind);
+        value.ownerType = static_cast<int>(project.owner.type);
         value.createdStep = project.createdStep;
         value.lastSettledStep = project.lastSettledStep;
+        value.finishedStep = project.finishedStep;
         value.status = static_cast<int>(project.status);
-        snapshot.constructionProjects.push_back(value);
+        value.blockReason = static_cast<int>(project.blockReason);
+        value.historical = historical;
+        return value;
+    };
+
+    snapshot.constructionProjects.reserve(
+        country.getConstructionProjects().size());
+    for (const ConstructionProject& project :
+         country.getConstructionProjects()) {
+        snapshot.constructionProjects.push_back(
+            makeConstructionSnapshot(project, false));
     }
-    std::stable_sort(snapshot.constructionProjects.begin(),
-                     snapshot.constructionProjects.end(),
-                     [](const ConstructionProjectSnapshot& left,
-                        const ConstructionProjectSnapshot& right) {
-        if (left.expectedProfitPriority != right.expectedProfitPriority)
-            return left.expectedProfitPriority > right.expectedProfitPriority;
-        return left.id < right.id;
-    });
-    return snapshot;
+    snapshot.constructionHistory.reserve(
+        country.getConstructionHistory().size());
+    for (const ConstructionProject& project :
+         country.getConstructionHistory()) {
+        snapshot.constructionHistory.push_back(
+            makeConstructionSnapshot(project, true));
+    }
+    std::stable_sort(
+        snapshot.constructionProjects.begin(),
+        snapshot.constructionProjects.end(),
+        ConstructionQueueOrder{});
+    std::stable_sort(
+        snapshot.constructionHistory.begin(),
+        snapshot.constructionHistory.end(),
+        [](const ConstructionProjectSnapshot& left,
+           const ConstructionProjectSnapshot& right) {
+            if (left.finishedStep != right.finishedStep)
+                return left.finishedStep > right.finishedStep;
+            return left.id > right.id;
+        });    return snapshot;
 }
 
 std::vector<CountrySnapshot> World::getCountrySnapshots() const {
@@ -191,7 +240,8 @@ std::vector<ProvinceSnapshot> World::getProvinceSnapshots(
             snapshots.push_back(getProvinceSnapshot(provinceId));
     return snapshots;
 }
-TransportationSnapshot World::getTransportationSnapshot(int warehouseId) const {
+const TransportationSnapshot& World::getTransportationSnapshot(
+    int warehouseId) const {
     const std::uint64_t modelRevision = warehouseNetwork.stateRevision();
     if (transportationCacheRevision != modelRevision) {
         transportationSnapshotCache.clear();

@@ -82,6 +82,7 @@ struct UILayout {
     std::array<Rectangle, 3> provincePageTabs{};
     Rectangle provincePageContent{};
     Rectangle mapModeToggle{};
+    Rectangle goodsButton{};
     std::array<Rectangle, 5> speedButtons{};
     float speedStatusX = 0.0f;
 };

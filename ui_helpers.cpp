@@ -1,6 +1,7 @@
 // ==================== ui_helpers.cpp ====================
 // 格式化、边界计算、图表绘制辅助
 #include "ui_internal.h"
+#include "number_format.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -8,17 +9,17 @@
 #include <vector>
 #include <string>
 
-// ===== 扩展的格式化函数：支持 k, m, b, t, p =====
+// ===== 统一紧凑中文数字格式 =====
 void FormatCash(double cash, char* buf, size_t bufSize) {
-    if (cash == 0.0) { snprintf(buf, bufSize, "0.00"); return; }
-    double absCash = fabs(cash);
-    const char* sign = (cash < 0) ? "-" : "";
-    if (absCash >= 1e18) snprintf(buf, bufSize, "%s%.2fe", sign, absCash / 1e18);
-    else if (absCash >= 1e15) snprintf(buf, bufSize, "%s%.2fp", sign, absCash / 1e15);
-    else if (absCash >= 1e12) snprintf(buf, bufSize, "%s%.2ft", sign, absCash / 1e12);
-    else if (absCash >= 1e9) snprintf(buf, bufSize, "%s%.2fb", sign, absCash / 1e9);
-    else if (absCash >= 1e6) snprintf(buf, bufSize, "%s%.2fm", sign, absCash / 1e6);
-    else if (absCash >= 1e3) snprintf(buf, bufSize, "%s%.2fk", sign, absCash / 1e3);
+    if (!std::isfinite(cash)) { snprintf(buf, bufSize, "—"); return; }
+    if (cash == 0.0) { snprintf(buf, bufSize, "0"); return; }
+    const double magnitude = std::fabs(cash);
+    const char* unit = "";
+    double scaled = cash;
+    if (magnitude >= 1e12) { scaled = cash / 1e12; unit = "万亿"; }
+    else if (magnitude >= 1e8) { scaled = cash / 1e8; unit = "亿"; }
+    else if (magnitude >= 1e4) { scaled = cash / 1e4; unit = "万"; }
+    if (*unit) snprintf(buf, bufSize, "%.2f%s", scaled, unit);
     else snprintf(buf, bufSize, "%.2f", cash);
 }
 

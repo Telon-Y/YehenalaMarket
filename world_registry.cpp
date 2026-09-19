@@ -206,11 +206,11 @@ bool World::removeCountry(int countryId) {
     if (!country.getProvinceIds().empty()) return false;
     // Orphaned active projects are invalidated before the country object
     // is removed, so their reservations cannot survive the deletion.
-    for (NationalConstructionProject& project : country.constructionQueue) {
+    for (NationalConstructionProject& project : country.constructionState.projects) {
         if (!project.active()) continue;
         country.releaseConstructionBudget(project.reservedBudget);
         project.reservedBudget = Money(0);
-        project.status = ConstructionProjectStatus::Blocked;
+        project.status = ConstructionProjectStatus::Invalidated;
     }
     if (country.hasActiveConstruction() ||
         country.getReservedConstructionBudget() > Money(0)) return false;
@@ -360,22 +360,16 @@ bool World::assignProvinceToCountry(int provinceId, int countryId) {
     const int oldCountryId = province.getCountryId();
     if (oldCountryId == countryId) return true;
 
-    if (oldCountryId >= 0 &&
-        getCountryById(oldCountryId).hasActiveConstructionForProvince(provinceId))
-        return false;
-    const auto& constructionQueue =
-        province.getLocalMarket().getConstructionQueue();
-    const bool hasGovernmentOrder = std::any_of(
-        constructionQueue.begin(), constructionQueue.end(),
-        [](const ConstructionOrder& order) {
-            return order.owner == OWNER_GOVERNMENT;
-        });
-    if (hasGovernmentOrder) return false;
-
     if (oldCountryId >= 0) {
+        constructionService.invalidateProvince(oldCountryId, provinceId);
         Country& oldCountry = getCountryById(oldCountryId);
         oldCountry.removeProvince(provinceId);
         oldCountry.getNationalMarket().removeLocalMarket(province.getLocalMarketId());
+    }
+    if (oldCountryId < 0 && countryId >= 0) {
+        LocalMarket& market = province.getLocalMarket();
+        StandaloneConstructionService::invalidateAll(
+            market, market.standaloneConstructionState);
     }
 
     province.setCountryId(countryId);

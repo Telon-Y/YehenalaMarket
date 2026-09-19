@@ -1,6 +1,8 @@
 // ==================== ui_draw.cpp ====================
 // Main drawing functions and panels
 #include "ui_internal.h"
+#include "building_icons.h"
+#include "number_format.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -15,6 +17,8 @@ void DrawProvinceDetailUI(const UIState* state, World& world, Font font,
     const int provinceId = state->selectedProvinceId >= 0
         ? state->selectedProvinceId : world.getCurrentProvince().getId();
     const ProvinceSnapshot snapshot = world.getProvinceSnapshot(provinceId);
+    const auto& buildingTemplates =
+        world.getProvinceById(provinceId).getLocalMarket().getBuildingTemplates();
     const Rectangle panel = layout.provincePanel;
 
     BeginScissorMode(static_cast<int>(panel.x), static_cast<int>(panel.y),
@@ -25,10 +29,10 @@ void DrawProvinceDetailUI(const UIState* state, World& world, Font font,
     DrawTextEx(font, snapshot.countryName.c_str(), {16, 45}, kUiBodyFontSize, 0,
                {190, 207, 201, 255});
     DrawRectangleRec(layout.localBackButton, {69, 91, 89, 255});
-    DrawTextEx(font, "Back", {layout.localBackButton.x + 18,
+    DrawTextEx(font, "返回", {layout.localBackButton.x + 18,
                                layout.localBackButton.y + 8}, kUiBodyFontSize, 0, RAYWHITE);
 
-    const char* tabs[] = {"Details", "Buildings", "Population"};
+    const char* tabs[] = {"详情", "建筑", "人口"};
     for (int index = 0; index < 3; ++index) {
         const Rectangle tab = layout.provincePageTabs[static_cast<std::size_t>(index)];
         const bool active = state->provinceTab == index;
@@ -47,10 +51,10 @@ void DrawProvinceDetailUI(const UIState* state, World& world, Font font,
                      static_cast<int>(content.width),
                      static_cast<int>(content.height));
     const Color ink = {33, 55, 53, 255};
-    DrawTextEx(font, state->provinceTab == 0 ? "Province details"
+    DrawTextEx(font, state->provinceTab == 0 ? "省份详情"
                                              : state->provinceTab == 1
-                                                 ? "Buildings"
-                                                 : "Population",
+                                                 ? "建筑"
+                                                 : "人口",
                {content.x, content.y + 1.0f}, kUiHeadingFontSize, 0, ink);
 
     if (state->provinceTab == 0) {
@@ -61,14 +65,14 @@ void DrawProvinceDetailUI(const UIState* state, World& world, Font font,
                                  content.y + 142.0f};
         const float columnX[2] = {content.x, content.x + columnWidth + gap};
         const char* labels[3][2] = {
-            {"Population", "GDP"},
-            {"Employment", "Price level"},
-            {"Demand satisfaction", "Simulation cycle"}};
+            {"人口", "国内生产总值"},
+            {"就业", "价格水平"},
+            {"需求满足度", "模拟周期"}};
         const std::string values[3][2] = {
-            {TextFormat("%.0f", snapshot.population),
-             TextFormat("%.0f", snapshot.gdp.toDouble())},
+            {FormatChineseNumber(snapshot.population),
+             FormatChineseNumber(snapshot.gdp.toDouble())},
             {TextFormat("%.1f%%", snapshot.employmentRate * 100.0),
-             TextFormat("%.2f", snapshot.priceLevel.toDouble())},
+             FormatChineseNumber(snapshot.priceLevel.toDouble(), 2)},
             {TextFormat("%.1f%%", snapshot.satisfaction * 100.0),
              TextFormat("%d", snapshot.cycle)}};
         for (int row = 0; row < 3; ++row) {
@@ -83,28 +87,30 @@ void DrawProvinceDetailUI(const UIState* state, World& world, Font font,
                            {35, 60, 53, 255});
             }
         }
-        DrawTextEx(font, TextFormat("Dependents %.0f  Money %.0f",
-                                   snapshot.dependentPopulation,
-                                   snapshot.totalMoneySupply.toDouble()),
+        const std::string moneyLines =
+            "供养人口 " + FormatChineseNumber(snapshot.dependentPopulation) +
+            "  货币供应 " + FormatChineseNumber(snapshot.totalMoneySupply.toDouble());
+        DrawTextEx(font, moneyLines.c_str(),
                    {content.x, content.y + 207.0f}, kUiBodyFontSize, 0, DARKGRAY);
-        DrawTextEx(font, TextFormat("Investment %.0f  Debt %.0f",
-                                   snapshot.investmentPool.toDouble(),
-                                   snapshot.totalDebt.toDouble()),
+        const std::string investmentLines =
+            "投资池 " + FormatChineseNumber(snapshot.investmentPool.toDouble()) +
+            "  债务 " + FormatChineseNumber(snapshot.totalDebt.toDouble());
+        DrawTextEx(font, investmentLines.c_str(),
                    {content.x, content.y + 232.0f}, kUiBodyFontSize, 0, DARKGRAY);
         const float chartY = content.y + 270.0f;
         const float chartHeight = std::max(48.0f,
             std::min(100.0f, content.height - 286.0f));
         DrawScalarCurve(snapshot.gdpHistory, content.x, chartY,
                         content.width * 0.48f, chartHeight,
-                        {71, 119, 184, 255}, font, "GDP history");
+                        {71, 119, 184, 255}, font, "国内生产总值历史");
         DrawScalarCurveDouble(snapshot.populationHistory,
                               content.x + content.width * 0.52f, chartY,
                               content.width * 0.48f, chartHeight,
-                              {62, 155, 87, 255}, font, "Population history");
+                              {62, 155, 87, 255}, font, "人口历史");
     } else if (state->provinceTab == 1) {
-        DrawTextEx(font, "Buildings", {content.x, content.y + 1},
+        DrawTextEx(font, "建筑", {content.x, content.y + 1},
                    kUiHeadingFontSize, 0, ink);
-        DrawTextEx(font, "Current / queued", {content.x, content.y + 28},
+        DrawTextEx(font, "当前 / 排队", {content.x, content.y + 28},
                    kUiBodyFontSize, 0, DARKGRAY);
         const ProvinceBuildingGridLayout grid =
             ComputeProvinceBuildingGridLayout(content.width, content.height,
@@ -127,23 +133,31 @@ void DrawProvinceDetailUI(const UIState* state, World& world, Font font,
                     listTop + row * (cardHeight + gap), cardWidth, cardHeight};
                 DrawRectangleRec(card, {250, 251, 248, 255});
                 DrawRectangleLinesEx(card, 1.0f, {184, 198, 190, 255});
-                const Rectangle icon = {card.x + 8.0f, card.y + 8.0f, 42.0f, 42.0f};
-                DrawRectangleRec(icon, building.operational
-                    ? Color{198, 222, 203, 255} : Color{224, 229, 226, 255});
-                DrawRectangleLinesEx(icon, 1.0f, {111, 132, 120, 255});
                 const int type = building.typeIndex;
+                const Rectangle icon = {card.x + 8.0f, card.y + 8.0f, 42.0f, 42.0f};
+                const int outputGood = type >= 0 && type < TYPE_COUNT
+                    ? buildingTemplates[static_cast<std::size_t>(type)].outputGood
+                    : -1;
+                building_icons::DrawBuildingProductionIcon(
+                    icon, type, outputGood, building.operational);
                 const char* label = type >= 0 && type < TYPE_COUNT
-                    ? buildingTypeNames[type].c_str() : "Building";
+                    ? buildingTypeNames[type].c_str() : "建筑";
                 DrawTextEx(font, label, {card.x + 58.0f, card.y + 10.0f},
                            kUiBodyFontSize, 0, {35, 48, 47, 255});
-                DrawTextEx(font, TextFormat("%d / %d", building.count,
-                                           building.pending),
+                const std::string buildingCount =
+                    FormatChineseNumber(building.count, 2) + " / " +
+                    FormatChineseNumber(building.pending, 2);
+                DrawTextEx(font, buildingCount.c_str(),
                            {card.x + 58.0f, card.y + 32.0f}, kUiBodyFontSize, 0, DARKGRAY);
-                DrawTextEx(font, TextFormat("Emp %.0f", building.employment),
+                const std::string employmentText =
+                    "就业 " + FormatChineseNumber(building.employment);
+                DrawTextEx(font, employmentText.c_str(),
                            {card.x + 8.0f, card.y + 78.0f}, kUiBodyFontSize, 0, DARKGRAY);
                 DrawTextEx(font, TextFormat("%.0f%%", building.utilization * 100.0),
                            {card.x + 8.0f, card.y + 57.0f}, kUiBodyFontSize, 0, DARKGRAY);
-                DrawTextEx(font, TextFormat("Out %.1f", building.output),
+                const std::string outputText =
+                    "产出 " + FormatChineseNumber(building.output);
+                DrawTextEx(font, outputText.c_str(),
                            {card.x + 8.0f, card.y + 96.0f}, kUiBodyFontSize, 0, DARKGRAY);
                 const Rectangle minus = {card.x + card.width - 66.0f,
                                           card.y + card.height - 34.0f, 26.0f, 26.0f};
@@ -160,20 +174,22 @@ void DrawProvinceDetailUI(const UIState* state, World& world, Font font,
         const Rectangle national = {content.x, content.y + content.height - 34.0f,
                                     content.width, 28.0f};
         DrawRectangleRec(national, {61, 126, 91, 245});
-        DrawTextEx(font, "Open national construction",
+        DrawTextEx(font, "打开国家建设",
                    {national.x + 10.0f, national.y + 4.0f},
                    kUiBodyFontSize, 0, RAYWHITE);
     } else {
-        DrawTextEx(font, "Class", {content.x, content.y + 28}, kUiBodyFontSize, 0, GRAY);
-        const float colPopulation = content.x + content.width * 0.30f;
+        DrawTextEx(font, "阶层", {content.x, content.y + 28}, kUiBodyFontSize, 0, GRAY);
+        const float colPop = content.x + content.width * 0.30f;
         const float colEmployment = content.x + content.width * 0.52f;
         const float colIncome = content.x + content.width * 0.70f;
         const float colDemand = content.x + content.width * 0.87f;
-        DrawTextEx(font, "Pop", {colPopulation, content.y + 28}, kUiBodyFontSize, 0, GRAY);
-        DrawTextEx(font, "Emp/Unemp", {colEmployment, content.y + 28}, kUiBodyFontSize, 0, GRAY);
-        DrawTextEx(font, "Income", {colIncome, content.y + 28}, kUiBodyFontSize, 0, GRAY);
-        DrawTextEx(font, "Need", {colDemand, content.y + 28}, kUiBodyFontSize, 0, GRAY);
-        DrawTextEx(font, TextFormat("Dependents %.0f", snapshot.dependentPopulation),
+        DrawTextEx(font, "人口", {colPop, content.y + 28}, kUiBodyFontSize, 0, GRAY);
+        DrawTextEx(font, "就业/失业", {colEmployment, content.y + 28}, kUiBodyFontSize, 0, GRAY);
+        DrawTextEx(font, "收入", {colIncome, content.y + 28}, kUiBodyFontSize, 0, GRAY);
+        DrawTextEx(font, "需求", {colDemand, content.y + 28}, kUiBodyFontSize, 0, GRAY);
+        const std::string dependentLine =
+            "供养人口 " + FormatChineseNumber(snapshot.dependentPopulation);
+        DrawTextEx(font, dependentLine.c_str(),
                    {content.x, content.y + 52.0f}, kUiBodyFontSize, 0, DARKGRAY);
         const Vector2 pieCenter = {content.x + content.width - 48.0f,
                                    content.y + 60.0f};
@@ -209,17 +225,23 @@ void DrawProvinceDetailUI(const UIState* state, World& world, Font font,
                           row % 2 == 0 ? Color{250, 251, 248, 255}
                                        : Color{235, 241, 236, 255});
             const char* label = population.classIndex == LABORER
-                ? "Laborer" : population.classIndex == ENGINEER
-                    ? "Engineer" : "Capitalist";
+                ? "劳工" : population.classIndex == ENGINEER
+                    ? "工程师" : "资本家";
             DrawTextEx(font, label, {content.x + 3.0f, y + 3.0f},
                        kUiBodyFontSize, 0,
                        {35, 48, 47, 255});
-            DrawTextEx(font, TextFormat("%.0f", population.population),
-                       {colPopulation, y + 3}, kUiBodyFontSize, 0, DARKGRAY);
-            DrawTextEx(font, TextFormat("%.0f/%.0f", population.employed,
-                                       population.unemployed),
+            const std::string classPopulation =
+                FormatChineseNumber(population.population);
+            const std::string classEmployment =
+                FormatChineseNumber(population.employed) + "/" +
+                FormatChineseNumber(population.unemployed);
+            const std::string classIncome =
+                FormatChineseNumber(population.income.toDouble());
+            DrawTextEx(font, classPopulation.c_str(),
+                       {colPop, y + 3}, kUiBodyFontSize, 0, DARKGRAY);
+            DrawTextEx(font, classEmployment.c_str(),
                        {colEmployment, y + 3}, kUiBodyFontSize, 0, DARKGRAY);
-            DrawTextEx(font, TextFormat("%.0f", population.income.toDouble()),
+            DrawTextEx(font, classIncome.c_str(),
                        {colIncome, y + 3}, kUiBodyFontSize, 0, DARKGRAY);
             DrawTextEx(font, TextFormat("%.0f%%",
                                        population.demandSatisfaction * 100.0),
@@ -234,7 +256,9 @@ void DrawUI(UIState* state, World& world, Font font,
     // The map is the permanent base view. Detail desks are drawn as overlays
     // so the rest of the map remains visible and interactive.
     DrawWorldMapUI(state, world, font, elapsedSeconds);
-    if (state->view == UIView::TransportLogistics) {
+    if (state->view == UIView::CommodityMarket) {
+        DrawCommodityMarketUI(state, world, font);
+    } else if (state->view == UIView::TransportLogistics) {
         DrawTransportUI(state, world, font);
     } else if (state->view == UIView::CountryOverview ||
                state->view == UIView::NationalMarket) {

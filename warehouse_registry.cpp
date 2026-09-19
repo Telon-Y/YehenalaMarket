@@ -12,16 +12,16 @@ Money clampQuantity(Money value) {
     return std::min(value, Money(1e12L));
 }
 
-bool isStorableGood(int goodIndex) {
-    return goodIndex >= 0 && goodIndex < NUM_GOODS &&
-           goodIndex != CONSTR_GOOD_INDEX &&
-           goodIndex != TRANSPORT_CAPACITY_GOOD_INDEX;
-}
-
 }  // namespace
 
 bool WarehouseNetwork::validGood(int goodIndex) {
     return goodIndex >= 0 && goodIndex < NUM_GOODS;
+}
+
+bool WarehouseNetwork::isStorableGood(int goodIndex) {
+    return goodIndex >= 0 && goodIndex < NUM_GOODS &&
+           goodIndex != CONSTR_GOOD_INDEX &&
+           goodIndex != TRANSPORT_CAPACITY_GOOD_INDEX;
 }
 
 bool WarehouseNetwork::validBuilding(int buildingType) {
@@ -96,6 +96,14 @@ bool WarehouseNetwork::hasWarehouse(WarehouseId warehouseId) const {
     return warehouses.find(warehouseId) != warehouses.end();
 }
 
+bool WarehouseNetwork::sameCountry(WarehouseId sourceWarehouseId,
+                                   WarehouseId destinationWarehouseId) const {
+    if (!countryResolver) return true;
+    const int sourceCountry = countryResolver(sourceWarehouseId);
+    const int destinationCountry = countryResolver(destinationWarehouseId);
+    return sourceCountry >= 0 && sourceCountry == destinationCountry;
+}
+
 int WarehouseNetwork::addRoute(WarehouseId sourceWarehouseId,
                                WarehouseId destinationWarehouseId,
                                int goodIndex, Money capacityPerCycle,
@@ -103,6 +111,7 @@ int WarehouseNetwork::addRoute(WarehouseId sourceWarehouseId,
     if (!hasWarehouse(sourceWarehouseId) ||
         !hasWarehouse(destinationWarehouseId) ||
         sourceWarehouseId == destinationWarehouseId ||
+        !sameCountry(sourceWarehouseId, destinationWarehouseId) ||
         !isStorableGood(goodIndex) || capacityPerCycle <= Money(0) ||
         !isfinite(capacityPerCycle) || unitPrice < Money(0) ||
         !isfinite(unitPrice)) {

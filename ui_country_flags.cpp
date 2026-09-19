@@ -1,5 +1,6 @@
 #include "ui_country_internal.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -80,10 +81,13 @@ void DrawUnionJack(Rectangle flag) {
     const Vector2 topRight = {flag.x + flag.width, flag.y};
     const Vector2 bottomLeft = {flag.x, flag.y + flag.height};
     const Vector2 bottomRight = {flag.x + flag.width, flag.y + flag.height};
-    DrawLineEx(topLeft, bottomRight, 7.0f, RAYWHITE);
-    DrawLineEx(topRight, bottomLeft, 7.0f, RAYWHITE);
-    DrawLineEx(topLeft, bottomRight, 3.0f, {207, 45, 52, 255});
-    DrawLineEx(topRight, bottomLeft, 3.0f, {207, 45, 52, 255});
+    const float shortSide = std::min(flag.width, flag.height);
+    const float whiteDiagonal = std::max(1.0f, shortSide * 0.20f);
+    const float redDiagonal = std::max(1.0f, shortSide * 0.09f);
+    DrawLineEx(topLeft, bottomRight, whiteDiagonal, RAYWHITE);
+    DrawLineEx(topRight, bottomLeft, whiteDiagonal, RAYWHITE);
+    DrawLineEx(topLeft, bottomRight, redDiagonal, {207, 45, 52, 255});
+    DrawLineEx(topRight, bottomLeft, redDiagonal, {207, 45, 52, 255});
     DrawRectangleRec({flag.x + flag.width * 0.40f, flag.y,
                       flag.width * 0.20f, flag.height}, RAYWHITE);
     DrawRectangleRec({flag.x, flag.y + flag.height * 0.36f,
@@ -92,6 +96,140 @@ void DrawUnionJack(Rectangle flag) {
                       flag.width * 0.09f, flag.height}, {207, 45, 52, 255});
     DrawRectangleRec({flag.x, flag.y + flag.height * 0.455f,
                       flag.width, flag.height * 0.09f}, {207, 45, 52, 255});
+}
+
+void DrawQingFlag(Rectangle flag) {
+    constexpr Color yellow = {254, 205, 33, 255};
+    constexpr Color dragonBlue = {30, 89, 153, 255};
+    constexpr Color pearlRed = {205, 39, 43, 255};
+
+    DrawRectangleRec(flag, {242, 240, 229, 255});
+    DrawTriangle({flag.x, flag.y},
+                 {flag.x, flag.y + flag.height},
+                 {flag.x + flag.width, flag.y + flag.height * 0.5f},
+                 yellow);
+
+    const std::array<Vector2, 6> body = {{
+        {flag.x + flag.width * 0.22f, flag.y + flag.height * 0.56f},
+        {flag.x + flag.width * 0.31f, flag.y + flag.height * 0.36f},
+        {flag.x + flag.width * 0.43f, flag.y + flag.height * 0.39f},
+        {flag.x + flag.width * 0.48f, flag.y + flag.height * 0.58f},
+        {flag.x + flag.width * 0.37f, flag.y + flag.height * 0.68f},
+        {flag.x + flag.width * 0.28f, flag.y + flag.height * 0.58f},
+    }};
+    const float bodyWidth = std::max(1.0f, flag.height * 0.075f);
+    for (std::size_t index = 1; index < body.size(); ++index)
+        DrawLineEx(body[index - 1], body[index], bodyWidth, dragonBlue);
+    const Vector2 head = {
+        flag.x + flag.width * 0.55f,
+        flag.y + flag.height * 0.39f};
+    DrawLineEx(body[2], head, bodyWidth, dragonBlue);
+    DrawCircleV(head, std::max(1.5f, flag.height * 0.075f), dragonBlue);
+    DrawLineEx(
+        head,
+        {head.x + flag.width * 0.08f, head.y - flag.height * 0.08f},
+        std::max(1.0f, flag.height * 0.035f), dragonBlue);
+    DrawLineEx(
+        body[1],
+        {body[1].x - flag.width * 0.05f, body[1].y - flag.height * 0.12f},
+        std::max(1.0f, flag.height * 0.035f), dragonBlue);
+    DrawLineEx(
+        body[4],
+        {body[4].x + flag.width * 0.05f, body[4].y + flag.height * 0.12f},
+        std::max(1.0f, flag.height * 0.035f), dragonBlue);
+    DrawCircleV(
+        {flag.x + flag.width * 0.70f, flag.y + flag.height * 0.28f},
+        std::max(1.5f, flag.height * 0.065f), pearlRed);
+}
+
+void DrawBritishIndiaFlag(Rectangle flag) {
+    constexpr Color ensignRed = {200, 16, 47, 255};
+    constexpr Color badgeGold = {253, 213, 2, 255};
+    constexpr Color badgeBlue = {31, 82, 145, 255};
+
+    DrawRectangleRec(flag, ensignRed);
+    DrawUnionJack({
+        flag.x, flag.y, flag.width * 0.5f, flag.height * 0.5f});
+    const Vector2 badge = {
+        flag.x + flag.width * 0.75f,
+        flag.y + flag.height * 0.5f};
+    DrawStar(badge, flag.height * 0.22f, flag.height * 0.16f,
+             16, badgeGold);
+    DrawCircleV(badge, flag.height * 0.115f, badgeBlue);
+    DrawCircleV(badge, flag.height * 0.078f, RAYWHITE);
+    DrawStar(badge, flag.height * 0.065f, flag.height * 0.027f,
+             5, badgeBlue);
+}
+
+void DrawPrussianFlag(Rectangle flag) {
+    constexpr Color eagle = {15, 17, 18, 255};
+    constexpr Color gold = {226, 174, 38, 255};
+    constexpr Color crownRed = {174, 35, 42, 255};
+
+    DrawRectangleRec(flag, RAYWHITE);
+    const Vector2 center = {
+        flag.x + flag.width * 0.51f,
+        flag.y + flag.height * 0.56f};
+    DrawTriangle(
+        {center.x - flag.width * 0.02f, center.y - flag.height * 0.08f},
+        {center.x - flag.width * 0.31f, center.y - flag.height * 0.32f},
+        {center.x - flag.width * 0.18f, center.y + flag.height * 0.20f},
+        eagle);
+    DrawTriangle(
+        {center.x + flag.width * 0.02f, center.y - flag.height * 0.08f},
+        {center.x + flag.width * 0.31f, center.y - flag.height * 0.32f},
+        {center.x + flag.width * 0.18f, center.y + flag.height * 0.20f},
+        eagle);
+    DrawEllipse(static_cast<int>(center.x), static_cast<int>(center.y),
+                flag.width * 0.085f, flag.height * 0.22f, eagle);
+    const Vector2 head = {
+        center.x + flag.width * 0.06f,
+        center.y - flag.height * 0.19f};
+    DrawCircleV(head, flag.height * 0.07f, eagle);
+    DrawTriangle(
+        {head.x + flag.width * 0.04f, head.y - flag.height * 0.02f},
+        {head.x + flag.width * 0.13f, head.y + flag.height * 0.01f},
+        {head.x + flag.width * 0.04f, head.y + flag.height * 0.05f},
+        gold);
+    DrawLineEx(
+        {center.x - flag.width * 0.04f, center.y + flag.height * 0.18f},
+        {center.x - flag.width * 0.12f, center.y + flag.height * 0.31f},
+        std::max(1.0f, flag.height * 0.035f), eagle);
+    DrawLineEx(
+        {center.x + flag.width * 0.04f, center.y + flag.height * 0.18f},
+        {center.x + flag.width * 0.12f, center.y + flag.height * 0.31f},
+        std::max(1.0f, flag.height * 0.035f), eagle);
+
+    const float crownY = flag.y + flag.height * 0.17f;
+    DrawRectangleRec({
+        center.x - flag.width * 0.075f, crownY,
+        flag.width * 0.15f, flag.height * 0.055f}, gold);
+    DrawTriangle(
+        {center.x - flag.width * 0.075f, crownY},
+        {center.x - flag.width * 0.04f, crownY - flag.height * 0.10f},
+        {center.x, crownY}, gold);
+    DrawTriangle(
+        {center.x, crownY},
+        {center.x + flag.width * 0.04f, crownY - flag.height * 0.12f},
+        {center.x + flag.width * 0.075f, crownY}, gold);
+    DrawCircleV(
+        {center.x, crownY - flag.height * 0.02f},
+        std::max(1.0f, flag.height * 0.025f), crownRed);
+}
+
+void DrawRussianImperialFlag(Rectangle flag) {
+    DrawHorizontalBands(flag, std::array<Color, 3>{{
+        {10, 10, 10, 255}, {255, 205, 1, 255}, RAYWHITE}});
+}
+
+void DrawHabsburgFlag(Rectangle flag) {
+    DrawHorizontalBands(flag, std::array<Color, 2>{{
+        {10, 10, 10, 255}, {255, 204, 0, 255}}});
+}
+
+void DrawRhineConfederationFlag(Rectangle flag) {
+    DrawHorizontalBands(flag, std::array<Color, 3>{{
+        {0, 153, 0, 255}, RAYWHITE, {0, 0, 153, 255}}});
 }
 
 void DrawNordicCross(Rectangle flag, Color background,
@@ -144,31 +282,17 @@ void DrawSouthAfricaFlag(Rectangle flag) {
 void DrawFlag(const CountrySnapshot& country, Rectangle flag) {
     const std::string& tag = CountryCode(country);
     if (tag == "CHI") {
-        DrawRectangleRec(flag, {222, 41, 45, 255});
-        DrawStar({flag.x + flag.width * 0.25f,
-                  flag.y + flag.height * 0.30f},
-                 flag.height * 0.18f, flag.height * 0.075f, 5,
-                 {255, 220, 72, 255});
-        for (int index = 0; index < 4; ++index) {
-            const float angle = (-48.0f + index * 18.0f) * 3.14159265f / 180.0f;
-            DrawStar({flag.x + flag.width * 0.43f +
-                           std::cos(angle) * flag.width * 0.16f,
-                       flag.y + flag.height * 0.30f +
-                           std::sin(angle) * flag.width * 0.16f},
-                     flag.height * 0.055f, flag.height * 0.023f, 5,
-                     {255, 220, 72, 255}, angle * 180.0f / 3.14159265f - 90.0f);
-        }
+        DrawQingFlag(flag);
     } else if (tag == "JAP") {
         DrawRectangleRec(flag, RAYWHITE);
         DrawCircleV({flag.x + flag.width * 0.5f,
                      flag.y + flag.height * 0.5f},
                     flag.height * 0.27f, {188, 48, 58, 255});
-    } else if (tag == "RUS" || tag == "EIN") {
+    } else if (tag == "RUS") {
+        DrawRussianImperialFlag(flag);
+    } else if (tag == "EIN") {
         DrawHorizontalBands(flag, std::array<Color, 3>{{
-            RAYWHITE, {45, 82, 154, 255}, {197, 53, 57, 255}}});
-        if (tag == "EIN")
-            DrawHorizontalBands(flag, std::array<Color, 3>{{
-                {174, 38, 45, 255}, RAYWHITE, {31, 63, 120, 255}}});
+            {174, 38, 45, 255}, RAYWHITE, {31, 63, 120, 255}}});
     } else if (tag == "IDC") {
         DrawRectangleRec(flag, {245, 205, 66, 255});
         DrawRectangleRec({flag.x + flag.width * 0.44f, flag.y,
@@ -177,14 +301,7 @@ void DrawFlag(const CountrySnapshot& country, Rectangle flag) {
                      flag.y + flag.height * 0.5f},
                     flag.height * 0.18f, {191, 41, 52, 255});
     } else if (tag == "IND") {
-        DrawHorizontalBands(flag, std::array<Color, 3>{{
-            {235, 132, 43, 255}, RAYWHITE, {35, 123, 72, 255}}});
-        DrawCircleV({flag.x + flag.width * 0.5f,
-                     flag.y + flag.height * 0.5f},
-                    flag.height * 0.14f, {31, 78, 148, 255});
-        DrawCircleV({flag.x + flag.width * 0.5f,
-                     flag.y + flag.height * 0.5f},
-                    flag.height * 0.09f, RAYWHITE);
+        DrawBritishIndiaFlag(flag);
     } else if (tag == "TUR") {
         DrawRectangleRec(flag, {222, 41, 45, 255});
         DrawCrescent(flag, {flag.x + flag.width * 0.43f,
@@ -202,18 +319,9 @@ void DrawFlag(const CountrySnapshot& country, Rectangle flag) {
                           flag.width * 0.06f, flag.height * 0.24f},
                          {211, 164, 44, 255});
     } else if (tag == "PRU") {
-        DrawHorizontalBands(flag, std::array<Color, 2>{{
-            RAYWHITE, {20, 25, 31, 255}}});
-        DrawCircleV({flag.x + flag.width * 0.5f,
-                     flag.y + flag.height * 0.5f},
-                    flag.height * 0.18f, {211, 170, 47, 255});
-        DrawStar({flag.x + flag.width * 0.5f,
-                  flag.y + flag.height * 0.5f},
-                 flag.height * 0.14f, flag.height * 0.06f, 6,
-                 {20, 25, 31, 255});
+        DrawPrussianFlag(flag);
     } else if (tag == "WGS") {
-        DrawHorizontalBands(flag, std::array<Color, 3>{{
-            {20, 20, 20, 255}, {205, 44, 49, 255}, {229, 183, 54, 255}}});
+        DrawRhineConfederationFlag(flag);
     } else if (tag == "BAV") {
         DrawRectangleRec(flag, RAYWHITE);
         const int columns = 6;
@@ -230,8 +338,7 @@ void DrawFlag(const CountrySnapshot& country, Rectangle flag) {
             }
         }
     } else if (tag == "AUS") {
-        DrawHorizontalBands(flag, std::array<Color, 3>{{
-            {207, 45, 52, 255}, RAYWHITE, {207, 45, 52, 255}}});
+        DrawHabsburgFlag(flag);
     } else if (tag == "FRA") {
         DrawVerticalBands(flag, std::array<Color, 3>{{
             {35, 79, 153, 255}, RAYWHITE, {208, 53, 63, 255}}});

@@ -7,6 +7,7 @@
 
 enum class UIView {
     WorldMap,
+    CommodityMarket,
     ProvinceDetail,
     CountryOverview,
     NationalMarket,
@@ -24,7 +25,10 @@ struct UIState {
     UIView view;
     int selectedProvinceId;
     int hoveredProvinceId;
+    int playerCountryId;
     int selectedCountryId;
+    int selectedGood;
+    int goodsScroll;
     int countryTab;
     int countrySelectedProvinceId;
     int provinceTab;
@@ -32,10 +36,14 @@ struct UIState {
     bool panelConsumesInput;
     int countryProvinceScroll;
     float mapScrollX;
+    float mapScrollY;
     float mapZoom;
+    bool mapDragActive;
     bool mapInputEnabled;
     bool constructionPanelOpen;
+    bool constructionHistoryVisible;
     int constructionListScroll;
+    std::uint64_t selectedConstructionProjectId;
     int selectedBuilding;
     bool paused;
     int simulationSpeed;
@@ -45,6 +53,8 @@ struct UIState {
     WarehouseOrderId selectedTransportOrderId;
     int transportShipmentScroll;
     int transportOrderScroll;
+    std::string constructionMessage;
+    bool constructionSucceeded;
     DebugUIState localMarketUI;
 };
 

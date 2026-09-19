@@ -247,7 +247,10 @@ Money WarehouseNetwork::productionInputAvailability(
     const InventoryState& input = buildingStock(
         warehouseId, buildingType, goodIndex);
     Money committedToProducer = Money(0);
-    for (const WarehouseOrder& production : orderList) {
+    for (const WarehouseOrderId orderId : openOrderIds) {
+        const auto orderIndex = orderIndexById.find(orderId);
+        if (orderIndex == orderIndexById.end()) continue;
+        const WarehouseOrder& production = orderList[orderIndex->second];
         if (production.kind != WarehouseOrderKind::SupplierProduction ||
             terminal(production.status) ||
             production.eligibleCycle > cycle ||

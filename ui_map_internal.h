@@ -15,6 +15,7 @@ using WorldTriangle = std::array<map_model::Point, 3>;
 struct CachedWorldPolygon {
     std::vector<map_model::Point> outline;
     std::vector<WorldTriangle> triangles;
+    map_model::Rect bounds{};
     map_model::Point fanCenter{};
     bool usesTriangleFan = false;
 };
@@ -41,7 +42,10 @@ struct BoundMapData {
 
 void BuildMapRenderCache(BoundMapData& data);
 BoundMapData& GetMapData(World& world);
-map_model::MapView GetMapView(float scrollX, float zoom);
+map_model::MapView GetMapView(float scrollX, float scrollY, float zoom);
+bool TryWarehouseWorldPoint(int warehouseId, const BoundMapData& data,
+                            const World& world,
+                            map_model::Point* result);
 Color CountryPoliticalColor(const World& world, const Country& country);
 Color Blend(Color from, Color to, float amount);
 bool DrawCachedPolygonFill(const CachedWorldPolygon& polygon,

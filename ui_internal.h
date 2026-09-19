@@ -27,6 +27,7 @@ void InitUIState(UIState* state);
 void OpenBuildingDetail(UIState* state, int provinceId, int typeIndex);
 void HandleInput(UIState* state, World& world);
 void HandleProvinceDetailInput(UIState* state, World& world);
+void HandleCommodityMarketInput(UIState* state, World& world);
 void HandleWorldMapInput(UIState* state, World& world);
 
 bool HandleConstructionListInput(UIState* state, World& world);
@@ -35,6 +36,7 @@ bool HandleConstructionListInput(UIState* state, World& world);
 void DrawUI(UIState* state, World& world, Font font, double elapsedSeconds);
 void DrawProvinceDetailUI(const UIState* state, World& world, Font font,
                           double elapsedSeconds);
+void DrawCommodityMarketUI(const UIState* state, World& world, Font font);
 void DrawWorldMapUI(const UIState* state, World& world, Font font,
                     double elapsedSeconds);
 void DrawConstructionListUI(const UIState* state, World& world, Font font);

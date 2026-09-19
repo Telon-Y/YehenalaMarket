@@ -2,7 +2,10 @@
 
 void NavigateToCountry(UIState* state, int countryId, int provinceId) {
     if (state == nullptr) return;
-    state->selectedCountryId = countryId;
+    if (state->playerCountryId < 0)
+        state->playerCountryId = countryId;
+    if (countryId != state->playerCountryId) return;
+    state->selectedCountryId = state->playerCountryId;
     state->countrySelectedProvinceId = provinceId;
     state->selectedProvinceId = provinceId;
     state->countryTab = 0;
@@ -25,6 +28,7 @@ void NavigateToProvince(UIState* state, int provinceId) {
     state->provincePageScroll.fill(0);
     state->localMarketUI.currentPanel = 0;
     state->localMarketUI.goodsScroll = 0;
+    state->localMarketUI.buildingScroll = 0;
     state->localMarketUI.constructionScroll = 0;
     state->localMarketUI.orderScroll = 0;
     state->view = UIView::ProvinceDetail;
@@ -32,6 +36,15 @@ void NavigateToProvince(UIState* state, int provinceId) {
 
 void NavigateBack(UIState* state) {
     if (state == nullptr) return;
+    if (state->view == UIView::CommodityMarket) {
+        if (state->selectedGood >= 0) {
+            state->selectedGood = -1;
+            return;
+        }
+        state->view = UIView::WorldMap;
+        state->panelConsumesInput = false;
+        return;
+    }
     if (state->view == UIView::ProvinceDetail) {
         state->view = state->provinceReturnView;
         state->hoveredProvinceId = -1;

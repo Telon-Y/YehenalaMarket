@@ -1,4 +1,7 @@
 #include "ui_internal.h"
+#include "construction_ui_text.h"
+#include "construction_queue_ui.h"
+#include "number_format.h"
 
 #include "ui_country_internal.h"
 
@@ -17,6 +20,12 @@ constexpr Color kHeader{35, 49, 50, 255};
 constexpr Color kAccent{218, 178, 80, 255};
 constexpr Color kLine{117, 133, 126, 255};
 
+// 统一的中文紧凑数字文本：大额数值一律使用 万 / 亿 / 万亿 省略表述，
+// 不再输出 k、m、b 这类字母后缀，也不输出整串原始数字。
+std::string ChineseNumber(double value, int precision = 1) {
+    return FormatChineseNumber(value, precision);
+}
+
 int ClampScroll(const CountryProvinceListLayout& list, int value) {
     return std::clamp(value, 0, list.maxOffset);
 }
@@ -25,49 +34,93 @@ Rectangle BackRect() { return CurrentUILayout().countryBackButton; }
 
 const char* BuildingLabel(int type) {
     return type >= 0 && type < TYPE_COUNT ? buildingTypeNames[type].c_str()
-                                           : "Building";
-}
-
-const char* ProjectStatus(int status) {
-    switch (static_cast<ConstructionProjectStatus>(status)) {
-    case ConstructionProjectStatus::Queued: return "Queued";
-    case ConstructionProjectStatus::Active: return "Active";
-    case ConstructionProjectStatus::Completed: return "Done";
-    case ConstructionProjectStatus::Cancelled: return "Cancelled";
-    case ConstructionProjectStatus::Blocked: return "Blocked";
-    }
-    return "Unknown";
+                                           : "建筑";
 }
 
 Color ProjectStatusColor(int status) {
     switch (static_cast<ConstructionProjectStatus>(status)) {
     case ConstructionProjectStatus::Completed: return {51, 132, 84, 255};
     case ConstructionProjectStatus::Cancelled:
-    case ConstructionProjectStatus::Blocked: return {157, 71, 64, 255};
+    case ConstructionProjectStatus::Invalidated: return {157, 71, 64, 255};
     case ConstructionProjectStatus::Active: return {50, 111, 151, 255};
+    case ConstructionProjectStatus::Paused: return {105, 105, 105, 255};
     default: return {170, 105, 42, 255};
     }
 }
 
-bool IsNationalBuildable(const World& world, int provinceId, int type) {
-    (void)world;
-    (void)provinceId;
-    if (type < 0 || type >= TYPE_COUNT) return false;
-    return type != BANK && type != FINANCE &&
-           type != INDUSTRIAL_BANK && type != SAVINGS_BANK;
+int ResolveConstructionTarget(const UIState* state,
+                              const CountrySnapshot& country) {
+    if (std::find(country.provinceIds.begin(), country.provinceIds.end(),
+                  state->countrySelectedProvinceId) !=
+        country.provinceIds.end()) {
+        return state->countrySelectedProvinceId;
+    }
+    return country.provinceIds.empty() ? -1 : country.provinceIds.front();
 }
 
-int NextNationalBuildable(const World& world, int provinceId, int current) {
+ConstructionCommandResult EvaluateConstruction(
+    const World& world, int countryId, int provinceId, int type) {
+    return world.evaluateNationalConstruction(
+        countryId, provinceId, type, 1);
+}
+
+bool IsNationalBuildable(const World& world, int countryId,
+                         int provinceId, int type) {
+    return EvaluateConstruction(
+               world, countryId, provinceId, type).error ==
+           ConstructionCommandError::None;
+}
+
+bool IsNationalTypeSelectable(const World& world, int countryId,
+                              int provinceId, int type) {
+    const ConstructionCommandError error =
+        EvaluateConstruction(world, countryId, provinceId, type).error;
+    return error != ConstructionCommandError::InvalidType &&
+           error != ConstructionCommandError::FinancialBuilding &&
+           error != ConstructionCommandError::UnknownCountry &&
+           error != ConstructionCommandError::UnknownProvince &&
+           error != ConstructionCommandError::WrongCountry;
+}
+
+int NextNationalBuildable(const World& world, int countryId,
+                          int provinceId, int current) {
     for (int offset = 1; offset <= TYPE_COUNT; ++offset) {
         const int candidate = (current + offset + TYPE_COUNT) % TYPE_COUNT;
-        if (IsNationalBuildable(world, provinceId, candidate)) return candidate;
+        if (IsNationalTypeSelectable(
+                world, countryId, provinceId, candidate)) {
+            return candidate;
+        }
     }
     return -1;
 }
 
+void RecordConstructionResult(UIState* state,
+                              const ConstructionCommandResult& result) {
+    state->constructionSucceeded = static_cast<bool>(result);
+    state->constructionMessage = result
+        ? "已加入国家建设项目 #" + std::to_string(result.projectId)
+        : ConstructionCommandErrorText(result.error);
+}
+
 bool IsProjectCancellable(int status) {
-    return status == static_cast<int>(ConstructionProjectStatus::Queued) ||
-           status == static_cast<int>(ConstructionProjectStatus::Active);
+    return ConstructionProjectIsLive(
+        static_cast<ConstructionProjectStatus>(status));
+}
+
+ConstructionQueueButtons CountryQueueButtons(Rectangle row) {
+    // Cancel occupies the top-right corner. Keep ordering beside it, above
+    // the state label and progress bar.
+    return ConstructionQueueRowButtons(
+        {row.x, row.y + 2.0f, row.width - 56.0f, 24.0f});
+}
+
+void DrawProjectLine(Font font, const std::string& text, Rectangle bounds,
+                     Color color) {
+    const Vector2 measured = MeasureTextEx(font, text.c_str(), kUiBodyFontSize, 0);
+    const float size = measured.x > bounds.width && measured.x > 0.0f
+        ? std::max(9.0f, kUiBodyFontSize * bounds.width / measured.x)
+        : kUiBodyFontSize;
+    DrawTextEx(font, text.c_str(), {bounds.x, bounds.y}, size, 0, color);
 }
 
 void DrawHeader(const CountrySnapshot& country, const UILayout& layout, Font font) {
@@ -83,27 +136,35 @@ void DrawHeader(const CountrySnapshot& country, const UILayout& layout, Font fon
                kUiBodyFontSize, 0, {185, 204, 197, 255});
     const Rectangle back = CurrentUILayout().countryBackButton;
     DrawRectangleRec(back, {69, 91, 89, 255});
-    DrawTextEx(font, "Map", {back.x + 17.0f, back.y + 8.0f}, kUiBodyFontSize, 0, RAYWHITE);
+    DrawTextEx(font, "地图", {back.x + 17.0f, back.y + 8.0f}, kUiBodyFontSize, 0, RAYWHITE);
 
     const float split = layout.countryHeader.x + layout.countryHeader.width * 0.51f;
-    DrawTextEx(font, TextFormat("Pop %.0f", country.population),
+    const std::string populationLine =
+        "人口 " + ChineseNumber(country.population);
+    const std::string gdpLine = "国内生产总值 " + ChineseNumber(country.gdp.toDouble());
+    const std::string treasuryLine =
+        "国库 " + ChineseNumber(country.treasury.toDouble());
+    const std::string reservedLine =
+        "已预留 " + ChineseNumber(country.reservedConstructionBudget.toDouble());
+    const std::string availableLine =
+        "可用 " + ChineseNumber(country.availableTreasury.toDouble());
+    DrawTextEx(font, populationLine.c_str(),
                {layout.countryHeader.x + 10.0f, 62.0f}, kUiBodyFontSize, 0, {226, 233, 229, 255});
-    DrawTextEx(font, TextFormat("GDP %.0f", country.gdp.toDouble()),
+    DrawTextEx(font, gdpLine.c_str(),
                {split, 62.0f}, kUiBodyFontSize, 0, {226, 233, 229, 255});
-    DrawTextEx(font, TextFormat("Treasury %.0f", country.treasury.toDouble()),
+    DrawTextEx(font, treasuryLine.c_str(),
                {layout.countryHeader.x + 10.0f, 82.0f}, kUiBodyFontSize, 0, {226, 233, 229, 255});
-    DrawTextEx(font, TextFormat("Reserved %.0f",
-                                country.reservedConstructionBudget.toDouble()),
+    DrawTextEx(font, reservedLine.c_str(),
                {split, 82.0f}, kUiBodyFontSize, 0, {226, 233, 229, 255});
-    DrawTextEx(font, TextFormat("Available %.0f", country.availableTreasury.toDouble()),
+    DrawTextEx(font, availableLine.c_str(),
                {layout.countryHeader.x + 10.0f, 104.0f}, kUiBodyFontSize, 0,
                {164, 225, 190, 255});
-    DrawTextEx(font, TextFormat("Cycle %d", country.cycle),
+    DrawTextEx(font, TextFormat("周期 %d", country.cycle),
                {split, 104.0f}, kUiBodyFontSize, 0, {185, 204, 197, 255});
 }
 
 void DrawTabs(const UIState* state, const UILayout& layout, Font font) {
-    const char* labels[] = {"Overview", "Construction", "Transport"};
+    const char* labels[] = {"总览", "建设", "运输"};
     for (int index = 0; index < 3; ++index) {
         const Rectangle tab = layout.countryPageTabs[static_cast<std::size_t>(index)];
         const bool active = state->countryTab == index;
@@ -116,7 +177,7 @@ void DrawTabs(const UIState* state, const UILayout& layout, Font font) {
 void DrawOverviewPage(const UIState* state, const CountrySnapshot& country,
                       const World& world, const UILayout& layout, Font font) {
     const Rectangle content = layout.countryPageContent;
-    DrawTextEx(font, "Country overview", {content.x, content.y + 1.0f},
+    DrawTextEx(font, "国家总览", {content.x, content.y + 1.0f},
                16, 0, {33, 55, 53, 255});
     int selected = state->countrySelectedProvinceId;
     if (!country.provinceIds.empty() &&
@@ -127,14 +188,16 @@ void DrawOverviewPage(const UIState* state, const CountrySnapshot& country,
         const ProvinceSnapshot snapshot = world.getProvinceSnapshot(selected);
         DrawRectangle(content.x, content.y + 27.0f, content.width, 48.0f,
                       {225, 235, 225, 255});
-        DrawTextEx(font, ("Selected: " + snapshot.name).c_str(),
+        DrawTextEx(font, ("已选择：" + snapshot.name).c_str(),
                    {content.x + 8.0f, content.y + 34.0f}, kUiBodyFontSize, 0,
                    {34, 70, 59, 255});
-        DrawTextEx(font, TextFormat("GDP %.0f  Pop %.0f",
-                                    snapshot.gdp.toDouble(), snapshot.population),
+        const std::string provinceLine =
+            "国内生产总值 " + ChineseNumber(snapshot.gdp.toDouble()) +
+            "  人口 " + ChineseNumber(snapshot.population);
+        DrawTextEx(font, provinceLine.c_str(),
                    {content.x + 8.0f, content.y + 54.0f}, kUiBodyFontSize, 0, DARKGRAY);
     }
-    DrawTextEx(font, TextFormat("Provinces %d",
+    DrawTextEx(font, TextFormat("省份数：%d",
                                 static_cast<int>(country.provinceIds.size())),
                {content.x, content.y + 88.0f}, kUiBodyFontSize, 0, DARKGRAY);
 
@@ -154,9 +217,11 @@ void DrawOverviewPage(const UIState* state, const CountrySnapshot& country,
                           : Color{250, 251, 248, 255});
         DrawTextEx(font, province.name.c_str(), {content.x + 7.0f, y + 2.0f},
                    kUiBodyFontSize, 0, {35, 48, 47, 255});
-        DrawTextEx(font, TextFormat("GDP %.0f", province.gdp.toDouble()),
+        const std::string provinceGdp = "国内生产总值 " + ChineseNumber(province.gdp.toDouble());
+        DrawTextEx(font, provinceGdp.c_str(),
                    {content.x + 7.0f, y + 20.0f}, kUiBodyFontSize, 0, DARKGRAY);
-        DrawTextEx(font, TextFormat("Pop %.0f", province.population),
+        const std::string provincePopulation = "人口 " + ChineseNumber(province.population);
+        DrawTextEx(font, provincePopulation.c_str(),
                    {content.x + content.width * 0.54f, y + 20.0f}, kUiBodyFontSize, 0, DARKGRAY);
     }
 }
@@ -164,20 +229,17 @@ void DrawOverviewPage(const UIState* state, const CountrySnapshot& country,
 void DrawConstructionPage(const UIState* state, const CountrySnapshot& country,
                           const World& world, const UILayout& layout, Font font) {
     const Rectangle content = layout.countryPageContent;
-    int target = state->countrySelectedProvinceId;
-    if (!country.provinceIds.empty() &&
-        std::find(country.provinceIds.begin(), country.provinceIds.end(), target) ==
-            country.provinceIds.end())
-        target = country.provinceIds.front();
-    DrawTextEx(font, "National construction", {content.x, content.y + 1.0f},
+    const int target = ResolveConstructionTarget(state, country);
+    DrawTextEx(font, "国家建设", {content.x, content.y + 1.0f},
                16, 0, {33, 55, 53, 255});
     DrawTextEx(font, target >= 0 ?
-        ("Target: " + world.getProvinceById(target).getName()).c_str() :
-        "Target: none", {content.x, content.y + 27.0f}, kUiBodyFontSize, 0, DARKGRAY);
-    DrawTextEx(font, "Type", {content.x, content.y + 50.0f}, kUiBodyFontSize, 0, GRAY);
+        ("目标：" + world.getProvinceById(target).getName()).c_str() :
+        "目标：无", {content.x, content.y + 27.0f}, kUiBodyFontSize, 0, DARKGRAY);
+    DrawTextEx(font, "类型", {content.x, content.y + 50.0f}, kUiBodyFontSize, 0, GRAY);
     const Rectangle typeButton = {content.x + 33.0f, content.y + 45.0f,
                                   std::max(56.0f, content.width - 117.0f), 24.0f};
-    const bool canBuild = IsNationalBuildable(world, target, state->selectedBuilding);
+    const bool canBuild = IsNationalBuildable(
+        world, country.countryId, target, state->selectedBuilding);
     DrawRectangleRec(typeButton, canBuild
         ? Color{231, 237, 233, 255} : Color{231, 224, 220, 255});
     DrawTextEx(font, BuildingLabel(state->selectedBuilding),
@@ -187,12 +249,30 @@ void DrawConstructionPage(const UIState* state, const CountrySnapshot& country,
                              content.y + 45.0f, 78.0f, 24.0f};
     DrawRectangleRec(issue, canBuild
         ? Color{61, 126, 91, 255} : Color{145, 150, 146, 255});
-    DrawTextEx(font, canBuild ? "Build 1" : "Unavailable",
+    DrawTextEx(font, canBuild ? "建设 1 座" : "不可用",
                {issue.x + (canBuild ? 13.0f : 5.0f), issue.y + 6.0f},
                kUiBodyFontSize, 0, RAYWHITE);
-    DrawTextEx(font, TextFormat("Projects %d",
-                                static_cast<int>(country.constructionProjects.size())),
-               {content.x, content.y + 84.0f}, kUiBodyFontSize, 0, DARKGRAY);
+    if (!state->constructionMessage.empty()) {
+        DrawTextEx(
+            font, state->constructionMessage.c_str(),
+            {content.x, content.y + 74.0f}, kUiBodyFontSize, 0,
+            state->constructionSucceeded
+                ? Color{51, 132, 84, 255}
+                : Color{157, 71, 64, 255});
+    } else {
+        DrawProjectLine(font, "队列箭头：移动项目；Shift：首项/末项",
+                        {content.x, content.y + 74.0f, content.width, 20.0f},
+                        GRAY);
+    }
+
+    const std::string capacityLine =
+        "建设能力 " + ChineseNumber(country.totalConstructionCapacity.toDouble()) +
+        "  已用 " + ChineseNumber(country.totalConstructionUsed.toDouble()) +
+        "  可用 " + ChineseNumber(country.totalConstructionAvailable.toDouble()) +
+        "  项目 " + std::to_string(
+            static_cast<int>(country.constructionProjects.size()));
+    DrawTextEx(font, capacityLine.c_str(),
+               {content.x, content.y + 98.0f}, kUiBodyFontSize, 0, DARKGRAY);
 
     const int count = static_cast<int>(country.constructionProjects.size());
     const CountryProvinceListLayout list =
@@ -205,39 +285,65 @@ void DrawConstructionPage(const UIState* state, const CountrySnapshot& country,
             country.constructionProjects[static_cast<std::size_t>(index)];
         const float y = list.firstY + row * list.rowStride;
         DrawRectangle(content.x, y - 4.0f, content.width, list.rowHeight,
-                      {250, 251, 248, 255});
+                      project.id == state->selectedConstructionProjectId
+                          ? Color{218, 232, 222, 255}
+                          : Color{250, 251, 248, 255});
         std::string provinceName = "#" + std::to_string(project.targetProvinceId);
         if (project.targetProvinceId >= 0)
             provinceName = world.getProvinceById(project.targetProvinceId).getName();
-        DrawTextEx(font, ("#" + std::to_string(project.id) + " " + provinceName).c_str(),
-                   {content.x + 7.0f, y + 1.0f}, kUiBodyFontSize, 0, {35, 48, 47, 255});
-        DrawTextEx(font, TextFormat("%s x%d %.0f%%",
-                                    BuildingLabel(project.typeIndex), project.quantity,
-                                    project.progress.toDouble() * 100.0),
-                   {content.x + 7.0f, y + 20.0f}, kUiBodyFontSize, 0, DARKGRAY);
+        DrawProjectLine(font, "#" + std::to_string(project.id) + " " + provinceName,
+                   {content.x + 7.0f, y + 1.0f, content.width - 119.0f, 20.0f},
+                   {35, 48, 47, 255});
+        const double progressPercent = project.progress.toDouble() * 100.0;
+        const std::string projectLine =
+            std::string(BuildingLabel(project.typeIndex)) + " " +
+            ChineseNumber(static_cast<double>(project.quantity), 2) + " 座  " +
+            ChineseNumber(progressPercent, 1) + "%";
+        DrawProjectLine(font, projectLine.c_str(),
+                   {content.x + 7.0f, y + 20.0f, content.width - 143.0f, 20.0f},
+                   DARKGRAY);
+        DrawConstructionQueueButtons(
+            CountryQueueButtons({content.x, y - 4.0f, content.width,
+                                 list.rowHeight}),
+            IsProjectCancellable(project.status) && index > 0,
+            IsProjectCancellable(project.status) && index + 1 < count);
         if (IsProjectCancellable(project.status)) {
             const Rectangle cancel = {content.x + content.width - 50.0f,
                                       y - 2.0f, 48.0f, 24.0f};
             DrawRectangleRec(cancel, {157, 71, 64, 235});
-            DrawTextEx(font, "Cancel", {cancel.x + 5.0f, cancel.y + 4.0f},
+            DrawTextEx(font, "取消", {cancel.x + 5.0f, cancel.y + 4.0f},
                        kUiBodyFontSize, 0, RAYWHITE);
         }
-        DrawTextEx(font, ProjectStatus(project.status),
+        DrawTextEx(font, ConstructionProjectStatusText(
+                       static_cast<ConstructionProjectStatus>(project.status)),
                    {content.x + content.width - 130.0f, y + 20.0f}, kUiBodyFontSize, 0,
                    ProjectStatusColor(project.status));
+        const double progress = std::clamp(
+            project.progress.toDouble(), 0.0, 1.0);
+        const Rectangle progressBounds = {
+            content.x + 7.0f, y + 38.0f,
+            std::max(1.0f, content.width - 14.0f), 6.0f};
+        DrawRectangleRec(progressBounds, Color{215, 222, 217, 255});
+        DrawRectangle(
+            static_cast<int>(progressBounds.x),
+            static_cast<int>(progressBounds.y),
+            static_cast<int>(progressBounds.width * progress),
+            static_cast<int>(progressBounds.height),
+            Color{63, 137, 87, 255});
     }
     if (count == 0)
-        DrawTextEx(font, "No national projects.", {content.x, list.firstY}, kUiBodyFontSize, 0, GRAY);
+        DrawTextEx(font, "暂无国家建设项目。", {content.x, list.firstY}, kUiBodyFontSize, 0, GRAY);
 }
 
 }  // namespace
 
 void HandleCountryOverviewInput(UIState* state, World& world) {
-    if (state->selectedCountryId < 0) {
+    if (state->playerCountryId < 0) {
         state->view = UIView::WorldMap;
         state->panelConsumesInput = false;
         return;
     }
+    state->selectedCountryId = state->playerCountryId;
     state->panelConsumesInput = true;
     const UILayout layout = CurrentUILayout();
     const Vector2 mouse = GetMousePosition();
@@ -258,18 +364,28 @@ void HandleCountryOverviewInput(UIState* state, World& world) {
         }
     }
 
-    const CountrySnapshot country = world.getCountrySnapshot(state->selectedCountryId);
+    const float wheel = GetMouseWheelMove();
+    const bool up = IsKeyPressed(KEY_UP);
+    const bool down = IsKeyPressed(KEY_DOWN);
+    if (!left && wheel == 0.0f && !up && !down) return;
+
+    const int countryId = state->playerCountryId;
+    const CountrySnapshot country = world.getCountrySnapshot(countryId);
+    const int constructionTarget =
+        ResolveConstructionTarget(state, country);
+    if (constructionTarget >= 0) {
+        state->countrySelectedProvinceId = constructionTarget;
+    }
     const int count = state->countryTab == 0
         ? static_cast<int>(country.provinceIds.size())
         : static_cast<int>(country.constructionProjects.size());
     const CountryProvinceListLayout list =
         ComputeCountryProvinceListLayout(layout.width, layout.height,
                                          state->countryTab, count);
-    const float wheel = GetMouseWheelMove();
     if (CheckCollisionPointRec(mouse, layout.countryPageContent) && wheel != 0.0f)
         state->countryProvinceScroll += wheel > 0.0f ? -1 : 1;
-    if (IsKeyPressed(KEY_UP)) --state->countryProvinceScroll;
-    if (IsKeyPressed(KEY_DOWN)) ++state->countryProvinceScroll;
+    if (up) --state->countryProvinceScroll;
+    if (down) ++state->countryProvinceScroll;
     state->countryProvinceScroll = ClampScroll(list, state->countryProvinceScroll);
 
     if (!left || !CheckCollisionPointRec(mouse, layout.countryPageContent)) return;
@@ -297,18 +413,18 @@ void HandleCountryOverviewInput(UIState* state, World& world) {
                                   std::max(56.0f, content.width - 117.0f), 24.0f};
     if (CheckCollisionPointRec(mouse, typeButton)) {
         const int next = NextNationalBuildable(
-            world, state->countrySelectedProvinceId, state->selectedBuilding);
+            world, countryId, constructionTarget,
+            state->selectedBuilding);
         if (next >= 0) state->selectedBuilding = next;
         return;
     }
     const Rectangle issue = {content.x + content.width - 78.0f,
                              content.y + 45.0f, 78.0f, 24.0f};
-    if (CheckCollisionPointRec(mouse, issue) &&
-        IsNationalBuildable(world, state->countrySelectedProvinceId,
-                            state->selectedBuilding)) {
-        world.queueNationalConstruction(state->selectedCountryId,
-                                        state->countrySelectedProvinceId,
-                                        state->selectedBuilding, 1);
+    if (CheckCollisionPointRec(mouse, issue)) {
+        RecordConstructionResult(
+            state, world.queueNationalConstructionCommand(
+                countryId, constructionTarget,
+                state->selectedBuilding, 1));
         return;
     }
 
@@ -322,13 +438,29 @@ void HandleCountryOverviewInput(UIState* state, World& world) {
         if (!CheckCollisionPointRec(mouse, rowRect)) continue;
         const ConstructionProjectSnapshot& project =
             country.constructionProjects[static_cast<std::size_t>(index)];
+        const ConstructionQueueButtons buttons = CountryQueueButtons(rowRect);
+        for (const bool moveUp : {true, false}) {
+            if (!ConstructionQueueButtonHit(mouse, buttons, moveUp)) continue;
+            if (IsProjectCancellable(project.status) &&
+                (moveUp ? index > 0 : index + 1 < count)) {
+                state->constructionSucceeded = world.moveConstructionProject(
+                    countryId, project.id, moveUp,
+                    ConstructionQueueShiftHeld());
+                state->constructionMessage = state->constructionSucceeded
+                    ? "建设队列顺序已更新"
+                    : "项目操作失败";
+            }
+            return;
+        }
         const Rectangle cancel = {content.x + content.width - 50.0f,
                                   list.firstY + row * list.rowStride - 2.0f,
                                   48.0f, 24.0f};
         if (IsProjectCancellable(project.status) &&
             CheckCollisionPointRec(mouse, cancel)) {
             world.cancelNationalConstructionProject(
-                state->selectedCountryId, project.id);
+                countryId, project.id);
+        } else {
+            state->selectedConstructionProjectId = project.id;
         }
         return;
     }
@@ -337,9 +469,10 @@ void HandleCountryOverviewInput(UIState* state, World& world) {
 void DrawCountryOverviewUI(const UIState* state, World& world, Font font,
                            double elapsedSeconds) {
     (void)elapsedSeconds;
-    if (state->selectedCountryId < 0) return;
+    if (state->playerCountryId < 0) return;
     const UILayout layout = CurrentUILayout();
-    const CountrySnapshot country = world.getCountrySnapshot(state->selectedCountryId);
+    const CountrySnapshot country =
+        world.getCountrySnapshot(state->playerCountryId);
     BeginScissorMode(static_cast<int>(layout.countryPanel.x),
                      static_cast<int>(layout.countryPanel.y),
                      static_cast<int>(layout.countryPanel.width),
@@ -357,4 +490,3 @@ void DrawCountryOverviewUI(const UIState* state, World& world, Font font,
     EndScissorMode();
     DrawRectangleLinesEx(layout.countryPanel, 1.0f, kLine);
 }
-
