@@ -300,6 +300,17 @@ function renderQuote(buf) {
 //
 // 关键约束：每个 <li> 必须严格配对自己的 </li>，且 </li> 前要先关掉它的子列表。
 // 早期版本用"看下一个元素的缩进决定是否闭合"的写法，导致末项与同级切换处漏闭合。
+//
+// 【2026-09-19 修复：嵌套列表的缩进整体丢失】
+// 前值（错误）：进入更深一层时无条件 closeLi()，输出
+//   <ul><li>父项：<ul></li><li>子项</li>…</ul><li>同级项</li>…</ul>
+// 浏览器把那个 </li> 读成"父项结束"，于是**子项变成父项的同级项**，
+// 缩进层级不可见；且父 <li> 的 </li> 从未写到正确位置
+// （html_audit 只数标签个数，配对计数仍相等，故查不出来）。
+// 后值（正确）：嵌套列表写在未闭合的父 <li> 内，父 li 延后到子列表关闭之后再闭合——
+//   <ul><li>父项：<ul><li>子项</li>…</ul></li><li>同级项</li>…</ul>
+// 触发位置：契约 §五"普通建筑每级雇佣 5,000 人："下的 75%/20%/5% 三项，
+// 它是全文唯一的嵌套列表（grep '^\s+([-*]|\d+\.) ' 可复核）。
 function renderList(buf) {
   const items = [];
   for (const raw of buf) {
@@ -316,48 +327,59 @@ function renderList(buf) {
   }
   if (!items.length) return '';
 
+  // 每一层列表各自记录它的 <li> 是否还开着。
+  // 不能再用单个 liOpen 布尔量：嵌套列表是**写在父 <li> 内部**的，
+  // 于是"父项未闭合"与"子项未闭合"会同时为真，单个布尔量记不住。
   let html = '';
-  const stack = []; // { indent, ordered }
-  let liOpen = false;
+  const stack = []; // { indent, ordered, liOpen }
 
-  const closeLi = () => { if (liOpen) { html += '</li>'; liOpen = false; } };
+  const closeLi = () => {
+    const top = stack[stack.length - 1];
+    if (top && top.liOpen) { html += '</li>'; top.liOpen = false; }
+  };
   const closeList = () => {
     const top = stack.pop();
     html += top.ordered ? '</ol>' : '</ul>';
   };
+  const openList = (ordered, indent) => {
+    html += ordered ? '<ol>' : '<ul>';
+    stack.push({ indent, ordered, liOpen: false });
+  };
 
   for (const it of items) {
+    // ① 先逐层退回本项所在的缩进层级（每层都是"先关 </li> 再关列表"）
+    while (stack.length > 1 && it.indent < stack[stack.length - 1].indent) {
+      closeLi();
+      closeList();
+    }
+
     if (!stack.length) {
       // 首个元素：开列表
-      html += it.ordered ? '<ol>' : '<ul>';
-      stack.push({ indent: it.indent, ordered: it.ordered });
+      openList(it.ordered, it.indent);
     } else {
       const top = stack[stack.length - 1];
       if (it.indent > top.indent) {
-        // 更深一层：作为嵌套列表开在【当前未闭合的 li 内】
-        html += it.ordered ? '<ol>' : '<ul>';
-        stack.push({ indent: it.indent, ordered: it.ordered });
-      } else if (it.indent < top.indent) {
-        // 回到上层：逐层关闭
-        while (stack.length > 1 && it.indent < stack[stack.length - 1].indent) {
-          closeLi();
-          closeList();
-        }
-      } else if (it.ordered !== top.ordered) {
-        // 同层但列表类型变了：换一个列表
+        // 更深一层：作为嵌套列表开在【当前未闭合的父 li 内】，
+        // 故此处**不得** closeLi()——关掉父 li 会把子列表挪到父项外面，
+        // 缩进层级随之丢失（见下面 2026-09-19 的缺陷说明）。
+        openList(it.ordered, it.indent);
+      } else if (it.indent === top.indent && it.ordered !== top.ordered) {
+        // 同层但列表类型变了（- ↔ 1.）：换一个列表
         closeLi();
         closeList();
-        html += it.ordered ? '<ol>' : '<ul>';
-        stack.push({ indent: it.indent, ordered: it.ordered });
+        openList(it.ordered, it.indent);
+      } else {
+        // 同层新项：先闭合上一项
+        closeLi();
       }
     }
-    closeLi(); // 新项开始前，先闭合上一项
+
     html += `<li>${inline(it.text)}`;
-    liOpen = true;
+    stack[stack.length - 1].liOpen = true;
   }
 
-  closeLi();
-  while (stack.length) closeList();
+  // 收尾：由内向外，每层都"先关 </li> 再关列表"
+  while (stack.length) { closeLi(); closeList(); }
   return html;
 }
 
@@ -425,6 +447,12 @@ h1{font-size:30px;line-height:1.3;margin:0 0 6px}
 h2{font-size:22px;margin:44px 0 14px;padding-bottom:7px;border-bottom:1px solid var(--line)}
 h3{font-size:17.5px;margin:30px 0 10px}
 h4{font-size:16px;margin:24px 0 8px}
+/* h5：契约 §4.5.3 用 ##### 写三级子标题（如"交易税的记账口径"）。
+   2026-09-19 修复：此前未定义 h5 样式，浏览器默认会把 h5 渲染成小号粗体，
+   与全文排版不一致；侧栏目录按 h2→h3/h4 两层构建，h5 不进目录（有意）。 */
+h5{font-size:14.5px;margin:20px 0 6px;color:#3a4149;letter-spacing:.01em}
+h5::before{content:"";display:inline-block;width:3px;height:.95em;margin-right:8px;
+  vertical-align:-.08em;background:#c6ccd4;border-radius:2px}
 p{margin:.7em 0}
 ul,ol{margin:.6em 0;padding-left:1.7em}
 li{margin:.3em 0}

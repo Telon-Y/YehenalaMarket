@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>叶赫那拉市场 · 1.0（Go 内核）</title>
+<style>
+:root{--ink:#1f2328;--ink-2:#57606a;--line:#d8dee4;--bg:#fff;--accent:#0969da;--panel:#f6f8fa}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-size:16px;line-height:1.85;
+  font-family:"Segoe UI","PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,sans-serif}
+.wrap{display:flex;max-width:1400px;margin:0 auto;align-items:flex-start}
+.sidebar{position:sticky;top:0;width:270px;flex:0 0 270px;max-height:100vh;overflow:auto;
+  padding:32px 18px 48px 24px;border-right:1px solid var(--line);font-size:13.5px}
+.sidebar h4{margin:0 0 10px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
+.sidebar ol{list-style:none;margin:0;padding:0}
+.sidebar a{color:var(--ink-2);text-decoration:none;display:block;padding:3px 8px;border-radius:5px;line-height:1.5}
+.sidebar a:hover{background:var(--panel);color:var(--accent)}
+.sidebar .sub{padding-left:14px;font-size:13px}
+main{flex:1 1 auto;min-width:0;padding:40px 48px 90px}
+h1{font-size:30px;line-height:1.3;margin:0 0 6px}
+.doc-meta{color:var(--ink-2);font-size:14px;margin:0 0 34px;padding-bottom:18px;border-bottom:2px solid var(--ink)}
+h2{font-size:22px;margin:44px 0 14px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:30px 0 10px}
+h4{font-size:16px;margin:24px 0 8px}
+/* h5：契约 §4.5.3 用 ##### 写三级子标题（如"交易税的记账口径"）。
+   2026-09-19 修复：此前未定义 h5 样式，浏览器默认会把 h5 渲染成小号粗体，
+   与全文排版不一致；侧栏目录按 h2→h3/h4 两层构建，h5 不进目录（有意）。 */
+h5{font-size:14.5px;margin:20px 0 6px;color:#3a4149;letter-spacing:.01em}
+h5::before{content:"";display:inline-block;width:3px;height:.95em;margin-right:8px;
+  vertical-align:-.08em;background:#c6ccd4;border-radius:2px}
+p{margin:.7em 0}
+ul,ol{margin:.6em 0;padding-left:1.7em}
+li{margin:.3em 0}
+/* 引用块：文档头的"修订记录"与正文注释都用 > 书写，数量多且常整段出现，
+   故采用低调的浅灰底 + 深灰左边框；若用高饱和蓝色会整页发蓝、喧宾夺主。 */
+blockquote{margin:1.1em 0;padding:.7em 1.05em;background:#f7f8fa;
+  border-left:3px solid #c6ccd4;border-radius:0 6px 6px 0;color:#3a4149}
+blockquote p{margin:.3em 0}
+blockquote ul,blockquote ol{margin:.4em 0}
+blockquote strong{color:var(--ink)}
+blockquote ul,blockquote ol{margin:.4em 0}
+code{background:rgba(175,184,193,.2);padding:.15em .38em;border-radius:4px;
+  font-family:Consolas,"Cascadia Mono",Menlo,monospace;font-size:.9em}
+pre.code-block{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+  padding:12px 14px;overflow-x:auto}
+pre.code-block code{background:none;padding:0;font-size:13.5px;line-height:1.6}
+.equation{margin:1.25em 0;padding:.9em 1em;text-align:center;overflow-x:auto;
+  background:linear-gradient(180deg,#fbfcfd,#f6f8fa);border:1px solid var(--line);border-radius:8px}
+.table-wrap{overflow-x:auto;margin:1.2em 0}
+table{border-collapse:collapse;width:100%;font-size:14.5px;line-height:1.65}
+th,td{border-bottom:1px solid var(--line);padding:7px 12px;vertical-align:top}
+thead th{border-bottom:2px solid var(--ink);background:var(--panel);font-weight:600;white-space:nowrap}
+tbody tr:hover{background:#fafbfc}
+.left{text-align:left}.right{text-align:right}.center{text-align:center}
+tbody td.right{font-variant-numeric:tabular-nums}
+/* 数学公式：行内公式必须能在容器内换行，否则 nowrap 会把整段文字撑出视口、
+   右侧内容被硬截断（这是"公式显示异常"的主因，截图可见大批行尾被切掉）。
+   方案：inline-block 让公式整体可换行 + max-width 允许超长公式在其内部横向滚动。 */
+/* ===== 数学排版（配合 VC_Go/tools/mathrender.js 的输出）=====
+   设计要点：
+     · 上下标用标准 <sub>/<sup>，由浏览器原生渲染，不再平铺；
+     · 分式用纵向 flex + 上边框作分数线，可嵌套；
+     · 行内公式允许在容器内换行，避免 nowrap 把整段文字撑出视口。 */
+.math{font-family:"Cambria Math","Latin Modern Math","STIX Two Math",Cambria,"Times New Roman",Georgia,serif;
+  font-size:1.06em;color:#111;line-height:1.5}
+.math-inline{display:inline;white-space:normal}
+.mi{font-style:italic}
+.mn{font-style:normal}
+.mbf{font-weight:700}
+.mbb{font-family:"Cambria Math",Cambria,serif;font-weight:600}
+.mtext{font-family:inherit;font-style:normal}
+.mopname{font-style:normal;font-family:inherit;padding-right:.12em}
+.mo{padding:0 .04em}
+.mscript{white-space:nowrap}
+.msub{font-size:.72em;vertical-align:-.25em;line-height:0}
+.msup{font-size:.72em;vertical-align:.45em;line-height:0}
+/* 分式：纵向堆叠，分子下边框作分数线 */
+.mfrac{display:inline-flex;flex-direction:column;vertical-align:-.45em;text-align:center;
+  margin:0 .18em;line-height:1.15;font-size:.97em}
+.mfrac-d{font-size:1em}
+.mfrac-num{border-bottom:1.1px solid currentColor;padding:0 .3em .06em}
+.mfrac-den{padding:.06em .3em 0}
+/* 根号 */
+.msqrt{white-space:nowrap}
+.msqrt-sym{padding-right:.04em}
+.msqrt-body{border-top:1.1px solid currentColor;padding:.08em .18em 0 .06em}
+.msqrt-deg{font-size:.62em;vertical-align:.7em;margin-right:-.35em}
+/* 自适应括号 */
+.mdelim{font-size:1.15em;line-height:1}
+.mdelim-sm{font-size:1.02em}
+/* cases 环境：左侧表达式、右侧条件。
+   必须 width:auto + 仅按内容占宽，否则 inline-table 会撑满可用宽度，
+   把条件列推到很远、中间留出大片空白（目视即"公式错位"）。 */
+.mcases{display:inline-table;width:auto;vertical-align:middle;border-collapse:collapse;margin:0 .2em}
+.mcases td{border:none;padding:.05em 0 .05em 0;text-align:left;white-space:nowrap}
+.mcases td + td{padding-left:1.6em}
+.mcases tr:first-child td{padding-top:0}
+.mcases tr:last-child td{padding-bottom:0}
+.munknown{background:#fff1f0;border:1px solid #ffa39e;border-radius:3px;padding:0 .2em;color:#a8071a}
+.math-error{background:#fff1f0;border:1px solid #ffa39e;border-radius:4px;padding:0 .3em;color:#a8071a}
+hr{border:none;border-top:1px solid var(--line);margin:2.2em 0}
+a{color:var(--accent)}
+.doc-note{background:#fffbe6;border:1px solid #ffe58f;border-radius:8px;padding:.7em 1em;margin:1.1em 0}
+@media(max-width:1000px){.wrap{flex-direction:column}.sidebar{position:static;width:auto;flex:none;border-right:none;border-bottom:1px solid var(--line)}main{padding:24px 18px 60px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="sidebar"><h4>目录</h4>
+<ol>
+<li><a href="#h1-只读两个文档">只读两个文档</a>
+</li>
+<li><a href="#h2-复现命令">复现命令</a>
+</li>
+<li><a href="#h3-包结构-契约条文">包结构 → 契约条文</a>
+</li>
+<li><a href="#h4-当前状态-一句话">当前状态（一句话）</a>
+</li>
+</ol></nav>
+<main>
+<h1>叶赫那拉市场 · 1.0（Go 内核）</h1>
+<p class="doc-meta">叶赫那拉市场 · 由 <code>README.md</code> 经 <code>VC_Go/tools/md2html.js</code> 离线编译生成 · 完全自包含，无需联网</p>
+<p>把「政府 + 资本」两层主体的生产与市场模拟落成可编译、可测、可复现的 Go 工程。 <strong>本工作区根目录即项目根</strong>（对应 GitHub 仓库 <code>Telon-Y/YehenalaMarket</code> 的 <code>VC_Go/</code> 目录）。</p>
+<h2 id="h1-只读两个文档">只读两个文档</h2>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>文档</th><th>内容</th><th>网页版</th></tr>
+</thead>
+<tbody>
+<tr><td><strong><code>docs/ACTIVE.md</code></strong></td><td><strong>唯一入口</strong>：一句话状态 · 已验证结论 · 30 分钟恢复上下文 · <strong>§0 口径速查与 12 项修改意向登记处</strong> · 纪律 · §六 实现架构/记账内核/价格锚定/游戏可行性 · <strong>§七 R1–R44 全部订正记录</strong></td><td><code>docs/ACTIVE.html</code></td></tr>
+<tr><td><strong><code>docs/1.0 生产与市场模拟.md</code></strong></td><td><strong>契约唯一权威</strong>：§零 索引与裁决登记 · §一 版本目标 · §二 市场方程 · §三 商品与建筑 · §四 扩建/政府/资本 · §五 劳动工资 · §六 消费需求 · <strong>§七 GDP（7.1 名义 / 7.2 实际工农生产总值）</strong> · §八 主循环与验收判据 <strong>A1–A9</strong></td><td><code>docs/1.0 生产与市场模拟.html</code></td></tr>
+<tr><td><strong><code>docs/1.2 货币与金融.md</code></strong></td><td><strong>1.2 开发日志（未完成，非契约）</strong>：第一部分 = 自 1.0 迁入的 <strong>M1/M2/M3</strong>（个人投资 / 债务计息口径 / 玩家投资接口）；第二部分 = 用户 docx 的忠实转换。<strong>不推翻 1.0</strong>，需多轮迭代&quot;1.0 化&quot;</td><td><code>docs/1.2 货币与金融.html</code></td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>没有 md 阅读器？</strong> 打开 <strong><code>docs/index.html</code></strong>（文档索引页）。 其余历史文档（ARCHITECTURE / LEDGER / PRICE-ANCHOR / AUDIT / CHANGES / FEASIBILITY / 契约注释存档） 已并入上述两个文档的对应小节，原文移入 <strong><code>docs/archive/</code></strong>（仅证据、不再维护）。</p>
+</blockquote>
+<h2 id="h2-复现命令">复现命令</h2>
+<pre class="code-block"><code data-lang="powershell">$env:GOROOT=&quot;D:\Code\Go&quot;; $env:GOCACHE=&quot;D:\Code\YehenalaMarket\out\gocache&quot;
+$env:GOPATH=&quot;D:\Code\YehenalaMarket\out\gopath&quot;; $env:GOTMPDIR=&quot;D:\Code\YehenalaMarket\out\gotmp&quot;
+Set-Location D:\Code\YehenalaMarket\gosim
+
+go build ./... ; go vet ./...            # 均应 exit=0
+go test ./... -count=1                   # 常规：全绿
+
+$env:DSH_AUDIT=&quot;1&quot;
+go test ./internal/sim/ -v -count=1      # 审计：70 个测试全绿（全模块 119 通过 / 0 失败）
+go test ./internal/sim/ -run TestPrintAgriCapacityLimit -v   # 诊断：农业上限（耕地/劳动/专业农业停摆，R43）
+
+go run ./cmd/market-sim -ticks 10000     # 契约指定的验收长跑（20m 人口）
+go run ./cmd/market-sim -ticks 1000 -gov-startup 20 -welfare 6 -subsidy   # 校准臂：流动性 + 福利金 6 档 + 开发类补贴（R39）
+go run ./cmd/market-sim -ticks 1000 -unlimited-funds   # 诊断：投资池/国库恒 ∞（ACTIVE §七 R28）
+go run ./cmd/market-sim -ticks 1000 -price-mult 3      # 诊断：开局价 ×3（R31）
+go run ./cmd/market-sim -ticks 1000 -static-pcost      # 对照：钳制带回退到固定 P_ref（R32/R33）
+go run ./cmd/diag_govcash                # 货币守恒与借贷校验诊断
+
+# 一键重渲染全部文档为 HTML（含契约结构校验）
+powershell -ExecutionPolicy Bypass -File D:\Code\YehenalaMarket\tools\render_all.ps1</code></pre>
+<h2 id="h3-包结构-契约条文">包结构 → 契约条文</h2>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>路径</th><th>职责</th><th>契约依据</th></tr>
+</thead>
+<tbody>
+<tr><td><code>internal/num</code></td><td>定点数、矩阵求逆、幂法谱半径、钳制与插值</td><td>ACTIVE §6.2</td></tr>
+<tr><td><code>internal/model</code></td><td>商品、配方、建筑、消费组、财富档、全局参数</td><td>§3.1 §3.2 §3.3 §5 §6</td></tr>
+<tr><td><code>internal/calibrate</code></td><td>零利润价（<span class="math math-inline"><i class="mi">P</i><sub class="msub"><i class="mi">r</i><i class="mi">e</i><i class="mi">f</i></sub></span>）、加成价（<span class="math math-inline"><i class="mi">P</i><sub class="msub"><i class="mi">i</i><i class="mi">n</i><i class="mi">i</i><i class="mi">t</i></sub></span>）、谱半径校验、三表联合标定</td><td>§3.4</td></tr>
+<tr><td><code>internal/market</code></td><td>价格 ODE 的 RK4 积分、钳制带（动态 <span class="math math-inline"><i class="mi">P</i><sup class="msup"><span class="mn">0</span></sup><span class="mo">(</span><i class="mi">t</i><span class="mo">)</span></span>）、解析平衡态</td><td>§2.1–§2.4</td></tr>
+<tr><td><code>internal/produce</code></td><td>投入申报、等比配给、短缺惩罚、自给农场</td><td>§3.3 §4.2</td></tr>
+<tr><td><code>internal/consume</code></td><td>消费组、财富插值、权重购买、满足度、人口增长</td><td>§6.1–§6.5</td></tr>
+<tr><td><code>internal/build</code></td><td>扩建规则、两条投资栈、建造队列、完工归属、雇佣调整</td><td>§4.1–§4.4 §4.5.1b §5</td></tr>
+<tr><td><code>internal/cohort</code></td><td>人群与阶级现金池（3 阶级 × 13 场地 = 39 池；<strong>劳动结构逐建筑</strong>，§5 第 20 轮）</td><td>§5.1</td></tr>
+<tr><td><code>internal/ledger</code></td><td><strong>记账机制</strong>：账户、借贷相等校验、唯一注入入口（含 §5.3 的<strong>储蓄固定账户</strong>）</td><td>§4.5.3 / §5.3</td></tr>
+<tr><td><code>internal/book</code></td><td><strong>交易语义</strong>：每类流动一个方法，借贷两侧写在同一处（储蓄为<strong>两步</strong>过账）</td><td>§4.5.3 / §5.3</td></tr>
+<tr><td><code>internal/fiscal</code></td><td><strong>政府与资本</strong>：G1–G7</td><td>§4.5</td></tr>
+<tr><td><code>internal/sim</code></td><td>tick 管线、状态、快照、不变量、审计测试</td><td>§8</td></tr>
+<tr><td><code>internal/report</code></td><td>§8.4 判据 <strong>A1–A8</strong> 判定与诊断（<strong>A7/A8 已于 R39 接入</strong>）</td><td>§8.4</td></tr>
+<tr><td><code>cmd/market-sim</code></td><td>CLI 入口</td><td>—</td></tr>
+<tr><td><code>cmd/diag_govcash</code></td><td>货币守恒与债务机制诊断</td><td>§4.5.3 §4.5.4</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>记账分层的关键约定</strong>：<code>ledger</code> 只管&quot;借贷是否相等&quot;，<code>book</code> 只管&quot;这笔交易的业务语义&quot;； 所有余额只有一份（<code>ledger.Auditor</code>）。<strong>诊断代码不得重算分摊</strong>，必须取 <code>book</code> 返回的记账事实。</p>
+</blockquote>
+<h2 id="h4-当前状态-一句话">当前状态（一句话）</h2>
+<p><strong>记账层闭环 ✅</strong>（货币守恒、借贷 0 违规、政府分解与逐建筑对账残差 0、公共储备恒 0、消费代理余额恒 0）； <strong>第 20 轮（R44）十一项裁决已落地 6 项</strong>：§5 <strong>劳动结构按建筑分派</strong>（农业＝劳工/农民 7 元/工程师， 均薪 <strong>5.65</strong>、每级 <strong>28,250</strong> 元；宅邸庄园为<strong>独立的新阶级</strong>、暂与农业相同）、<strong>删除「全部工资用于消费」</strong>、 §5.3 储蓄改<strong>两步过账</strong>（结余 → <strong>储蓄固定账户</strong> → 投资池，<strong>记账</strong>）、<strong>土地等级 500 + 人口 10m</strong>、 §7.1 GDP 口径加入储蓄账户与投资池；另 5 项（投资冻结 / 消费者博弈 / 满足度改全消费品 / 生活水平参数 / 消费品目录）已登记在契约 §0.4 待办。</p>
+<blockquote>
+<p><strong>⚠️ 现行基线（耕地 1,000 + 人口 5m，第 24 轮）</strong>： <strong>1,000 tick 4/9</strong>（总级数 123 → 304、实际增加值指数 1.433）；<strong>10,000 tick 4/9 但不再归零</strong> （末态人口约 314 万、实际增加值指数 4.153、总级数 5,494）。 <strong>待解决的根因（第 25 轮已定位到具体环节）</strong>：① 扩建<strong>意向是产生的</strong>（工具厂 +68% → 0.50 级、 铁矿 +59% → 1.24、炼钢 +51% → 0.50），② 但它们<strong>没变成订单</strong>，③ <strong>G2 采购被 §4.5.4 的可动用资金 压到 1/4</strong>（tick 1000：政府现金 −6.78e7、债务上限 3.14e7 ⇒ 可动用≈0，只买 28.5 单位， 而需求约 120）——<strong>根因是契约 §0.4 第 2 项&quot;债务上限只按建造力产出计价&quot;</strong>。 三项实验同时否证了&quot;篮子太小&quot;与&quot;门类不够&quot;（篮子 2×/3×、建造吞吐 15× 都不改善判据）。 逐条见 <code>docs/ACTIVE.md</code> §七 <strong>R44–R49</strong>；契约 §0.4 第 2/24/25 项。 （本项目除 §6.3 需求表有一部分自编外，其余商品/消费组/建筑/工资表均以 <strong>v3 = 维多利亚 3</strong> 为参考。）</p>
+</blockquote>
+</main>
+</div>
+</body>
+</html>

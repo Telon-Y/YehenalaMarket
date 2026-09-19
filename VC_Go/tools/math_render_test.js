@@ -9,7 +9,7 @@ const samples = [
   ['希腊字母', '$\\varepsilon$、$\\zeta$、$\\rho$、$\\omega$、$\\Delta$、$\\pi$'],
   ['分式', '$D = a\\left(\\frac{P}{P_0}\\right)^{-\\varepsilon}$'],
   ['分式嵌套上标', '$D_{\\text{基础食物}}(w) = \\frac{420}{1 + e^{-0.25\\,(w - 10)}}$'],
-  ['复杂分式', '$m = \\frac{K(P)\\,T^2}{4\\pi^2},\\qquad \\rho = \\frac{\\zeta\\,K(P)\\,T}{\\pi}$'],
+  ['复杂分式', '$\\rho = 2\\zeta\\sqrt{m\\,K(P)},\\qquad T = 2\\pi\\sqrt{\\frac{m}{K(P)}}$'],
   ['带括号的指数', '$D(w) = C - (C - 20)\\,e^{-b\\,(w - 5)}$'],
   ['转置', '$p = A^{\\top}p + l$'],
   ['根号', '$\\sqrt{mK}$ 与 $\\sqrt[3]{x}$'],

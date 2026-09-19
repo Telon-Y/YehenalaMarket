@@ -41,7 +41,8 @@ const OVER = {
   tier: 10, sub: 0.05,
 };
 
-const T_PERIOD = 26, ZETA = 0.7, NSUB = 10, H = 0.05, TPY = 52;
+// §2.3（2026-09-19 改）：惯性 m ≡ 当期流通量、T = 2π√(m/K) 内生，已无 T_PERIOD 旋钮
+const ZETA = 0.7, NSUB = 10, H = 0.05, TPY = 52;
 const WAGE_PER_LEVEL = 5000 * 6.75;
 const FIN_WAGE_LEVEL = 1000 * (0.75 * 5 + 0.20 * 10 + 0.05 * 20);
 const DECAY_WINDOW = 156, DECAY_RATE = 0.05, IDLE_HR = 0.75;
@@ -202,9 +203,10 @@ function tick(M) {
   const E = D.map((d, i) => d - Y[i]);
   for (let i = 0; i < N; i++) {
     const K = (EPS[i] * M.a[i] / Pc[i]) * Math.pow(P[i] / Pc[i], -EPS[i] - 1);
-    let mm = (K * T_PERIOD * T_PERIOD) / (4 * Math.PI * Math.PI);
-    let rho = (ZETA * K * T_PERIOD) / Math.PI;
+    // §2.3（2026-09-19 改）：惯性 m ≡ 当期市场内流通商品量 S；ρ = 2ζ√(m·K)
+    let mm = Y[i];
     if (!isFinite(mm) || mm <= 0) mm = 1e-9;
+    let rho = 2 * ZETA * Math.sqrt(mm * K);
     if (!isFinite(rho) || rho < 0) rho = 0;
     let p = P[i], v = M.dP[i];
     const fl = 0.2 * Pc[i], ce = 5 * Pc[i];

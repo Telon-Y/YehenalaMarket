@@ -24,7 +24,8 @@ const REC = [
   { q: 90, inp: [[6, 60], [5, 30]] }, { q: 80, inp: [[7, 20]] }, { q: 60, inp: [[7, 5], [8, 5]] },
   { q: 15, inp: [[7, 25], [6, 25], [8, 20]] },
 ];
-const T_PERIOD = 26, ZETA = 0.7, DT = 0.5, NSUB = 10, H = DT / NSUB;
+// §2.3（2026-09-19 改）：惯性 m ≡ 当期流通量、T = 2π√(m/K) 内生，已无 T_PERIOD 旋钮
+const ZETA = 0.7, DT = 0.5, NSUB = 10, H = DT / NSUB;
 const ARABLE = 10000;
 const SUB = 0.05;
 
@@ -123,9 +124,10 @@ function simulate(ticks, P0vec) {
     const Pnew = new Array(N), dPnew = new Array(N);
     for (let i = 0; i < N; i++) {
       const K = (EPS[i] * a[i] / PCOST[i]) * Math.pow(P[i] / PCOST[i], -EPS[i] - 1);
-      let mm = (K * T_PERIOD * T_PERIOD) / (4 * Math.PI * Math.PI);
-      let rho = (ZETA * K * T_PERIOD) / Math.PI;
+      // §2.3（2026-09-19 改）：惯性 m ≡ 当期市场内流通商品量 S；ρ = 2ζ√(m·K)
+      let mm = Yfixed[i];
       if (!isFinite(mm) || mm <= 0) mm = 1e-9;
+      let rho = 2 * ZETA * Math.sqrt(mm * K);
       if (!isFinite(rho) || rho < 0) rho = 0;
       let p = P[i], v = dP[i];
       const fl = 0.2 * PCOST[i], ce = 5 * PCOST[i];

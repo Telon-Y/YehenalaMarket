@@ -7,6 +7,7 @@
 //   ④ 目录锚点与标题 id 是否一一对应
 //   ⑤ 是否有未渲染的 LaTeX 残留或 math-error
 //   ⑥ 标签配对（blockquote / table / ul / ol / li / p / h* 开闭数量）
+//   ⑦ 标签严格嵌套（栈校验：⑥ 只数个数，查不出"</li> 放错位置"这类错误）
 //
 // 运行：node VC_Go/tools/html_audit.js "VC_Go/docs/1.0 生产与市场模拟.html"
 'use strict';
@@ -110,12 +111,54 @@ if (uniqLeft.length) problems.push(`LaTeX 残留：${uniqLeft.slice(0, 5).join('
 
 // ⑥ 标签配对
 console.log('\n⑥ 标签配对：');
-for (const tag of ['blockquote', 'table', 'ul', 'ol', 'li', 'p', 'h2', 'h3', 'h4', 'div']) {
+for (const tag of ['blockquote', 'table', 'ul', 'ol', 'li', 'p', 'h2', 'h3', 'h4', 'h5', 'div']) {
   const open = count(new RegExp(`<${tag}[ >]`, 'g'));
   const close = count(new RegExp(`</${tag}>`, 'g'));
   const ok = open === close;
   console.log(`   ${ok ? '✅' : '❌'} <${tag}> ${open} / </${tag}> ${close}`);
   if (!ok) problems.push(`<${tag}> 开闭不配对：${open} vs ${close}`);
+}
+
+// ⑦ 标签严格嵌套
+//
+// ⑥ 只比较开闭【个数】——个数相等并不代表位置正确。反例（2026-09-19 实际出现过）：
+//   <ul><li>父项：<ul></li><li>子项</li></ul><li>同级项</li></ul>
+// <ul>/<li> 的个数完全相等，⑥ 判定通过；但浏览器会把那个 </li> 读成"父项结束"，
+// 于是子项被当成同级项，嵌套缩进整个丢失。这里用栈做严格的成对嵌套校验，
+// 并把出错位置换算成行号，便于直接定位到渲染器或源文档。
+console.log('\n⑦ 标签严格嵌套：');
+{
+  const VOID = new Set(['br', 'hr', 'img', 'meta', 'link', 'input', 'col', 'area', 'base', 'source']);
+  const bodyStart = html.indexOf('<body>');
+  const bodyEnd = html.lastIndexOf('</body>');
+  const scope = bodyStart >= 0 && bodyEnd > bodyStart ? html.slice(bodyStart, bodyEnd + 7) : html;
+  const lineOf = (pos) => scope.slice(0, pos).split('\n').length;
+  const tagRe = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:"[^"]*"|[^>"])*)>/g;
+  const stack = [];
+  const nesting = [];
+  let m;
+  while ((m = tagRe.exec(scope))) {
+    const closing = m[1] === '/';
+    const name = m[2].toLowerCase();
+    const attrs = m[3] || '';
+    if (VOID.has(name) || /\/\s*$/.test(attrs)) continue;
+    if (!closing) { stack.push({ name, pos: m.index }); continue; }
+    const top = stack.pop();
+    if (!top) {
+      nesting.push(`多余的 </${name}>（第 ${lineOf(m.index)} 行）`);
+    } else if (top.name !== name) {
+      nesting.push(`<${top.name}>（第 ${lineOf(top.pos)} 行）与 </${name}>（第 ${lineOf(m.index)} 行）交叉嵌套`);
+      stack.push(top); // 恢复栈顶，避免一处错误引发连锁误报
+    }
+  }
+  for (const s of stack) nesting.push(`<${s.name}> 未闭合（第 ${lineOf(s.pos)} 行）`);
+  if (nesting.length) {
+    problems.push(`标签嵌套错误 ${nesting.length} 处：${nesting.slice(0, 3).join('；')}`);
+    console.log(`   ❌ ${nesting.length} 处：`);
+    nesting.slice(0, 10).forEach((n) => console.log('      - ' + n));
+  } else {
+    console.log('   ✅ 全部标签成对且严格嵌套');
+  }
 }
 
 console.log('\n' + '='.repeat(50));

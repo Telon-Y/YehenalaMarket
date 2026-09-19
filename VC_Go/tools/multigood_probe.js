@@ -30,7 +30,8 @@ const _log = console.log.bind(console);
 console.log = (...a) => { const s = a.map(String).join(' '); OUT.push(s); _log(s); };
 
 const TICKS = Number(process.argv[2] || 10000);
-const T_PERIOD = 26, ZETA = 0.7, DT = 0.5, NSUB = 10, H = DT / NSUB;
+// §2.3（2026-09-19 改）：惯性 m ≡ 当期流通量、T = 2π√(m/K) 内生，已无 T_PERIOD 旋钮
+const ZETA = 0.7, DT = 0.5, NSUB = 10, H = DT / NSUB;
 const TICKS_PER_YEAR = 52;
 const WAGE_PER_LEVEL = 5000 * 6.75;      // §5 = 33,750 元/级/周期
 const WAGE_TIER = [5, 10, 20];           // 资本家实际工资 20，见 §6.3 插值上限
@@ -245,9 +246,10 @@ function tick(M) {
   const K = new Array(N), mm = new Array(N), rho = new Array(N);
   for (let i = 0; i < N; i++) {
     K[i] = (EPS[i] * M.a[i] / Pc[i]) * Math.pow(P[i] / Pc[i], -EPS[i] - 1);
-    mm[i] = (K[i] * T_PERIOD * T_PERIOD) / (4 * Math.PI * Math.PI);
-    rho[i] = (ZETA * K[i] * T_PERIOD) / Math.PI;
+    // §2.3（2026-09-19 改）：惯性 m ≡ 当期市场内流通商品量 S；ρ = 2ζ√(m·K)
+    mm[i] = S[i];
     if (!isFinite(mm[i]) || mm[i] <= 0) mm[i] = 1e-9;
+    rho[i] = 2 * ZETA * Math.sqrt(mm[i] * K[i]);
     if (!isFinite(rho[i]) || rho[i] < 0) rho[i] = 0;
   }
   let clampEvents = 0;

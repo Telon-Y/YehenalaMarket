@@ -161,7 +161,8 @@ _log('已写入 out/expansion_probe.txt');
 // F. 完整单商品模拟：含 雇佣率 / 解雇 / 缩编 / ODE 价格动态
 //    检验 §8「10,000 周期后利润率趋近于零」在文档规则下是否成立
 // ============================================================
-const T_PERIOD = 26, ZETA = 0.7, DT = 0.5, NSUB = 10, H = DT / NSUB;
+// §2.3（2026-09-19 改）：惯性 m ≡ 当期流通量、T = 2π√(m/K) 内生，已无 T_PERIOD 旋钮
+const ZETA = 0.7, DT = 0.5, NSUB = 10, H = DT / NSUB;
 
 function fullSim(i, opts) {
   const e = EPS[i], P0 = PCOST[i], r = PINIT[i] / P0;
@@ -202,8 +203,9 @@ function fullSim(i, opts) {
     // --- 3. 价格 ODE（工作点用当期价格）---
     const E = a * Math.pow(P / P0, -e) - Y;
     const K = (e * a / P0) * Math.pow(P / P0, -e - 1);
-    const m = (K * T_PERIOD * T_PERIOD) / (4 * Math.PI * Math.PI);
-    const rho = (ZETA * K * T_PERIOD) / Math.PI;
+    // §2.3（2026-09-19 改）：惯性 m ≡ 当期市场内流通商品量 S；ρ = 2ζ√(m·K)
+    const m = (isFinite(Y) && Y > 0) ? Y : 1e-9;
+    const rho = 2 * ZETA * Math.sqrt(m * K);
     const f = (Pv, V) => [V, (E - rho * V) / m];
     for (let s = 0; s < NSUB; s++) {
       const [k1a, k1b] = f(P, dP);

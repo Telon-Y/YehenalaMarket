@@ -98,7 +98,8 @@ for (let i = 0; i < n; i++) {
 
 // ---- D. 单商品动力学：ODE 是否收敛到 P_cost ----
 console.log('\n=== D. 单商品 ODE 收敛性（给定 S 固定，看 P 是否收敛到 P*） ===');
-const T = 26, zeta = 0.7, dt = 0.5, nsub = 10, h = dt / nsub;
+// §2.3（2026-09-19 改）：惯性 m ≡ 当期流通量、T = 2π√(m/K) 内生，已无 T 旋钮
+const zeta = 0.7, dt = 0.5, nsub = 10, h = dt / nsub;
 function simFixedS(i, S, ticks) {
   const e = EPS[i], r = PINIT_DOC[i] / PCOST[i];
   const a = S * Math.pow(r, e);          // 标定使 x=1 时 E=0
@@ -107,8 +108,9 @@ function simFixedS(i, S, ticks) {
     for (let s = 0; s < nsub; s++) {
       const E = (Pv) => a * Math.pow(Pv / PCOST[i], -e) - S;
       const K = (Pv) => (e * a / PCOST[i]) * Math.pow(Pv / PCOST[i], -e - 1);
-      const m = (Pv) => (K(Pv) * T * T) / (4 * Math.PI * Math.PI);
-      const rho = (Pv) => (zeta * K(Pv) * T) / Math.PI;
+      // §2.3（2026-09-19 改）：惯性 m ≡ 当期市场内流通商品量 S；ρ = 2ζ√(m·K)
+      const m = () => Math.max(S, 1e-9);
+      const rho = (Pv) => 2 * zeta * Math.sqrt(m() * K(Pv));
       const f = (Pv, V) => [V, (E(Pv) - rho(Pv) * V) / m(Pv)];
       const [k1a, k1b] = f(P, dP);
       const [k2a, k2b] = f(P + h / 2 * k1a, dP + h / 2 * k1b);
