@@ -12,6 +12,10 @@ PASS  criteria table filled (9) (=9)
 == 3) canvas scale attributes present (charts really drew) ==
 PASS  every canvas wrote its scale (=6)
 
+== 3b) ratio charts keep a meaningful minimum span ==
+PASS  c-full span >= 1.5x (min-span guard active) (=2.000x [0.49999999999999994 .. 1])
+PASS  c-recent span >= 1.2x (=2.475x [677.9881330744126 .. 1678.344])
+
 == 4) browser console / page errors ==
 PASS  no JS errors in console (=)
 

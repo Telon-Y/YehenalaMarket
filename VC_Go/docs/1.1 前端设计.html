@@ -155,7 +155,7 @@ a{color:var(--accent)}
 </li>
 <li><a href="#h26-十-视觉稿-web-mockup-html-与它回报给设计的三个问题">十、视觉稿（web/mockup.html）与它回报给设计的三个问题</a>
 <ol class="sub">
-<li><a href="#h27-10-1-由-V4-定下的两条硬规则-写实现时必须遵守">10.1 由 V4 定下的两条硬规则（写实现时必须遵守）</a></li>
+<li><a href="#h27-10-1-由-V4-定下的三条硬规则-写实现时必须遵守">10.1 由 V4 定下的三条硬规则（写实现时必须遵守）</a></li>
 <li><a href="#h28-10-2-这条-bug-的验证方法-已固化为脚本">10.2 这条 bug 的验证方法（已固化为脚本）</a></li>
 </ol>
 </li>
@@ -423,15 +423,16 @@ go run ./cmd/market-sim -ticks 1000 -export-dir ..\out\webdata -serve :8787
 <blockquote>
 <p><strong>V3 尤其值得记住</strong>：视觉稿的假数据如果&quot;看起来像机制&quot;，评审时就会把演示瑕疵当成模型行为。 故契约 §四 的&quot;不显示仓库纯利&quot;之外，建议再加一条：<strong>假数据不得制造模型不存在的形态</strong>。</p>
 </blockquote>
-<h3 id="h27-10-1-由-V4-定下的两条硬规则-写实现时必须遵守">10.1 由 V4 定下的两条硬规则（写实现时必须遵守）</h3>
+<h3 id="h27-10-1-由-V4-定下的三条硬规则-写实现时必须遵守">10.1 由 V4 定下的三条硬规则（写实现时必须遵守）</h3>
 <div class="table-wrap">
 <table>
 <thead>
 <tr><th>规则</th><th>内容</th><th>为什么</th></tr>
 </thead>
 <tbody>
-<tr><td><strong>R-scale</strong></td><td><strong>轴范围不得依赖可见性</strong>。范围由<strong>全量数据</strong>算一次；隐藏某条序列<strong>只移除该条线的像素</strong>，不动网格、不动刻度、不动坐标映射</td><td>否则&quot;隐藏一条线&quot;会被读成&quot;剩下的线变陡了&quot;——<strong>这是误导，不是缩放</strong>。若将来要提供&quot;聚焦模式&quot;，必须做成<strong>显式开关</strong>并提示轴已变，不能因隐藏而隐式发生</td></tr>
-<tr><td><strong>R-zero</strong></td><td>防零除必须用<strong>相对量</strong>：`mx = mn + (</td><td>mn</td></tr>
+<tr><td><strong>R-scale</strong></td><td><strong>轴范围不得依赖可见性</strong>：范围由<strong>未隐藏的全体序列</strong>算出；隐藏某条序列<strong>只移除该条线的像素</strong>，不动网格/刻度/坐标映射。<strong>范围跟随可见窗口</strong>（窗口变化才重算，同一窗口内由 <code>windowKey</code> 冻结）</td><td>否则&quot;隐藏一条线&quot;会被读成&quot;剩下的线变陡了&quot;——<strong>这是误导，不是缩放</strong>。将来若要做&quot;聚焦模式&quot;，必须是<strong>显式开关</strong>并提示轴已变</td></tr>
+<tr><td><strong>R-span</strong></td><td><strong>比值类图必须有最小量程</strong>。归一化曲线的早期跨度≈1（tick 1 时<strong>恰好</strong>为 1）；若按数据自适应，轴会被放大到 ±0.5%，任何微小抖动都铺满整张图。实现为 <code>minSpanRatio</code>，并由 <strong><code>minLower</code> 决定往哪撑</strong>：比值图把下界限制在 <code>1/√span</code>，使<strong>基期值落在量程顶部</strong>（指数只可能往下走，上方不留空白）</td><td>数据跨度≈1 是<strong>完全合法</strong>的状态，不该靠&quot;防零除&quot;去撑它</td></tr>
+<tr><td><strong>R-zero</strong></td><td>防零除<strong>只作最后的安全网</strong>，且必须放在范围决策<strong>之后</strong>。历史教训：把 `mx = mn + (</td><td>mn</td></tr>
 </tbody>
 </table>
 </div>

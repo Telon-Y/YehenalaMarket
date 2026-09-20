@@ -120,7 +120,7 @@ function renderTick() {
   renderBuild(r);
   renderQueue(r);
   renderStatus(r);
-  renderOtherTick(r);     // 逐 tick 变化的图（GDP/实际/债务/饼图）
+  renderOtherTick(r);
 }
 
 // ---------------------------------------------------------------- 市场页
@@ -179,6 +179,7 @@ function drawRecent() {
     log: true, base: 1,
     nodesc: ROWS[hi] ? ROWS[hi].tick : hi,
     cursor: hi - lo,
+    minSpanRatio: 1.5,          // 同 c-full：比值图需要最小量程，否则早期被放大成噪声
     lines: [
       { data: seg(hist.price[i]), color: COLORS[i % COLORS.length], width: 1.8 },
       { data: seg(hist.price[(i + 1) % META.goods.length]), color: COLORS[(i + 1) % COLORS.length], width: 1.2 },
@@ -194,6 +195,11 @@ function drawFull() {
     n: data.length, log: true, base: 1,
     cursor: data.length - 1,
     windowKey: data.length,                         // 同一窗口内比例尺冻结
+    // 归一化曲线的早期跨度≈1（tick 1 时恰好为 1）⇒ 必须给最小量程，
+    // 否则轴被放大到 ±0.5%，任何微小抖动都铺满整张图（就是"比例尺异常"）。
+    // minLower 让**基期 1 落在量程顶部**：指数只可能往下走，上方不该留大段空白。
+    minSpanRatio: 2.0,
+    minLower: 1 / Math.sqrt(2.0),
     lines: [{ data, color: COLORS[i % COLORS.length], width: 1.8 }],
   });
 }

@@ -48,8 +48,10 @@ const CHART = (() => {
     }
     if (!isFinite(mn)) { mn = 0; mx = 1; }
     if (log) mn = Math.max(mn, 1e-9);
-    // R-zero：相对量兜底，绝不 mx = mn + 1
-    if (!(mx > mn)) mx = mn + (Math.abs(mn) * 0.01 + 1);
+    // 【不要在这里做防零除兜底】历史上这里有一句 mx = mn + (|mn|*0.01+1)，
+    // 它在 mn===mx===1（归一化曲线的 tick 1，完全合法）时把范围撑成 [1, 2.01]，
+    // 于是下游的最小量程逻辑看到"跨度已够"就跳过 —— 一个兜底把另一个修复屏蔽掉。
+    // 兜底只作**最后的安全网**，放在范围决策（expandToMinSpan）之后。
     return [mn, mx];
   }
 
@@ -57,6 +59,31 @@ const CHART = (() => {
   // 为什么这么做：以前用全量数据算范围，而图只画到光标处 ⇒ 早期数据被压在底部、
   // 拖动进度条时"图看着变了"。改成窗口口径后，x 轴与 y 轴都只覆盖看得见的部分。
   function windowed(data, len) { return data.slice(0, Math.max(1, Math.min(data.length, len))); }
+
+  /**
+   * 最小相对跨度：把范围撑开到至少 span 倍（默认 1，即不撑）。
+   *
+   * 【为什么需要】"全期价格指数"这类归一化曲线在早期**跨度≈1**（tick 1 时恰好等于 1）。
+   * 若按数据自适应，坐标轴会被放大到 ±0.5% 的尺度，于是任何微小数值抖动都铺满整张图，
+   * 看起来就是"比例尺异常"。这类比值图必须有一个**有意义的最小量程**。
+   *
+   * 【往哪撑】用 minLower 指定下界的上限：比值图把 minLower 设为 1/h（h=√span），
+   * 使**基期值恰好落在量程顶部**——因为指数只可能往下走，线上方不该留大段空白。
+   */
+  function expandToMinSpan(mn, mx, log, span, minLower) {
+    if (!(span > 1)) return [mn, mx];
+    if (!(mx > mn) || (log ? (mx / mn) : (mx - mn)) < span) {
+      if (log) {
+        let c = Math.sqrt(Math.max(mn, 1e-12) * Math.max(mx, mn));
+        if (minLower > 0) c = Math.min(c, minLower);
+        const h = Math.sqrt(span);
+        return [c / h, c * h];
+      }
+      const c = (mn + mx) / 2;
+      return [c - span / 2, c + span / 2];
+    }
+    return [mn, mx];
+  }
 
   /**
    * 画多序列折线。
@@ -87,6 +114,11 @@ const CHART = (() => {
       if (freeze) frozen.set(cv, { mn, mx, key });
     }
     if (opts.log) mn = Math.max(mn, 1e-9);
+    // 先撑到最小量程，再兜底防零除（顺序很重要：先撑开才不会退化成 ±0.5%）
+    const span = opts.minSpanRatio || 1;
+    const minLower = opts.minLower || 0;
+    [mn, mx] = expandToMinSpan(mn, mx, !!opts.log, span, minLower);
+    // 最后的安全网：只有在范围仍然退化时才生效（见 rangeOf 的注释）
     if (!(mx > mn)) mx = mn + (Math.abs(mn) * 0.01 + 1);
 
     const isLog = !!opts.log;

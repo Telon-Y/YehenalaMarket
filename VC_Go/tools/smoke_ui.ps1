@@ -69,16 +69,28 @@ $url = "http://localhost:$Port/"
 Write-Host ("server: {0}" -f $url) -ForegroundColor Cyan
 
 # ---- headless run: capture console + exercise interactions ----
+# IMPORTANT: run it through Start-Process -Wait, NOT `cmd /c "... 2> file"`.
+# `--enable-logging=stderr` makes the browser hold the stderr handle open, and cmd only
+# closes the redirect when the child exits -- which made this script hang and, worse,
+# leave the PREVIOUS report file in place (I read a stale report for two rounds because
+# of exactly that). Start-Process also gives us an explicit timeout we can enforce.
 $probe = Join-Path $env:TEMP 'smoke_ui_dump.html'
+$errFile = Join-Path $env:TEMP 'smoke_ui_dump.err'
 Remove-Item $probe -Force -ErrorAction SilentlyContinue
+Remove-Item $errFile -Force -ErrorAction SilentlyContinue
 $common = @('--headless=new','--disable-gpu','--hide-scrollbars','--force-device-scale-factor=1',
             '--virtual-time-budget=25000','--no-first-run','--no-default-browser-check',
-            '--enable-logging=stderr','--v=0')
+            '--enable-logging=stderr','--v=0','--disk-cache-size=1','--disable-application-cache',
+            '--dump-dom', $url)
 
-# We inject a harness through a data: URL wrapper is not possible; instead we rely on
-# --dump-dom for the final DOM and on stderr for console errors.
-& cmd /c "`"$edge`" $($common -join ' ') --dump-dom `"$url`" > `"$probe`" 2> `"$probe.err`""
-Start-Sleep -Seconds 2
+$proc = Start-Process -FilePath $edge -ArgumentList $common -PassThru -NoNewWindow `
+    -RedirectStandardOutput $probe -RedirectStandardError $errFile
+if (-not $proc.WaitForExit(60000)) {
+    Write-Host 'browser did not exit within 60s - killing it' -ForegroundColor Yellow
+    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+}
+Start-Sleep -Milliseconds 500
 
 $dom = $null
 for ($i = 0; $i -lt 40; $i++) {
@@ -87,7 +99,6 @@ for ($i = 0; $i -lt 40; $i++) {
 if (-not $dom) { Stop-Job $server; Remove-Job $server -Force; throw 'could not read the DOM dump' }
 
 $errText = ''
-$errFile = "$probe.err"
 if (Test-Path $errFile) {
     for ($i = 0; $i -lt 20; $i++) {
         try { $errText = [System.IO.File]::ReadAllText($errFile, [System.Text.Encoding]::UTF8); break } catch { Start-Sleep -Milliseconds 250 }
@@ -133,6 +144,32 @@ Say ''
 Say '== 3) canvas scale attributes present (charts really drew) =='
 $scales = [regex]::Matches($dom, 'data-ticks="([^"]*)"')
 Check 'every canvas wrote its scale' ($scales.Count -ge 6) $scales.Count
+
+Say ''
+Say '== 3b) ratio charts keep a meaningful minimum span =='
+# Background: at tick 1 a normalised price index is exactly 1, so the data span is 1.000000x.
+# Without a minimum span the axis collapses to +-0.5% and micro-jitter fills the whole chart
+# ("the scale looks broken"). The ratio charts therefore request minSpanRatio.
+function AxisOf($id, $dom) {
+    $m = [regex]::Match($dom, '<canvas id="' + $id + '"[^>]*>')
+    $mn = [regex]::Match($m.Value, 'data-ymin="([^"]*)"').Groups[1].Value
+    $mx = [regex]::Match($m.Value, 'data-ymax="([^"]*)"').Groups[1].Value
+    return @($mn, $mx)
+}
+$full = AxisOf 'c-full' $dom
+if ($full[0] -and $full[1] -and [double]$full[0] -gt 0) {
+    $span = [double]$full[1] / [double]$full[0]
+    Check 'c-full span >= 1.5x (min-span guard active)' ($span -ge 1.5) ('{0:N3}x [{1} .. {2}]' -f $span, $full[0], $full[1])
+} else {
+    Check 'c-full span readable' $false ("ymin=$($full[0]) ymax=$($full[1])")
+}
+$recent = AxisOf 'c-recent' $dom
+if ($recent[0] -and $recent[1] -and [double]$recent[0] -gt 0) {
+    $span2 = [double]$recent[1] / [double]$recent[0]
+    Check 'c-recent span >= 1.2x' ($span2 -ge 1.2) ('{0:N3}x [{1} .. {2}]' -f $span2, $recent[0], $recent[1])
+} else {
+    Check 'c-recent span readable' $false ("ymin=$($recent[0]) ymax=$($recent[1])")
+}
 
 Say ''
 Say '== 4) browser console / page errors =='
