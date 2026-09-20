@@ -1,0 +1,11 @@
+﻿server: started by this script on port 8787
+window: pid=36696 title='叶赫那拉市场 · 1.1 - 个人 - Microsoft​ Edge'  rect=0,0 1680x900
+interval=5s   shots=5   speed=x5
+
+[ 0] t=   0s  shot-00-t   0s.png     156424 bytes
+[ 1] t=   5s  shot-01-t   5s.png     155588 bytes
+[ 2] t=  10s  shot-02-t  10s.png     157165 bytes
+[ 3] t=  15s  shot-03-t  15s.png     157364 bytes
+[ 4] t=  20s  shot-04-t  20s.png     157320 bytes
+
+shots dir: D:\Code\YehenalaMarket\out\review\live

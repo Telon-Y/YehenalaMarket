@@ -1,0 +1,6 @@
+﻿server: not alive -> starting one
+server: started
+open: http://localhost:8787/?rate=instant&shots=2
+window: pid=37956 title='叶赫那拉市场 · 1.1 - 个人 - Microsoft​ Edge' 1500x940
+waiting 18s for the replay to advance...
+capture: D:\Code\YehenalaMarket\out\review\auto\window.png  (129686 bytes, PrintWindow=True)

@@ -19,11 +19,14 @@ let cur = 0;                 // 当前行下标（不是 tick）
 // 播放速度用"每 tick 多少帧"表达（契约 §五：N = 60 ÷ tick/秒）。
 // 新增 1/8×：为"慢速逐步模拟"准备——每 8 个 tick 才推进 1 个，肉眼可以逐步看。
 const SPEEDS = [
-  { key: '0',   label: '⏸', framesPerTick: 0,    rate: 0 },
-  { key: '1/8', label: '×1/8', framesPerTick: 480, rate: 60 / 480 },
-  { key: '1',   label: '×1',   framesPerTick: 60,  rate: 1 },
-  { key: '2',   label: '×2',   framesPerTick: 30,  rate: 2 },
-  { key: '5',   label: '×5',   framesPerTick: 12,  rate: 5 },
+  { key: '0',     label: '⏸',   framesPerTick: 0,    rate: 0 },
+  { key: '1/8',   label: '×1/8', framesPerTick: 480, rate: 60 / 480 },
+  { key: '1',     label: '×1',   framesPerTick: 60,  rate: 1 },
+  { key: '2',     label: '×2',   framesPerTick: 30,  rate: 2 },
+  { key: '5',     label: '×5',   framesPerTick: 12,  rate: 5 },
+  // 【验收特供】无限速：每帧推进一个 tick，300 期约 5 秒跑完。
+  // 供"每周自动存档"的验收流程使用（页面自存胶片条，见 ?shots=）。
+  { key: 'instant', label: '∞', framesPerTick: 1,  rate: 60 },
 ];
 let speedKey = '1';
 let frameAcc = 0, lastTs = 0;   // 帧与 tick 解耦：帧数恒定，tick 按 framesPerTick 推进
@@ -111,6 +114,44 @@ function frame(ts) {
   requestAnimationFrame(frame);
 }
 
+// ---------------------------------------------------------------- 验收特供：页内自动存档
+// ?shots=<N> 每 N 个 tick 把整页"画布"存成一张缩略图，追加到胶片条 #filmstrip。
+// 这样"每周（tick）自动保存截图"由页面自己完成，外部只需在胶片条铺满后截一次全窗。
+// 说明：这里存的是 canvas 快照（canvas 可 toDataURL），不是浏览器级别的屏幕截图——
+// 目的正是"不依赖任何外部截图工具"。
+let shotEvery = 0, shotsTaken = 0, lastShotTick = -1;
+function maybeShoot(tick) {
+  if (!shotEvery) return;
+  if (tick - lastShotTick < shotEvery && lastShotTick >= 0) return;
+  lastShotTick = tick;
+  const strip = $('#filmstrip');
+  if (!strip) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'shot';
+  const caps = [];
+  $$('canvas').forEach(src => {
+    const c = document.createElement('canvas');
+    const scale = 0.34;                       // 缩略图，避免胶片条过大
+    c.width = Math.max(1, Math.round(src.width * scale));
+    c.height = Math.max(1, Math.round(src.height * scale));
+    try {
+      const g = c.getContext('2d');
+      g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(src, 0, 0, c.width, c.height);
+    } catch (e) { }
+    caps.push(c);
+  });
+  const label = document.createElement('div');
+  label.className = 'cap';
+  label.textContent = 'tick ' + tick;
+  wrap.appendChild(label);
+  caps.forEach(c => wrap.appendChild(c));
+  strip.appendChild(wrap);
+  shotsTaken++;
+  document.title = 'shots=' + shotsTaken + ' tick=' + tick;
+  strip.scrollLeft = strip.scrollWidth;
+}
+
 function renderTick() {
   const r = ROWS[cur];
   if (!r) return;
@@ -121,6 +162,7 @@ function renderTick() {
   renderQueue(r);
   renderStatus(r);
   renderOtherTick(r);
+  maybeShoot(r.tick);     // 验收特供：按 ?shots=N 自动存档
 }
 
 // ---------------------------------------------------------------- 市场页
@@ -526,6 +568,16 @@ function queryStart() {
     if (q.get('play') === '0') { speedKey = '0'; }
     const sp = q.get('speed');
     if (sp && SPEEDS.some(s => s.key === sp)) { speedKey = sp; }
+    // 验收特供：?rate=instant 无限速；?shots=N 每 N 个 tick 自动存档
+    const rate = q.get('rate');
+    if (rate && SPEEDS.some(s => s.key === rate)) { speedKey = rate; }
+    const sh = parseInt(q.get('shots') || '0', 10);
+    if (isFinite(sh) && sh > 0) {
+      shotEvery = sh;
+      const fp = document.getElementById('p-film');
+      if (fp) fp.hidden = false;
+      showPage('film');
+    }
   } catch (e) { }
 }
 function wire() {
