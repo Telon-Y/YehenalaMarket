@@ -352,6 +352,11 @@ canvas{display:block;width:100%}
 // =====================================================================================
 // 1.1 界面视觉稿 —— 假数据，但形状取自真实实测（10,000 tick 默认参数）
 // =====================================================================================
+// ⚠ 视觉稿的假数据。**只有 11 个真商品**：1.0 的 `model.Goods = 11`（§3.3 投入产出矩阵维数）。
+// 后面两个不是商品，而是**非市场建筑**（不参与市场、无价格/供给/需求）——
+// 它们是**占位项**，用来说明界面对「无价格对象」应显示「—」而不是伪造数字。
+// 这条纪律与设计文档 §10 的 V3 同类：假数据不得制造模型不存在的形态。
+const PLACEHOLDER = true;
 const GOODS = [
   {n:'谷物',    color:'#0969da', p:551.4,    p0:0.976, pi:0.817, s:12803,  d:5487,  m:-2.41},
   {n:'加工食品',color:'#1a7f37', p:857.2,    p0:0.671, pi:0.611, s:8231,   d:4100,  m:-32.90},
@@ -364,10 +369,11 @@ const GOODS = [
   {n:'工具',    color:'#116329', p:3314.3,   p0:1.707, pi:4.322, s:727,    d:200,   m:70.93},
   {n:'住房',    color:'#0550ae', p:1554.9,   p0:1.138, pi:2.098, s:5990,   d:5990,  m:13.87},
   {n:'建造力',  color:'#6e7781', p:11143.7,  p0:0.482, pi:1.369, s:300,    d:300,   m:-51.69},
-  {n:'金矿',    color:'#d4a72c', p:10000,    p0:1.02,  pi:1.0,   s:95,     d:20,    m:2.1},
-  {n:'中央银行',color:'#6639ba', p:1,        p0:1.0,   pi:1.0,   s:0,      d:0,     m:0},
-  {n:'仓库',    color:'#1b7c83', p:1,        p0:1.0,   pi:1.0,   s:4102,   d:4102,  m:0},
+  // 占位：非市场建筑，界面对它们只显示「—」
+  {n:'金融区',  color:'#6639ba', placeholder:true},
+  {n:'宅邸庄园',color:'#1b7c83', placeholder:true},
 ];
+const MARKET_GOODS = GOODS.filter(g => !g.placeholder);
 
 // 15 类建筑（含自给农场）；shortage = 配给比 < 1；cash 可为负
 const BUILDS = [
@@ -400,6 +406,7 @@ for (let i=0;i<23;i++){
 const N = 120;
 const series = {};
 for (const g of GOODS){
+  if (g.placeholder) { series[g.n] = new Array(N).fill(NaN); continue; }  // 非市场建筑：无价格序列
   const a = [];
   // 价格：早期向 P⁰ 收敛，晚期被货币推动上行
   const base = g.p/ (1 + g.p0*0.1);
@@ -547,8 +554,9 @@ function drawBars(cv, items){
 // ===================== 市场页 =====================
 let hidden = new Set();
 function renderGoodList(){
-  $('#goodlist').innerHTML = GOODS.map((g,i)=>`
-    <div class="row${i===0?' on':''}" data-g="${i}">
+  // 只列**真商品**（11 个）；非市场建筑不出现在商品菜单里
+  $('#goodlist').innerHTML = MARKET_GOODS.map((g,i)=>`
+    <div class="row${i===0?' on':''}" data-g="${GOODS.indexOf(g)}">
       <input type="checkbox" ${hidden.has(g.n)?'':'checked'} data-hide="${g.n}">
       <span class="swatch" style="background:${g.color}"></span>
       <span>${g.n}</span>
@@ -557,6 +565,8 @@ function renderGoodList(){
 }
 function selectGood(i){
   const g=GOODS[i];
+  if (!g || g.placeholder) return;              // 非市场建筑不是商品，不参与详情
+  i = GOODS.indexOf(g);
   $('#g-name').textContent=g.n;
   $('#g-price').textContent=fmt(g.p);
   $('#g-r0').textContent=g.p0.toFixed(3);
@@ -584,9 +594,9 @@ function renderAllChart(){
   drawLines($('#c-all'), opts);
 }
 function renderLegend(){
-  $('#legend').innerHTML = GOODS.map(g=>{
+  $('#legend').innerHTML = MARKET_GOODS.map(g=>{
     const a=hidden.has(g.n)?' off':' on';
-    return `<span class="${a.trim()}" data-lg="${g.n}"><i style="background:${g.color}"></i>${g.n}</span>`;
+    return `<span class="${a}" data-lg="${g.n}"><i style="background:${g.color}"></i>${g.n}</span>`;
   }).join('');
 }
 

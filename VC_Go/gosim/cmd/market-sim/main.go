@@ -4,17 +4,24 @@
 //
 //	market-sim -ticks 10000 -pop 10000000 -tax 0.05
 //	market-sim -ticks 10000 -calibrate-only
+//	market-sim -ticks 1000 -export-dir out\webdata      # 导出逐 tick 快照(JSONL)供 1.1 界面使用
+//	market-sim -ticks 1000 -export-dir out\webdata -serve :8787   # 顺带起只读服务
 //
-// 输出：§3.4 标定结果、运行期时序摘要、§8.4 验收判据 A1–A6 的判定。
+// 输出：§3.4 标定结果、运行期时序摘要、§8.4 验收判据 A1–A9 的判定。
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"math"
+	"net"
+	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"yehenala/market/internal/ledger"
 	"yehenala/market/internal/model"
 	"yehenala/market/internal/report"
 	"yehenala/market/internal/sim"
@@ -115,6 +122,13 @@ func main() {
 		"1.2 M3/M6：**关闭政府投资 AI**（玩家接管投资方向）。需配合 -invest-manor-share 指定方向；默认不关 = 1.0 的自动口径")
 	investManorShare := flag.Float64("invest-manor-share", -1,
 		"1.2 M3/M6：玩家指定的**庄园栈预算占比** ∈ [0,1]；-1（默认）= 未设定、交回 AI")
+	// ===== 1.1 界面用：导出逐 tick 快照（只读，不影响任何数值路径）=====
+	exportDir := flag.String("export-dir", "",
+		"1.1：把**逐 tick 快照**导出到该目录（snapshots.jsonl + meta.json），供图形界面回放；空 = 不导出")
+	exportEvery := flag.Int("export-every", 0,
+		"1.1：每 N 个 tick 导出一行（0 = 自动：≤2000 tick 全导，否则约为 2000 行）")
+	serveAddr := flag.String("serve", "",
+		"1.1：把这些数据与 web/ 一起用**只读 HTTP** 提供（如 :8787）；空 = 不启服务")
 	// ===== 1.2 M5 ① 政府债务计息（默认关闭）=====
 	govDebtInterest := flag.Bool("gov-debt-interest", false,
 		"1.2 M5 ①：给**政府债务**计息（利息付给**中央银行**，第 67 轮裁决）。默认关闭 ⇒ 1.0 的『不计息』")
@@ -395,6 +409,284 @@ func main() {
 		fmt.Fprintf(out, "  **本模式的建造量与级数不能作为经济自持能力的证据**——它只用来隔离"+
 			"收支不匹配，检验其余机制是否正常。\n")
 	}
+
+	// ===== 1.1 界面数据：导出逐 tick 快照（只读；不改动任何数值路径）=====
+	if *exportDir != "" {
+		n, err := exportSnapshots(*exportDir, snaps, goods, st, sum, *exportEvery)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "导出失败: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(out, "\n--- 1.1 界面数据已导出 ---\n")
+		fmt.Fprintf(out, "  目录 = %s（snapshots.jsonl %d 行 + meta.json）\n", *exportDir, n)
+		fmt.Fprintf(out, "  用法：market-sim -ticks N -export-dir <目录> -serve :8787 后用浏览器打开\n")
+	}
+
+	if *serveAddr != "" {
+		if *exportDir == "" {
+			fmt.Fprintln(os.Stderr, "-serve 需要同时给出 -export-dir")
+			os.Exit(1)
+		}
+		// 先把已生成的报告输出，再起只读服务
+		fmt.Print(out.String())
+		out.Reset()
+		if err := serveData(*serveAddr, *exportDir); err != nil {
+			fmt.Fprintf(os.Stderr, "服务失败: %v\n", err)
+			os.Exit(1)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 1.1 界面数据导出
+//
+// 【纪律】以下逻辑全部**只读**：只读取运行结束后的快照与参数，不写回任何引擎字段。
+// 故它不改变 1.0 的任何数值路径（契约 §六-1 的回归锚点仍然成立）。
+// ---------------------------------------------------------------------------
+
+// widget 是导出行里除逐商品/逐建筑切片之外的全部标量。
+type widget struct {
+	Tick             int64      `json:"tick"`
+	Population       float64    `json:"population"`
+	Unemployed       float64    `json:"unemployed"`
+	Happiness        float64    `json:"happiness"`
+	HappinessByClass [3]float64 `json:"happinessByClass"`
+	NoIncomePools    int        `json:"noIncomePools"`
+
+	GovCash     float64 `json:"govCash"`
+	GovDebt     float64 `json:"govDebt"`
+	GovDebtCap  float64 `json:"govDebtCap"`
+	CapitalCash float64 `json:"capitalCash"`
+	HouseCash   float64 `json:"houseCash"`
+	TotalMoney  float64 `json:"totalMoney"`
+	CashTotal   float64 `json:"cashTotal"`
+	NewCapital  float64 `json:"newCapital"`
+	Infusion    float64 `json:"infusion"`
+
+	InvestmentPool float64 `json:"investmentPool"`
+	KManor         float64 `json:"kManor"`
+	KFinance       float64 `json:"kFinance"`
+
+	Tax        float64 `json:"tax"`
+	VAT        float64 `json:"vat"`
+	ConsumeTax float64 `json:"consumeTax"`
+	WageBill   float64 `json:"wageBill"`
+	SpendNet   float64 `json:"spendNet"`
+	Saving     float64 `json:"saving"`
+	SavingInv  float64 `json:"savingInvest"`
+	SavingsAcc float64 `json:"savingsAccount"`
+	Welfare    float64 `json:"welfare"`
+	PublicWks  float64 `json:"publicWorks"`
+	AcquirePay float64 `json:"acquirePaid"`
+
+	SubsistenceHire float64 `json:"subsistenceHire"`
+	WarehouseLevel  float64 `json:"warehouseLevel"`
+	TradeVolume     float64 `json:"tradeVolume"`
+
+	GrossProduct      float64 `json:"grossProduct"`
+	ProductInput      float64 `json:"productInput"`
+	ProductAdded      float64 `json:"productAdded"`
+	ProductAddedAgri  float64 `json:"productAddedAgri"`
+	ProductAddedInd   float64 `json:"productAddedIndustry"`
+	ProductPerCapita  float64 `json:"productPerCapita"`
+	ProductIndex      float64 `json:"productIndex"`
+	ProductSubsist    float64 `json:"productSubsistence"`
+
+	// 逐商品（下标与 meta.goods 对齐）
+	Price  []float64 `json:"price"`
+	Pzero  []float64 `json:"pzero"`
+	Ratio  []float64 `json:"ratio"` // P / P⁰（当期零利润价）
+	Supply []float64 `json:"supply"`
+	Demand []float64 `json:"demand"`
+	Margin []float64 `json:"margin"`
+	// 逐建筑（下标与 meta.buildings 对齐）；hire/cash 仅末行有值，中间行为 null
+	Level []float64  `json:"level"`
+	Hire  []*float64 `json:"hire"`
+	Cash  []*float64 `json:"cash"`
+}
+
+// meta 是界面需要的静态信息（只导一次）。
+type meta struct {
+	Goods         []string          `json:"goods"`
+	GoodPinit     []float64         `json:"goodPinit"`
+	GoodPcost     []float64         `json:"goodPcost"`
+	Buildings     []string          `json:"buildings"`
+	BuildExplicit []bool            `json:"buildExplicit"` // 可拆：Produces && !IsNonMarket && !IsAgent
+	Params        map[string]float64 `json:"params"`
+	Assess        []assessRow       `json:"assess"`
+	Ticks         int               `json:"ticks"`
+	Every         int               `json:"every"`
+	Note          string            `json:"note"`
+}
+
+type assessRow struct {
+	ID     string `json:"id"`
+	Text   string `json:"text"`
+	Pass   bool   `json:"pass"`
+	Detail string `json:"detail"`
+	Note   string `json:"note"`
+}
+
+func exportSnapshots(dir string, snaps []*sim.Snapshot, goods []model.Good, st *sim.State,
+	sum *report.Summary, every int) (int, error) {
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return 0, err
+	}
+	// 自动采样：把行数控制在 ~2000，避免 10,000 tick 导出几十 MB
+	if every <= 0 {
+		every = 1
+		if len(snaps) > 2000 {
+			every = (len(snaps) + 1999) / 2000
+		}
+	}
+
+	f, err := os.Create(filepath.Join(dir, "snapshots.jsonl"))
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+
+	n := 0
+	nB := len(st.Buildings)
+	for i, sn := range snaps {
+		isLast := i == len(snaps)-1
+		// 首行与末行必导（末态是判据窗口的结论所在）
+		if i%every != 0 && !isLast {
+			continue
+		}
+		w := widget{
+			Tick: sn.Tick, Population: sn.Population, Unemployed: sn.Unemployed,
+			Happiness: sn.Happiness, HappinessByClass: sn.HappinessByClass,
+			NoIncomePools: sn.NoIncomePools,
+			GovCash:       sn.GovCash, GovDebt: sn.GovDebt, GovDebtCap: sn.GovDebtCap,
+			CapitalCash: sn.CapitalCash, HouseCash: sn.HouseCash,
+			TotalMoney: sn.TotalMoney, CashTotal: sn.CashTotal,
+			NewCapital: sn.NewCapital, Infusion: sn.Infusion,
+			InvestmentPool: sn.InvestmentPool, KManor: sn.KManor, KFinance: sn.KFinance,
+			Tax: sn.Tax, VAT: sn.VAT, ConsumeTax: sn.ConsumeTax,
+			WageBill: sn.WageBill, SpendNet: sn.SpendNet,
+			Saving: sn.Saving, SavingInv: sn.SavingInvest, SavingsAcc: sn.SavingsAccount,
+			Welfare: sn.Welfare, PublicWks: sn.PublicWorks, AcquirePay: sn.AcquirePaid,
+			SubsistenceHire: sn.SubsistenceHire,
+			WarehouseLevel:  sn.WarehouseLevel, TradeVolume: sn.TradeVolume,
+			GrossProduct: sn.GrossProduct, ProductInput: sn.ProductInput,
+			ProductAdded: sn.ProductAdded, ProductAddedAgri: sn.ProductAddedAgri,
+			ProductAddedInd: sn.ProductAddedIndustry, ProductPerCapita: sn.ProductPerCapita,
+			ProductIndex: sn.ProductIndex, ProductSubsist: sn.ProductSubsistence,
+			Price: sn.Prices, Pzero: sn.Pzero, Ratio: sn.PriceRatio,
+			Supply: sn.Supply, Demand: sn.Demand, Margin: sn.Margins,
+		}
+		// 逐建筑：等级来自快照（每行都有）；雇佣率与现金池只有 State 有，
+		// 而 State 是**末态** ⇒ 只有最后一行能填真值，中间行给 null（前端显示"—"）。
+		// 用 []*float64 是为了让 null 合法：encoding/json 不能序列化 NaN。
+		w.Level = make([]float64, nB)
+		for j := 0; j < nB; j++ {
+			if j < len(sn.Levels) {
+				w.Level[j] = sn.Levels[j]
+			}
+		}
+		if isLast {
+			w.Hire = make([]*float64, nB)
+			w.Cash = make([]*float64, nB)
+			for j := 0; j < nB; j++ {
+				hr := st.Buildings[j].HireRate
+				cs := st.Aud.Balance(ledger.Building(j))
+				w.Hire[j] = &hr
+				w.Cash[j] = &cs
+			}
+		}
+		if err := enc.Encode(&w); err != nil {
+			return n, err
+		}
+		n++
+	}
+
+	// meta
+	names := make([]string, 0, len(goods))
+	pinit := make([]float64, 0, len(goods))
+	pcost := make([]float64, 0, len(goods))
+	for _, g := range goods {
+		names = append(names, g.Name)
+		pinit = append(pinit, g.Pinit)
+		pcost = append(pcost, g.Pcost)
+	}
+	bnames := make([]string, 0, nB)
+	bexp := make([]bool, 0, nB)
+	for i := 0; i < nB; i++ {
+		sp := st.Buildings[i].Spec
+		bnames = append(bnames, sp.Name)
+		// 可拆 = 显式建筑（产出商品、不是金融区/宅邸庄园、不是消费代理）
+		bexp = append(bexp, sp.Produces() && !sp.IsNonMarket() && !sp.IsAgent)
+	}
+	rows := make([]assessRow, 0, len(sum.Verdicts))
+	for _, v := range sum.Verdicts {
+		rows = append(rows, assessRow{v.ID, v.Text, v.Pass, v.Detail, v.Note})
+	}
+	m := meta{
+		Goods: names, GoodPinit: pinit, GoodPcost: pcost,
+		Buildings: bnames, BuildExplicit: bexp,
+		Params: map[string]float64{
+			"taxRate": st.Params.TaxRate, "vat": st.Params.VATRate,
+			"consumeTax": st.Params.ConsumeTaxRate, "warehouseMarkup": st.Params.WarehouseMarkup,
+			"saveRate": st.Params.SavingsRate, "welfareTier": float64(st.Params.WelfareTier),
+			"publicWorks": st.Params.PublicWorksShare, "arableCap": st.Params.ArableCap,
+			"initLevel": st.Params.ProductionInitLevel, "powerInit": st.Params.InitialPowerLevel,
+			"controlPerFinance": st.Params.ControlPerFinance, "govInitialShare": st.Params.GovInitialShare,
+			"sitePowerLimit": st.Params.SitePowerLimit, "demandScale": st.DemandScale(),
+		},
+		Assess: rows, Ticks: len(snaps), Every: every,
+		Note: "由 market-sim -export-dir 生成；逐 tick 快照，只读导出，不影响引擎数值路径。" +
+			"中间 tick 的逐建筑 hire/cash 为 null（快照未含该向量）。",
+	}
+	mb, err := json.MarshalIndent(&m, "", "  ")
+	if err != nil {
+		return n, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "meta.json"), mb, 0o644); err != nil {
+		return n, err
+	}
+	return n, nil
+}
+
+// serveData 起一个**只读**HTTP 服务：/data/*（导出的 JSON）+ /（web/ 前端）。
+// 有意不提供任何写接口——前端只能读（与契约 §0.2-13"国家层不写账"同一纪律）。
+func serveData(addr, dataDir string) error {
+	webDir, err := findWebDir()
+	if err != nil {
+		return err
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/data/", http.StripPrefix("/data/", http.FileServer(http.Dir(dataDir))))
+	mux.Handle("/", http.FileServer(http.Dir(webDir)))
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("\n--- 1.1 只读服务已启动 ---\n  浏览器打开  http://localhost%s/   （Ctrl+C 结束）\n", addr)
+	fmt.Printf("  数据目录 = %s\n  前端目录 = %s\n", dataDir, webDir)
+	return http.Serve(ln, mux)
+}
+
+// findWebDir 从当前目录向上找 web/（源码树与发布包两种布局都能命中）。
+func findWebDir() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for i := 0; i < 6; i++ {
+		p := filepath.Join(dir, "web")
+		if st, err := os.Stat(p); err == nil && st.IsDir() {
+			return p, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return "", fmt.Errorf("找不到 web/ 目录（请在仓库根或 gosim/ 下运行）")
 }
 
 func optionalFloat(v float64) *float64 {

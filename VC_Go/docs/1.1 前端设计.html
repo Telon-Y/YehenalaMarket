@@ -144,13 +144,18 @@ a{color:var(--accent)}
 <li><a href="#h19-七-交互与可达性">七、交互与可达性</a>
 </li>
 <li><a href="#h20-八-交付物与文件结构-无构建步骤">八、交付物与文件结构（无构建步骤）</a>
-</li>
-<li><a href="#h21-九-验收补充-在契约-六-之外的界面自检">九、验收补充（在契约 §六 之外的界面自检）</a>
-</li>
-<li><a href="#h22-十-视觉稿-web-mockup-html-与它回报给设计的三个问题">十、视觉稿（web/mockup.html）与它回报给设计的三个问题</a>
 <ol class="sub">
-<li><a href="#h23-10-1-由-V4-定下的两条硬规则-写实现时必须遵守">10.1 由 V4 定下的两条硬规则（写实现时必须遵守）</a></li>
-<li><a href="#h24-10-2-这条-bug-的验证方法-已固化为脚本">10.2 这条 bug 的验证方法（已固化为脚本）</a></li>
+<li><a href="#h21-8-1-怎么跑起来-已可用">8.1 怎么跑起来（已可用）</a></li>
+<li><a href="#h22-8-2-已实现的看板-真数据">8.2 已实现的看板（真数据）</a></li>
+<li><a href="#h23-8-3-三项诚实的限制-实现阶段待办">8.3 三项诚实的限制（实现阶段待办）</a></li>
+</ol>
+</li>
+<li><a href="#h24-九-验收补充-在契约-六-之外的界面自检">九、验收补充（在契约 §六 之外的界面自检）</a>
+</li>
+<li><a href="#h25-十-视觉稿-web-mockup-html-与它回报给设计的三个问题">十、视觉稿（web/mockup.html）与它回报给设计的三个问题</a>
+<ol class="sub">
+<li><a href="#h26-10-1-由-V4-定下的两条硬规则-写实现时必须遵守">10.1 由 V4 定下的两条硬规则（写实现时必须遵守）</a></li>
+<li><a href="#h27-10-2-这条-bug-的验证方法-已固化为脚本">10.2 这条 bug 的验证方法（已固化为脚本）</a></li>
 </ol>
 </li>
 </ol></nav>
@@ -301,20 +306,55 @@ a{color:var(--accent)}
 </div>
 <hr>
 <h2 id="h20-八-交付物与文件结构-无构建步骤">八、交付物与文件结构（<strong>无构建步骤</strong>）</h2>
-<pre class="code-block"><code>gosim/cmd/market-ui/          ← 可选：Go 侧起本地 HTTP 只读服务（若需实时）
-web/                          ← 纯静态，可直接 file:// 打开
-  index.html                  ← 唯一入口，内嵌 CSS/JS 或引同目录文件
+<pre class="code-block"><code>gosim/cmd/market-sim/         ← 已加 -export-dir / -serve（只读导出 + 只读 HTTP）
+web/                          ← 纯静态，可直接 file:// 或由 -serve 提供
+  index.html                  ← 唯一入口（真数据界面）
   app.css                     ← 设计令牌 + 布局 + 组件
-  app.js                      ← 视图绑定 + 渲染循环
-  charts.js                   ← canvas 绘图（折线/堆叠/饼）
-  fonts/                      ← 字体子集（若取 §2.2 方案②）
-  data/                       ← 契约 §二 的只读视图快照（JSON）</code></pre>
-<p><strong>约束核对</strong>：无 CDN、无 npm、无网络请求、无构建 —— 双击 <code>web/index.html</code> 即可打开。 若需要&quot;实时&quot;，由 Go 侧提供<strong>只读</strong>接口（契约 §0.2-13 已定聚合入 <code>report</code> 包）， 前端仍不引入任何第三方库。</p>
+  app.js                      ← 视图绑定 + 回放循环
+  charts.js                   ← canvas 绘图（折线/饼/条），含 R-scale 比例尺冻结
+  mockup.html                 ← 假数据视觉稿（保留：设计评审用）</code></pre>
+<p><strong>约束核对</strong>：无 CDN、无 npm、无网络请求、无构建 —— 由 <code>-serve</code> 提供时双击 <code>index.html</code> 亦可（<code>file://</code> 下读同目录 JSON）。</p>
+<h3 id="h21-8-1-怎么跑起来-已可用">8.1 怎么跑起来（<strong>已可用</strong>）</h3>
+<pre class="code-block"><code data-lang="powershell">Set-Location D:\Code\YehenalaMarket\gosim
+go run ./cmd/market-sim -ticks 1000 -export-dir ..\out\webdata -serve :8787
+# 然后浏览器打开 http://localhost:8787/</code></pre>
+<ul><li><code>-export-dir</code> ⇒ 写 <code>snapshots.jsonl</code>（逐 tick）+ <code>meta.json</code>（商品/建筑名单、参数、判据）。 自动采样：&gt;2000 tick 时按 <code>every</code> 抽样，把行数压到 ~2000（10,000 tick ≈ 5 MB 而非 40 MB）。</li><li><code>-serve</code> ⇒ 只读 HTTP：<code>/data/*</code> 是导出数据，<code>/</code> 是 <code>web/</code>。<strong>不提供任何写接口</strong> （与契约 §0.2-13&quot;国家层不写账&quot;同一纪律）。</li><li><strong>导出与伺服都不写回引擎</strong>，故 1.0 的数值路径与回归锚点不受影响。</li></ul>
+<h3 id="h22-8-2-已实现的看板-真数据">8.2 已实现的看板（真数据）</h3>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>页面</th><th>已接真实数据</th></tr>
+</thead>
+<tbody>
+<tr><td>市场</td><td>11 商品的价 / P÷P⁰ / P÷Pinit / 供给 / 需求 / 利润率 / P⁰；近期 60 期窗口 + 全期指数 + 全商品总图；<strong>比例尺冻结开关</strong></td></tr>
+<tr><td>建筑</td><td>15 类；等级逐 tick 真实；<strong>雇佣率与现金池仅末态有值</strong>（快照不含该向量，其余显示「—」）；负现金池带 ▼ + 警示色；可拆/不可拆标记</td></tr>
+<tr><td>建筑队列</td><td>由相邻两期等级差<strong>重建</strong>（见 §8.3 的诚实标注）；每页 20 条 + 分页</td></tr>
+<tr><td>其他</td><td>4 指标卡 + 8 列聚合表（含加权均价）+ 名义/实际双口径图 + 双曲线 + 饼图 + <strong>判据看板（A1–A9，取自 <code>report.Assess</code>）</strong></td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>实测（1,000 tick）</strong>：界面判据看板显示 <strong>通过 4/9</strong>，与 CLI 的 <code>汇总：通过 4/9</code> 一致； 名义 GDP <strong>3.86e9</strong> / 实际增加值 <strong>4.48e6</strong> / 政府池 <strong>−75.69e6</strong> 全部与 CLI 输出吻合。 ⇒ <strong>界面与引擎同源，不是另算一套</strong>。</p>
+<h3 id="h23-8-3-三项诚实的限制-实现阶段待办">8.3 三项诚实的限制（实现阶段待办）</h3>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>#</th><th>限制</th><th>原因</th><th>待办</th></tr>
+</thead>
+<tbody>
+<tr><td>L1</td><td>建筑页的<strong>雇佣率/现金池</strong>只在末 tick 有值</td><td>1.0 的快照结构<strong>不含</strong>这两个向量</td><td>导出侧增加 <code>hire</code>/<code>cash</code> 逐 tick 向量</td></tr>
+<tr><td>L2</td><td>队列页是<strong>由等级差重建</strong>的近似</td><td>快照<strong>不含</strong> <code>Orders</code> 向量</td><td>导出 <code>Orders</code>（目标级数/已投入/剩余/来源：扩建·收购·公共工程），才能满足契约 §4.3</td></tr>
+<tr><td>L3</td><td>饼图用<strong>劳动结构权重</strong>推算，不是逐池人口</td><td>快照不含逐池人口</td><td>导出 39 个池的人口（或按阶级汇总后的三元组）</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p>三项都属于<strong>只增加导出字段</strong>，不动引擎计算 —— 可以随时补。</p>
+</blockquote>
 <hr>
-<h2 id="h21-九-验收补充-在契约-六-之外的界面自检">九、验收补充（在契约 §六 之外的界面自检）</h2>
+<h2 id="h24-九-验收补充-在契约-六-之外的界面自检">九、验收补充（在契约 §六 之外的界面自检）</h2>
 <ol><li><strong>可溯源性</strong>：随机抽 10 个界面格子，逐个能追到 <code>docs/1.1 图形化界面.md</code> §2.2 的字段锚点；</li><li><strong>不撒谎</strong>：无数据处显示&quot;无数据&quot;；仓库纯利<strong>全局搜索不到</strong>；</li><li><strong>帧率</strong>：×5 档（12 帧/周期）连续 600 周期，帧间隔 p95 ≤ 20ms；</li><li><strong>解耦</strong>：同一参数下<strong>换档位重跑</strong>，tick 序列与 1.0 回归锚点一致（契约 §六-1 的五个值）。</li></ol>
 <hr>
-<h2 id="h22-十-视觉稿-web-mockup-html-与它回报给设计的三个问题">十、视觉稿（<code>web/mockup.html</code>）与它回报给设计的三个问题</h2>
+<h2 id="h25-十-视觉稿-web-mockup-html-与它回报给设计的三个问题">十、视觉稿（<code>web/mockup.html</code>）与它回报给设计的三个问题</h2>
 <p><strong>视觉稿</strong>：<code>web/mockup.html</code> —— 自包含单文件（无依赖、无网络请求），假数据但<strong>形状取自真实实测</strong> （价格指数增长、名义 GDP 起飞 / 实际增加值见顶回落、政府池 −1.85e12、贴边 59.70%）。 双击即开；深链 <code>#build</code> / <code>#queue</code> / <code>#other</code> 直接切页。同目录 <code>out/review/mockup/*.png</code> 为四页截图。</p>
 <p><strong>它已经暴露了三个真问题</strong>（在设计阶段就抓到，正是做视觉稿的目的）：</p>
 <div class="table-wrap">
@@ -333,7 +373,7 @@ web/                          ← 纯静态，可直接 file:// 打开
 <blockquote>
 <p><strong>V3 尤其值得记住</strong>：视觉稿的假数据如果&quot;看起来像机制&quot;，评审时就会把演示瑕疵当成模型行为。 故契约 §四 的&quot;不显示仓库纯利&quot;之外，建议再加一条：<strong>假数据不得制造模型不存在的形态</strong>。</p>
 </blockquote>
-<h3 id="h23-10-1-由-V4-定下的两条硬规则-写实现时必须遵守">10.1 由 V4 定下的两条硬规则（写实现时必须遵守）</h3>
+<h3 id="h26-10-1-由-V4-定下的两条硬规则-写实现时必须遵守">10.1 由 V4 定下的两条硬规则（写实现时必须遵守）</h3>
 <div class="table-wrap">
 <table>
 <thead>
@@ -345,7 +385,7 @@ web/                          ← 纯静态，可直接 file:// 打开
 </tbody>
 </table>
 </div>
-<h3 id="h24-10-2-这条-bug-的验证方法-已固化为脚本">10.2 这条 bug 的验证方法（已固化为脚本）</h3>
+<h3 id="h27-10-2-这条-bug-的验证方法-已固化为脚本">10.2 这条 bug 的验证方法（已固化为脚本）</h3>
 <p>因为轴刻度是<strong>画在 canvas 上的文字</strong>、无法从 DOM 读出，所以实现里把本次比例尺同时写进 <code>canvas.dataset</code>（<code>data-ymin</code> / <code>data-ymax</code> / <code>data-ticks</code>），自检脚本即可从 <code>--dump-dom</code> 读取：</p>
 <pre class="code-block"><code data-lang="powershell">powershell -ExecutionPolicy Bypass -File tools\verify_scale_freeze.ps1</code></pre>
 <p>它的做法是：对 <code>?hide=</code> 取 0/1/5/9/13 五种隐藏数各 dump 一次 DOM， 比较三个 <code>data-*</code>。<strong>冻结成立当且仅当不同隐藏数下比例尺只有 1 种</strong>。实测输出：</p>

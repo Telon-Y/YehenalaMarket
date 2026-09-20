@@ -43,13 +43,14 @@ $failed = $false
 # ---- 1) dump the DOM and assert the rendered structure ----
 $domFile = Join-Path $out 'dom.html'
 Remove-Item $domFile -Force -ErrorAction SilentlyContinue
-& cmd /c "`"$edge`" $($common -join ' ') --dump-dom `"$url`" > `"$domFile`" 2>nul"
+& cmd /c "`"$edge`" $($common -join ' ') --dump-dom `"$url#build`" > `"$domFile`" 2>nul"
 $dom = $null
 for ($i = 0; $i -lt 40; $i++) {
     Start-Sleep -Milliseconds 250
     try { $dom = [System.IO.File]::ReadAllText($domFile, [System.Text.Encoding]::UTF8); break } catch { }
 }
 if (-not $dom) { throw "could not read $domFile (still locked by the browser)" }
+if ($dom.Length -lt 2000) { throw "dump too small ($($dom.Length) bytes) - the page did not render" }
 
 function CountOf($pattern) { ([regex]::Matches($dom, $pattern)).Count }
 function TbodyRows($id) {
@@ -61,8 +62,7 @@ function TbodyRows($id) {
 Say '== 1) rendered structure (from --dump-dom) =='
 $navN   = CountOf 'role="tab"'
 $pageN  = CountOf 'class="page( on)?"'
-$goodN  = CountOf 'data-g="\d+"'
-$buildN = TbodyRows 'buildbody'
+$goodN  = CountOf 'data-g="\d+"'$buildN = TbodyRows 'buildbody'
 $queueN = TbodyRows 'queuebody'
 $chipN  = CountOf 'class="chip"'
 $cvN    = CountOf '<canvas'
@@ -70,7 +70,7 @@ $cvN    = CountOf '<canvas'
 $checks = @(
     @{ n='four top-level menus';      ok = ($navN -eq 4);    v=$navN },
     @{ n='four pages';                ok = ($pageN -eq 4);   v=$pageN },
-    @{ n='14 goods rows';             ok = ($goodN -eq 14);  v=$goodN },
+    @{ n='11 goods rows (model.Goods=11)'; ok = ($goodN -eq 11);  v=$goodN },
     @{ n='15 building rows';          ok = ($buildN -eq 15); v=$buildN },
     @{ n='queue rows <= 20 (paged)';  ok = ($queueN -gt 0 -and $queueN -le 20); v=$queueN },
     @{ n='9 status-bar chips';        ok = ($chipN -eq 9);   v=$chipN },
