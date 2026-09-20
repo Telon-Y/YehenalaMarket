@@ -130,7 +130,7 @@ function renderTick() {
 const RANGE_TEXT = {
   'c-recent': [1 / 3, 3],   // 近期窗口：以窗口首个价格的 1/3 ~ 3 倍
   'c-full': [0.1, 1.6],     // 单商品指数：实测 300t 内落在 0.144 ~ 1.41（留余量）
-  'c-all': [0.09, 4],       // 全商品指数：实测 300t 全局 0.144 ~ 3.36（留余量）
+  'c-all': [0.05, 4],       // 全商品指数：实测 300t 全局 0.144 ~ 3.36；下界放到 0.05 改善分辨率
 };
 const fixedRange = new Set(['c-recent', 'c-full', 'c-all']);
 function isFixed(id) { return fixedRange.has(id); }
@@ -157,6 +157,11 @@ function renderMarketTick(r) {
     const el = document.querySelector(`[data-px="${i}"]`);
     if (el) el.textContent = num(r.price ? r.price[i] : NaN);
   }
+  // 图题里的"当前帧数"：用户据此知道"线短是因为才第 N 期"，而不是以为图坏了
+  const nr = $('#n-recent'), nf = $('#n-full'), na = $('#n-all');
+  if (nr) nr.textContent = `${Math.min(cur + 1, 60)} / 60 期`;
+  if (nf) nf.textContent = `${cur + 1} / ${N} 期`;
+  if (na) na.textContent = `${cur + 1} / ${N} 期`;
   const i = selGood;
   const g = META.goods[i];
   $('#g-name').textContent = g;
@@ -205,28 +210,35 @@ function drawRecent() {
 function drawFull() {
   const i = selGood;
   const base0 = hist.price[i][0] || 1;              // 基准 = **首期**（全局不变量）
+  const full = hist.price[i].map(v => v / base0);
   const len = cur + 1;
-  const data = CHART.windowed(hist.price[i].map(v => v / base0), len);
+  // 实线只到光标处，但 x 轴仍按**全量长度**映射（否则重影会被压缩）
+  const data = full.slice(0, len);
   const opts = {
-    n: data.length, log: true, base: 1,
-    cursor: data.length - 1,
+    n: full.length, log: true, base: 1,
+    cursor: len - 1,
     windowKey: 'full',
     minSpanRatio: 2.0,
     minLower: 1 / Math.sqrt(2.0),
-    lines: [{ data, color: COLORS[i % COLORS.length], width: 1.8 }],
+    // 重影：整条历史 —— 早期也能看清趋势与进度
+    lines: [{ data, ghost: full, color: COLORS[i % COLORS.length], width: 1.8 }],
   };
   if (isFixed('c-full')) opts.yRange = RANGE_TEXT['c-full'];
   CHART.lines($('#c-full'), opts);
 }
 function drawAll(r) {
   const len = cur + 1;
-  const lines = META.goods.map((n, i) => ({
-    // 归一化基准 = 各商品**首期**价格（不变量），故指数可跨商品比较
-    data: CHART.windowed(hist.price[i].map(v => v / (hist.price[i][0] || 1)), len),
-    color: COLORS[i % COLORS.length], off: hidden.has(n), width: 1.3,
-  }));
+  const lines = META.goods.map((n, i) => {
+    const b0 = hist.price[i][0] || 1;
+    return {
+      data: CHART.windowed(hist.price[i].map(v => v / b0), len),
+      ghost: hist.price[i].map(v => v / b0),
+      color: COLORS[i % COLORS.length], off: hidden.has(n), width: 1.3,
+    };
+  });
   const opts = {
-    n: len, log: true, lines, cursor: len - 1,
+    // n = 全量长度，好让重影铺满 x 轴；实线只到 len（由数据长度决定）
+    n: N, log: true, lines, cursor: len - 1,
     freeze: frozenOn, windowKey: 'all',
     minSpanRatio: 4.0,
   };
@@ -396,31 +408,32 @@ function weightedPrice(r) {
 function drawGDP() {
   const len = cur + 1;
   CHART.lines($('#c-gdp'), {
-    n: len, log: true, cursor: len - 1, windowKey: len,
+    n: N, log: true, cursor: len - 1, windowKey: 'gdp-shot',
     lines: [
-      { data: CHART.windowed(hist.gdpNom, len), color: getCSS('--accent'), width: 1.8 },
-      { data: CHART.windowed(hist.gdpReal, len), color: getCSS('--up'), width: 1.8 },
+      { data: CHART.windowed(hist.gdpNom, len), ghost: hist.gdpNom, color: getCSS('--accent'), width: 1.8 },
+      { data: CHART.windowed(hist.gdpReal, len), ghost: hist.gdpReal, color: getCSS('--up'), width: 1.8 },
     ],
   });
 }
 function drawReal() {
   const len = cur + 1;
   const k = ROWS[0].productAdded || 1;
+  const idxAbs = hist.index.map(v => v * k);
   CHART.lines($('#c-real'), {
-    n: len, cursor: len - 1, windowKey: len,
+    n: N, cursor: len - 1, windowKey: 'real-shot',
     lines: [
-      { data: CHART.windowed(hist.gdpReal, len), color: getCSS('--up'), width: 2 },
-      { data: CHART.windowed(hist.index.map(v => v * k), len), color: getCSS('--neutral'), width: 1.4 },
+      { data: CHART.windowed(hist.gdpReal, len), ghost: hist.gdpReal, color: getCSS('--up'), width: 2 },
+      { data: CHART.windowed(idxAbs, len), ghost: idxAbs, color: getCSS('--neutral'), width: 1.4 },
     ],
   });
 }
 function drawGov() {
   const len = cur + 1;
   CHART.lines($('#c-gov'), {
-    n: len, cursor: len - 1, windowKey: len,
+    n: N, cursor: len - 1, windowKey: 'gov-shot',
     lines: [
-      { data: CHART.windowed(hist.govCash, len), color: getCSS('--down'), width: 1.8 },
-      { data: CHART.windowed(hist.govCap, len), color: getCSS('--warn'), width: 1.6 },
+      { data: CHART.windowed(hist.govCash, len), ghost: hist.govCash, color: getCSS('--down'), width: 1.8 },
+      { data: CHART.windowed(hist.govCap, len), ghost: hist.govCap, color: getCSS('--warn'), width: 1.6 },
     ],
   });
 }

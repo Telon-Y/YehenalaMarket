@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>叶赫那拉市场 · 1.1</title>
 <!-- 静态资源带版本查询串：改版后浏览器不会再拿旧缓存（出现"部分更新"的怪状态） -->
-<link rel="stylesheet" href="app.css?v=20260920m">
+<link rel="stylesheet" href="app.css?v=20260920q">
 </head>
 <body>
 
@@ -71,11 +71,11 @@
 
           <div class="grid2" style="margin-bottom:var(--gap)">
             <div class="canvaswrap">
-              <div class="ct"><span>近期价格变化（以当前 tick 结尾的 60 期窗口）</span><span>对数轴</span></div>
+              <div class="ct"><span>近期价格变化（滚动 60 期窗口）</span><span>对数轴 · <b id="n-recent">—</b></span></div>
               <canvas id="c-recent" height="200"></canvas>
             </div>
             <div class="canvaswrap">
-              <div class="ct"><span>全期价格指数（相对开头归一）</span><span>对数轴 · 基期 = 1 · 最小量程 2×</span></div>
+              <div class="ct"><span>全期价格指数（相对开头归一）</span><span>对数轴 · 基期 = 1 · 固定量程 · <b id="n-full">—</b></span></div>
               <canvas id="c-full" height="200"></canvas>
               <div class="note">曲线 = 该商品价格 ÷ 首期价格。<b>早期必然接近 1</b>（tick 1 时恰好等于 1），
                 那时平直是正常的、不是故障；本图设了 <b>2× 最小量程</b>，避免把 ±0.5% 的数值抖动放大铺满整张图。</div>
@@ -85,7 +85,7 @@
           <div class="canvaswrap">
             <div class="ct">
               <span>全商品总价格图（勾选框控制显示）</span>
-              <label class="freeze"><input type="checkbox" id="freeze" checked> 冻结比例尺（隐藏序列不改变轴）</label>
+              <span style="font-size:14px;color:var(--ink-2)">固定量程 · <b id="n-all">—</b></span> <label class="freeze"><input type="checkbox" id="freeze" checked> 隐藏序列不改变轴</label>
             </div>
             <canvas id="c-all" height="260"></canvas>
             <div class="legend" id="legend"></div>
@@ -178,7 +178,7 @@
   <span class="chip" style="margin-left:auto"><span class="k">只读回放 · 不改动引擎</span></span>
 </footer>
 
-<script src="charts.js?v=20260920m"></script>
-<script src="app.js?v=20260920m"></script>
+<script src="charts.js?v=20260920q"></script>
+<script src="app.js?v=20260920q"></script>
 </body>
 </html>

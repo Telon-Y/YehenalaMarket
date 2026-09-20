@@ -18,7 +18,7 @@ PASS  c-recent span >= 1.2x (=9.000x [225.99604435813754 .. 2033.964399223238])
 
 == 3c) fixed-range charts keep the SAME axis at different ticks ==
 PASS  c-full axis identical at tick 1 and 300 (=t1=[0.1..1.6] t300=[0.1..1.6])
-PASS  c-all axis identical at tick 1 and 300 (=t1=[0.09..4] t300=[0.09..4])
+PASS  c-all axis identical at tick 1 and 300 (=t1=[0.05..4] t300=[0.05..4])
 
 == 4) browser console / page errors ==
 PASS  no JS errors in console (=)

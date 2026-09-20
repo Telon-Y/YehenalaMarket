@@ -157,18 +157,43 @@ const CHART = (() => {
       x.beginPath(); x.moveTo(cx, padT); x.lineTo(cx, padT + ih); x.stroke();
       x.globalAlpha = 1;
     }
-    // 数据线
+    // 数据线：先画"整条历史"的重影（淡），再画"已播放"的实线。
+    // 【为什么】"全期"图在回放早期只有一两个点，看起来像坏图（空图）。
+    // 画出完整历史的重影，既让图立刻可读，又能一眼看出播放进度。
+    for (const l of opts.lines) {
+      if (isOff(l)) continue;
+      if (l.ghost && l.ghost.length) {
+        x.strokeStyle = l.color; x.globalAlpha = 0.22; x.lineWidth = 1;
+        x.beginPath();
+        let st = false;
+        for (let i = 0; i < l.ghost.length; i++) {
+          const v = l.ghost[i];
+          if (!isFinite(v)) { st = false; continue; }
+          const px = X(i), py = Y(v);
+          if (!st) { x.moveTo(px, py); st = true; } else x.lineTo(px, py);
+        }
+        x.stroke();
+        x.globalAlpha = 1;
+      }
+    }
     for (const l of opts.lines) {
       if (isOff(l)) continue;
       x.strokeStyle = l.color; x.lineWidth = l.width || 1.5; x.beginPath();
-      let started = false;
+      let started = false, lastPx = 0, lastPy = 0, pts = 0;
       for (let i = 0; i < l.data.length; i++) {
         const v = l.data[i];
         if (!isFinite(v)) { started = false; continue; }
         const px = X(i), py = Y(v);
         if (!started) { x.moveTo(px, py); started = true; } else x.lineTo(px, py);
+        lastPx = px; lastPy = py; pts++;
       }
       x.stroke();
+      // 【单点也要可见】归一化序列在首期只有一个点（比值恰好为 1），
+      // 只画 stroke 会什么都看不到、看起来像"图是坏的"。补一个端点标记。
+      if (pts === 1) {
+        x.fillStyle = l.color;
+        x.beginPath(); x.arc(lastPx, lastPy, 3.2, 0, Math.PI * 2); x.fill();
+      }
     }
     x.fillStyle = css('--ink-2'); x.font = '12px ' + css('--mono');
     x.textAlign = 'left';  x.fillText('0', padL, h - 6);
