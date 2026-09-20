@@ -124,6 +124,17 @@ function renderTick() {
 }
 
 // ---------------------------------------------------------------- 市场页
+// 【三张价格图的量程口径】—— 都支持 **ctrl+点击切换**「固定 / 自适应」，
+// 默认固定：因为这些序列都是**相对首期归一化**的，首期是不变量，轴也该是不变量。
+// 固定量程还让 11 个商品**互相可比**（同一条轴上读比例）。
+const RANGE_TEXT = {
+  'c-recent': [1 / 3, 3],   // 近期窗口：以窗口首个价格的 1/3 ~ 3 倍
+  'c-full': [0.1, 1.6],     // 单商品指数：实测 300t 内落在 0.144 ~ 1.41（留余量）
+  'c-all': [0.09, 4],       // 全商品指数：实测 300t 全局 0.144 ~ 3.36（留余量）
+};
+const fixedRange = new Set(['c-recent', 'c-full', 'c-all']);
+function isFixed(id) { return fixedRange.has(id); }
+
 function renderMarketShell() {
   const G = META.goods.length;
   $('#goodlist').innerHTML = META.goods.map((n, i) => `
@@ -170,49 +181,57 @@ function renderMarketTick(r) {
 }
 
 function drawRecent() {
-  const i = selGood, half = 30;
-  const lo = Math.max(0, cur - 59), hi = cur;
+  const i = selGood;
+  const lo = Math.max(0, cur - 59), hi = cur;       // 滚动 60 期窗口
   const seg = arr => arr.slice(lo, hi + 1);
   const cv = $('#c-recent');
-  CHART.lines(cv, {
+  const b0 = seg(hist.price[i])[0] || 1;            // 基准 = 窗口首个价格（窗口内不变量）
+  const R = RANGE_TEXT['c-recent'];
+  const opts = {
     n: hi - lo + 1,
     log: true, base: 1,
     nodesc: ROWS[hi] ? ROWS[hi].tick : hi,
     cursor: hi - lo,
-    minSpanRatio: 1.5,          // 同 c-full：比值图需要最小量程，否则早期被放大成噪声
+    minSpanRatio: 3.0,
     lines: [
       { data: seg(hist.price[i]), color: COLORS[i % COLORS.length], width: 1.8 },
       { data: seg(hist.price[(i + 1) % META.goods.length]), color: COLORS[(i + 1) % COLORS.length], width: 1.2 },
     ],
-  });
+  };
+  // 固定模式下把窗口相对量程写成绝对价格量程（轴才是真正不动的）
+  if (isFixed('c-recent')) opts.yRange = [R[0] * b0, R[1] * b0];
+  CHART.lines(cv, opts);
 }
 function drawFull() {
   const i = selGood;
-  const base0 = hist.price[i][0] || 1;
-  const len = cur + 1;                              // 只画到光标处
+  const base0 = hist.price[i][0] || 1;              // 基准 = **首期**（全局不变量）
+  const len = cur + 1;
   const data = CHART.windowed(hist.price[i].map(v => v / base0), len);
-  CHART.lines($('#c-full'), {
+  const opts = {
     n: data.length, log: true, base: 1,
     cursor: data.length - 1,
-    windowKey: data.length,                         // 同一窗口内比例尺冻结
-    // 归一化曲线的早期跨度≈1（tick 1 时恰好为 1）⇒ 必须给最小量程，
-    // 否则轴被放大到 ±0.5%，任何微小抖动都铺满整张图（就是"比例尺异常"）。
-    // minLower 让**基期 1 落在量程顶部**：指数只可能往下走，上方不该留大段空白。
+    windowKey: 'full',
     minSpanRatio: 2.0,
     minLower: 1 / Math.sqrt(2.0),
     lines: [{ data, color: COLORS[i % COLORS.length], width: 1.8 }],
-  });
+  };
+  if (isFixed('c-full')) opts.yRange = RANGE_TEXT['c-full'];
+  CHART.lines($('#c-full'), opts);
 }
 function drawAll(r) {
-  const len = cur + 1;                              // 窗口 = [0, cur]
+  const len = cur + 1;
   const lines = META.goods.map((n, i) => ({
-    data: CHART.windowed(hist.price[i], len),
+    // 归一化基准 = 各商品**首期**价格（不变量），故指数可跨商品比较
+    data: CHART.windowed(hist.price[i].map(v => v / (hist.price[i][0] || 1)), len),
     color: COLORS[i % COLORS.length], off: hidden.has(n), width: 1.3,
   }));
-  CHART.lines($('#c-all'), {
+  const opts = {
     n: len, log: true, lines, cursor: len - 1,
-    freeze: frozenOn, windowKey: len,
-  });
+    freeze: frozenOn, windowKey: 'all',
+    minSpanRatio: 4.0,
+  };
+  if (isFixed('c-all')) opts.yRange = RANGE_TEXT['c-all'];
+  CHART.lines($('#c-all'), opts);
 }
 
 // ---------------------------------------------------------------- 建筑页
@@ -481,14 +500,33 @@ function hashPage() {
 }
 function queryStart() {
   try {
-    const p = new URLSearchParams(location.search).get('play');
-    if (p === '0') { speedKey = '0'; }
-    const sp = new URLSearchParams(location.search).get('speed');
+    const q = new URLSearchParams(location.search);
+    // ?at=<tick> 直接跳到指定 tick（自检与分享视图用；同时暂停，保证画面确定）
+    const at = q.get('at');
+    if (at !== null && at !== '') {
+      const want = parseInt(at, 10);
+      if (isFinite(want)) {
+        cur = Math.max(0, Math.min(N - 1, want - 1));
+        speedKey = '0';
+      }
+    }
+    if (q.get('play') === '0') { speedKey = '0'; }
+    const sp = q.get('speed');
     if (sp && SPEEDS.some(s => s.key === sp)) { speedKey = sp; }
   } catch (e) { }
 }
 function wire() {
   $$('.nav button').forEach(b => b.addEventListener('click', () => { showPage(b.dataset.page); redrawAll(); }));
+  // ctrl+点击图表 = 切换该图的「固定量程 / 自适应」；ctrl+点击图例 = 显示提示
+  $$('canvas').forEach(cv => cv.addEventListener('click', e => {
+    if (!e.ctrlKey) return;
+    const id = cv.id;
+    if (!(id in RANGE_TEXT)) return;
+    if (fixedRange.has(id)) fixedRange.delete(id); else fixedRange.add(id);
+    cv.dataset.fixed = String(isFixed(id));
+    redrawAll();
+    updateRangeNote();
+  }));
   $$('.speeds button').forEach(b => b.addEventListener('click', () => { speedKey = b.dataset.sp; frameAcc = 0; syncSpeed(); }));
   const stepF = $('#step-f'); const stepB = $('#step-b');
   if (stepF) stepF.addEventListener('click', () => step(1));
@@ -530,6 +568,25 @@ function wire() {
   window.addEventListener('resize', () => { clearTimeout(window.__rz); window.__rz = setTimeout(redrawAll, 140); });
   window.addEventListener('hashchange', hashPage);
 }
+function updateRangeNote() {
+  const rows = ['c-recent', 'c-full', 'c-all'].map(id => {
+    const fixed = isFixed(id);
+    const R = RANGE_TEXT[id];
+    const tag = fixed
+      ? `<span class="tag ok">固定</span> ${R[0]} ~ ${R[1]}（对数轴）`
+      : `<span class="tag warn">自适应</span>（按可见窗口）`;
+    const label = { 'c-recent': '近期价格变化', 'c-full': '全期价格指数', 'c-all': '全商品总价格图' }[id];
+    return `<tr><td>${label}</td><td>${tag}</td></tr>`;
+  }).join('');
+  $('#range-note').innerHTML =
+    '三张价格图的量程：' +
+    '<table style="margin-top:6px;font-size:14px"><tbody>' + rows + '</tbody></table>' +
+    '<b>ctrl+点击任一价格图</b>可切换该图的「固定 / 自适应」。<br>' +
+    '<b>为什么默认固定</b>：这些序列是<b>相对首期归一化</b>的，首期是不变量，轴也应当是不变量——' +
+    '否则轴会随回放窗口生长而变化，同一段数据在不同 tick 看起来不一样。' +
+    '固定量程还让 11 个商品在<b>同一条轴上互相可比</b>。' +
+    '（近期图是滚动 60 期窗口，基准取该窗口首个价格，故窗口内不动。）';
+}
 function updateFreezeNote() {
   $('#freeze-note').innerHTML = frozenOn
     ? '✅ <b>比例尺已冻结</b>：轴范围由<b>全量数据</b>算一次，隐藏某个商品<b>只移除它的线</b>，' +
@@ -562,9 +619,10 @@ function redrawAll() {
     wire();
     renderOtherShell();      // 静态部分（指标卡/对照表/判据表）只在启动时建一次
     cur = 0;
+    queryStart();            // ?at=<tick> / ?play=0 / ?speed=1/8 —— 必须在 renderTick 之前
     renderTick();            // 逐 tick 部分（含 renderOtherTick）
     updateFreezeNote();
-    queryStart();            // ?play=0 / ?speed=1/8
+    updateRangeNote();
     syncSpeed();
     hashPage();          // 深链：最后执行，确保数据已就绪
     requestAnimationFrame(frame);

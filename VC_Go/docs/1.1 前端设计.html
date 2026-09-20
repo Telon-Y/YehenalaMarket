@@ -155,7 +155,7 @@ a{color:var(--accent)}
 </li>
 <li><a href="#h26-十-视觉稿-web-mockup-html-与它回报给设计的三个问题">十、视觉稿（web/mockup.html）与它回报给设计的三个问题</a>
 <ol class="sub">
-<li><a href="#h27-10-1-由-V4-定下的三条硬规则-写实现时必须遵守">10.1 由 V4 定下的三条硬规则（写实现时必须遵守）</a></li>
+<li><a href="#h27-10-1-由-V4-定下的硬规则-写实现时必须遵守">10.1 由 V4 定下的硬规则（写实现时必须遵守）</a></li>
 <li><a href="#h28-10-2-这条-bug-的验证方法-已固化为脚本">10.2 这条 bug 的验证方法（已固化为脚本）</a></li>
 </ol>
 </li>
@@ -423,19 +423,23 @@ go run ./cmd/market-sim -ticks 1000 -export-dir ..\out\webdata -serve :8787
 <blockquote>
 <p><strong>V3 尤其值得记住</strong>：视觉稿的假数据如果&quot;看起来像机制&quot;，评审时就会把演示瑕疵当成模型行为。 故契约 §四 的&quot;不显示仓库纯利&quot;之外，建议再加一条：<strong>假数据不得制造模型不存在的形态</strong>。</p>
 </blockquote>
-<h3 id="h27-10-1-由-V4-定下的三条硬规则-写实现时必须遵守">10.1 由 V4 定下的三条硬规则（写实现时必须遵守）</h3>
+<h3 id="h27-10-1-由-V4-定下的硬规则-写实现时必须遵守">10.1 由 V4 定下的硬规则（写实现时必须遵守）</h3>
 <div class="table-wrap">
 <table>
 <thead>
 <tr><th>规则</th><th>内容</th><th>为什么</th></tr>
 </thead>
 <tbody>
-<tr><td><strong>R-scale</strong></td><td><strong>轴范围不得依赖可见性</strong>：范围由<strong>未隐藏的全体序列</strong>算出；隐藏某条序列<strong>只移除该条线的像素</strong>，不动网格/刻度/坐标映射。<strong>范围跟随可见窗口</strong>（窗口变化才重算，同一窗口内由 <code>windowKey</code> 冻结）</td><td>否则&quot;隐藏一条线&quot;会被读成&quot;剩下的线变陡了&quot;——<strong>这是误导，不是缩放</strong>。将来若要做&quot;聚焦模式&quot;，必须是<strong>显式开关</strong>并提示轴已变</td></tr>
-<tr><td><strong>R-span</strong></td><td><strong>比值类图必须有最小量程</strong>。归一化曲线的早期跨度≈1（tick 1 时<strong>恰好</strong>为 1）；若按数据自适应，轴会被放大到 ±0.5%，任何微小抖动都铺满整张图。实现为 <code>minSpanRatio</code>，并由 <strong><code>minLower</code> 决定往哪撑</strong>：比值图把下界限制在 <code>1/√span</code>，使<strong>基期值落在量程顶部</strong>（指数只可能往下走，上方不留空白）</td><td>数据跨度≈1 是<strong>完全合法</strong>的状态，不该靠&quot;防零除&quot;去撑它</td></tr>
-<tr><td><strong>R-zero</strong></td><td>防零除<strong>只作最后的安全网</strong>，且必须放在范围决策<strong>之后</strong>。历史教训：把 `mx = mn + (</td><td>mn</td></tr>
+<tr><td><strong>R-scale</strong></td><td><strong>轴范围不得依赖可见性</strong>：范围由<strong>未隐藏的全体序列</strong>算出；隐藏某条序列<strong>只移除该条线的像素</strong>，不动网格/刻度/坐标映射</td><td>否则&quot;隐藏一条线&quot;会被读成&quot;剩下的线变陡了&quot;——<strong>这是误导，不是缩放</strong></td></tr>
+<tr><td><strong>R-fixed</strong></td><td><strong>归一化序列用固定量程</strong>。凡把序列<strong>相对某个基准</strong>归一化的图（价格指数、全商品总图），基准是<strong>不变量</strong>，轴也必须是<strong>不变量</strong>；写成数据常量并用 <strong><code>yRange</code></strong> 钉死，<strong>ctrl+点击</strong>可切到&quot;按可见窗口自适应&quot;作对照。实测锚点（1.0 默认参数 300t）：单商品指数 ∈ <strong>[0.14, 1.41]</strong>、全商品 ∈ <strong>[0.14, 3.36]</strong> ⇒ 取 <code>[0.1, 1.6]</code> 与 <code>[0.09, 4]</code></td><td>&quot;窗口生长导致轴漂移&quot;会让<strong>同一段数据在不同 tick 看起来不一样</strong>；固定量程还让 11 个商品<strong>在同一条轴上互相可比</strong></td></tr>
+<tr><td><strong>R-span</strong></td><td>比值类图若确实要自适应，必须给<strong>最小量程</strong>（<code>minSpanRatio</code>），并用 <strong><code>minLower</code> 决定往哪撑</strong>：把下界限制在 <code>1/√span</code>，使<strong>基期值落在量程顶部</strong></td><td>数据跨度≈1（tick 1 恰好为 1）是<strong>完全合法</strong>的状态，不能靠&quot;防零除&quot;去撑它</td></tr>
+<tr><td><strong>R-zero</strong></td><td>防零除<strong>只作最后的安全网</strong>，且必须放在范围决策<strong>之后</strong>。历史教训：把 `mx = mn + (\</td><td>mn\</td></tr>
 </tbody>
 </table>
 </div>
+<blockquote>
+<p><strong>三张价格图的最终口径</strong>（<code>web/app.js</code> 的 <code>RANGE_TEXT</code>）： <code>c-recent</code> = 滚动 60 期窗口、基准取<strong>窗口</strong>首个价格 ⇒ 窗口内不动（滚动窗口的固有语义，比例恒 9×）； <code>c-full</code> = 基准取<strong>首期</strong>、轴固定 <code>[0.1, 1.6]</code>； <code>c-all</code> = 各商品各自<strong>首期</strong>归一、轴固定 <code>[0.09, 4]</code>。后两张的轴在 tick 1/30/60/120/200/300 <strong>逐位相同</strong>（已由 <code>tools/smoke_ui.ps1</code> §3c 断言）。</p>
+</blockquote>
 <h3 id="h28-10-2-这条-bug-的验证方法-已固化为脚本">10.2 这条 bug 的验证方法（已固化为脚本）</h3>
 <p>因为轴刻度是<strong>画在 canvas 上的文字</strong>、无法从 DOM 读出，所以实现里把本次比例尺同时写进 <code>canvas.dataset</code>（<code>data-ymin</code> / <code>data-ymax</code> / <code>data-ticks</code>），自检脚本即可从 <code>--dump-dom</code> 读取：</p>
 <pre class="code-block"><code data-lang="powershell">powershell -ExecutionPolicy Bypass -File tools\verify_scale_freeze.ps1</code></pre>

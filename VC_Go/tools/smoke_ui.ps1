@@ -172,6 +172,38 @@ if ($recent[0] -and $recent[1] -and [double]$recent[0] -gt 0) {
 }
 
 Say ''
+Say '== 3c) fixed-range charts keep the SAME axis at different ticks =='
+# The three price charts are normalised to a FIXED baseline (the first period), so their
+# axes must not drift as playback advances -- otherwise the same data looks different at
+# different ticks. Verify by loading two distant ticks and comparing the axis attributes.
+function AxisAt($at, $id) {
+    $f = Join-Path $env:TEMP ("smoke_at_$at.html")
+    Remove-Item $f -Force -ErrorAction SilentlyContinue
+    $args = @('--headless=new','--disable-gpu','--virtual-time-budget=9000',
+              '--no-first-run','--no-default-browser-check','--disk-cache-size=1',
+              '--dump-dom', ($url + "?at=$at"))
+    $p = Start-Process -FilePath $edge -ArgumentList $args -PassThru -NoNewWindow `
+        -RedirectStandardOutput $f -RedirectStandardError (Join-Path $env:TEMP 'smoke_at.err')
+    if (-not $p.WaitForExit(60000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Milliseconds 400
+    for ($i = 0; $i -lt 20; $i++) {
+        try {
+            $dd = [System.IO.File]::ReadAllText($f, [System.Text.Encoding]::UTF8)
+            $m = [regex]::Match($dd, '<canvas id="' + $id + '"[^>]*>')
+            return @([regex]::Match($m.Value, 'data-ymin="([^"]*)"').Groups[1].Value,
+                     [regex]::Match($m.Value, 'data-ymax="([^"]*)"').Groups[1].Value)
+        } catch { Start-Sleep -Milliseconds 250 }
+    }
+    return @('', '')
+}
+foreach ($id in @('c-full', 'c-all')) {
+    $a = AxisAt 1 $id
+    $b = AxisAt 300 $id
+    $same = ($a[0] -eq $b[0]) -and ($a[1] -eq $b[1])
+    Check ("{0} axis identical at tick 1 and 300" -f $id) $same ("t1=[$($a[0])..$($a[1])] t300=[$($b[0])..$($b[1])]")
+}
+
+Say ''
 Say '== 4) browser console / page errors =='
 $jsErrs = @()
 foreach ($pat in @('Uncaught', 'is not defined', 'is not a function', 'TypeError', 'ReferenceError', 'SyntaxError')) {
