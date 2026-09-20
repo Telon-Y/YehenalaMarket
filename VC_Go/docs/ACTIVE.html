@@ -940,7 +940,7 @@ out/                           仓库根，未入库（与本目录平级）
 </table>
 </div>
 <p><strong>顺带修复</strong>：<code>-gov-startup</code> 此前是<strong>空旗标</strong>（<code>sim.New</code> 用包内常量 <code>startupGovFraction</code>，忽略了 <code>Options.GovStartupFraction</code>）。 现已接线：<code>Options.GovStartupFraction &gt; 0</code> 时覆盖默认 0.50（口径 = 该值 × 一周工资总额）。</p>
-<p><strong>实测（受控对照：<code>-gov-startup 20</code> 给国库流动性，1,000 tick；<code>out/liq_off.txt</code> 对 <code>out/liq_on.txt</code>）</strong>：</p>
+<p><strong>实测（受控对照：<code>-gov-startup 20</code> 给国库流动性，1,000 tick；<code>out/runs/liq_off.txt</code> 对 <code>out/runs/liq_on.txt</code>）</strong>：</p>
 <div class="table-wrap">
 <table>
 <thead>
