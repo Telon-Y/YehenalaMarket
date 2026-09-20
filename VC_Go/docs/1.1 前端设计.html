@@ -147,6 +147,8 @@ a{color:var(--accent)}
 </li>
 <li><a href="#h21-九-验收补充-在契约-六-之外的界面自检">九、验收补充（在契约 §六 之外的界面自检）</a>
 </li>
+<li><a href="#h22-十-视觉稿-web-mockup-html-与它回报给设计的三个问题">十、视觉稿（web/mockup.html）与它回报给设计的三个问题</a>
+</li>
 </ol></nav>
 <main>
 <h1>1.1 前端设计（契约的下游产物）</h1>
@@ -307,6 +309,25 @@ web/                          ← 纯静态，可直接 file:// 打开
 <hr>
 <h2 id="h21-九-验收补充-在契约-六-之外的界面自检">九、验收补充（在契约 §六 之外的界面自检）</h2>
 <ol><li><strong>可溯源性</strong>：随机抽 10 个界面格子，逐个能追到 <code>docs/1.1 图形化界面.md</code> §2.2 的字段锚点；</li><li><strong>不撒谎</strong>：无数据处显示&quot;无数据&quot;；仓库纯利<strong>全局搜索不到</strong>；</li><li><strong>帧率</strong>：×5 档（12 帧/周期）连续 600 周期，帧间隔 p95 ≤ 20ms；</li><li><strong>解耦</strong>：同一参数下<strong>换档位重跑</strong>，tick 序列与 1.0 回归锚点一致（契约 §六-1 的五个值）。</li></ol>
+<hr>
+<h2 id="h22-十-视觉稿-web-mockup-html-与它回报给设计的三个问题">十、视觉稿（<code>web/mockup.html</code>）与它回报给设计的三个问题</h2>
+<p><strong>视觉稿</strong>：<code>web/mockup.html</code> —— 自包含单文件（无依赖、无网络请求），假数据但<strong>形状取自真实实测</strong> （价格指数增长、名义 GDP 起飞 / 实际增加值见顶回落、政府池 −1.85e12、贴边 59.70%）。 双击即开；深链 <code>#build</code> / <code>#queue</code> / <code>#other</code> 直接切页。同目录 <code>out/review/mockup/*.png</code> 为四页截图。</p>
+<p><strong>它已经暴露了三个真问题</strong>（在设计阶段就抓到，正是做视觉稿的目的）：</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>#</th><th>问题</th><th>现象</th><th>结论（已修正/需注意）</th></tr>
+</thead>
+<tbody>
+<tr><td>V1</td><td><strong>flex 子项被压缩</strong></td><td>一级菜单 <code>&lt;nav&gt;</code> 在 flex 行里宽度被压缩，<code>市场</code> 竖排成&quot;市/场&quot;</td><td>侧栏必须写 <code>flex:0 0 200px</code> + <code>white-space:nowrap</code>。<strong>这类问题读规格发现不了</strong></td></tr>
+<tr><td>V2</td><td><strong>视口高度耦合</strong></td><td>容器用 <code>height:100vh</code> 时，内容只占视口高度，页面下方留大片空白</td><td>主区应 <code>flex:1 1 auto; min-height:0</code>，<code>.page.on{min-height:100%}</code> —— 对任何嵌入/截图视口都正确</td></tr>
+<tr><td>V3</td><td><strong>假数据会自带&quot;台阶&quot;</strong></td><td>价格序列用硬阈值分段（<code>i &gt; 0.45N</code> 起加通胀）⇒ 图上出现不自然的折角</td><td>假数据也必须用<strong>平滑过渡</strong>（smoothstep）；否则会被误读成模型特征</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>V3 尤其值得记住</strong>：视觉稿的假数据如果&quot;看起来像机制&quot;，评审时就会把演示瑕疵当成模型行为。 故契约 §四 的&quot;不显示仓库纯利&quot;之外，建议再加一条：<strong>假数据不得制造模型不存在的形态</strong>。</p>
+</blockquote>
 </main>
 </div>
 </body>

@@ -1,0 +1,1165 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>叶赫那拉市场 · 1.1 界面视觉稿</title>
+<style>
+/* ================= 设计令牌（沿用 tools/md2html.js 的配色，仅扩展数据色） ================= */
+:root{
+  --ink:#1f2328; --ink-2:#57606a; --line:#d8dee4; --bg:#fff; --accent:#0969da; --panel:#f6f8fa;
+  --up:#1a7f37; --down:#cf222e; --warn:#9a6700; --neutral:#8250df; --grid:#eaeef2;
+  --gap:12px; --gap-lg:20px; --radius:8px;
+  --font:"MingChinese","Segoe UI","PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,sans-serif;
+  --mono:Consolas,"Cascadia Mono",Menlo,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font-family:var(--font);font-size:20px;line-height:1.5;
+  font-variant-numeric:tabular-nums;
+  display:flex;flex-direction:column;height:100vh;overflow:hidden;
+}
+button{font:inherit;color:inherit}
+.num{font-variant-numeric:tabular-nums}
+.ink2{color:var(--ink-2)}
+.up{color:var(--up)} .down{color:var(--down)} .warn{color:var(--warn)} .neutral{color:var(--neutral)}
+
+/* ================= 顶栏（固定，契约 §三-1：观测量必须常驻） ================= */
+.topbar{
+  height:48px;flex:none;display:flex;align-items:center;gap:var(--gap-lg);
+  padding:0 var(--gap-lg);border-bottom:1px solid var(--line);background:var(--panel);
+  font-size:16px;
+}
+.topbar .brand{font-weight:600;font-size:17px}
+.topbar .tick{font-family:var(--mono);font-size:15px;color:var(--ink-2)}
+.speeds{display:flex;gap:2px}
+.speeds button{
+  min-width:38px;height:28px;border:1px solid var(--line);background:var(--bg);
+  border-radius:6px;cursor:pointer;font-size:15px;
+}
+.speeds button[aria-pressed="true"]{background:var(--accent);color:#fff;border-color:var(--accent)}
+.topbar .spacer{flex:1}
+.pill{
+  display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;
+  border:1px solid var(--line);border-radius:999px;background:var(--bg);font-size:15px;
+}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--up);flex:none}
+.dot.bad{background:var(--down)} .dot.warn{background:var(--warn)}
+
+/* ================= 主体 ================= */
+.body{flex:1;display:flex;min-height:0}
+.nav{
+  width:200px;flex:none;border-right:1px solid var(--line);background:var(--panel);
+  padding:var(--gap) 0;display:flex;flex-direction:column;gap:2px;
+}
+.nav button{
+  text-align:left;padding:10px 18px;border:0;background:transparent;cursor:pointer;
+  border-left:3px solid transparent;font-size:17px;
+}
+.nav button:hover{background:#eceff2}
+.nav button[aria-selected="true"]{
+  background:var(--bg);border-left-color:var(--accent);font-weight:600;color:var(--accent);
+}
+main{flex:1;min-width:0;overflow:auto;padding:var(--gap-lg)}
+.page{display:none} .page.on{display:block}
+h2.pt{font-size:22px;margin:0 0 var(--gap-lg);padding-bottom:7px;border-bottom:1px solid var(--line)}
+
+/* ================= 状态栏（固定） ================= */
+.statusbar{
+  height:32px;flex:none;display:flex;align-items:center;gap:var(--gap-lg);
+  padding:0 var(--gap-lg);border-top:1px solid var(--line);background:var(--panel);
+  font-size:14px;color:var(--ink-2);overflow:hidden;white-space:nowrap;
+}
+.statusbar b{font-weight:600}
+.chip{display:inline-flex;gap:5px;align-items:center}
+.chip .k{color:var(--ink-2)}
+.chip .v{font-family:var(--mono);font-size:13px}
+
+/* ================= 通用组件 ================= */
+.card{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:var(--gap);margin-bottom:var(--gap-lg)}
+.metric .label{font-size:16px;color:var(--ink-2)}
+.metric .value{font-size:24px;font-weight:600;margin-top:4px;font-variant-numeric:tabular-nums}
+.metric .sub{font-size:14px;color:var(--ink-2);margin-top:2px}
+table{width:100%;border-collapse:collapse;font-size:16px}
+th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+th{position:sticky;top:0;background:var(--bg);font-weight:600;color:var(--ink-2);z-index:1;
+   box-shadow:inset 0 -1px 0 var(--line)}
+td.r,th.r{text-align:right}
+tr:hover td{background:var(--panel)}
+.bar{position:relative;height:14px;background:var(--grid);border-radius:3px;min-width:70px;overflow:hidden}
+.bar>i{position:absolute;inset:0 auto 0 0;background:var(--accent);border-radius:3px}
+.bar.down>i{background:var(--down)} .bar.warn>i{background:var(--warn)}
+.tag{display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:999px;
+     font-size:13px;border:1px solid var(--line)}
+.tag.bad{color:var(--down);border-color:#f5c2c7;background:#fff5f5}
+.tag.ok{color:var(--up);border-color:#aceebb;background:#f0fff4}
+.tag.warn{color:var(--warn);border-color:#f0d9a8;background:#fff8e6}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:var(--gap-lg)}
+.grid2.tight{gap:var(--gap)}
+.canvaswrap{border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;background:var(--bg)}
+.canvaswrap .ct{font-size:15px;color:var(--ink-2);margin-bottom:6px;display:flex;justify-content:space-between}
+canvas{display:block;width:100%}
+.legend{display:flex;flex-wrap:wrap;gap:10px;font-size:14px;margin-top:8px}
+.legend span{display:inline-flex;align-items:center;gap:5px;cursor:pointer;user-select:none}
+.legend span.off{opacity:.35;text-decoration:line-through}
+.legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
+
+/* 市场页：左二级菜单 + 右详情 */
+.market{display:grid;grid-template-columns:230px 1fr;gap:var(--gap-lg);align-items:start}
+.goodlist{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.goodlist .row{display:flex;align-items:center;gap:8px;padding:7px 10px;cursor:pointer;font-size:16px;
+               border-bottom:1px solid var(--grid)}
+.goodlist .row:last-child{border-bottom:0}
+.goodlist .row.on{background:var(--panel);font-weight:600}
+.goodlist input{accent-color:var(--accent);width:15px;height:15px}
+.goodlist .swatch{width:10px;height:10px;border-radius:2px;flex:none}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 18px;font-size:17px;margin-bottom:var(--gap)}
+.kv dt{color:var(--ink-2)} .kv dd{margin:0;font-variant-numeric:tabular-nums}
+.note{font-size:14px;color:var(--ink-2);margin-top:8px;padding-left:10px;border-left:2px solid var(--line)}
+
+/* 建筑页 */
+.buildrow{display:grid;grid-template-columns:1fr auto;gap:var(--gap);align-items:center}
+.btns{display:flex;gap:4px}
+.btns button{min-width:44px;height:30px;border:1px solid var(--line);background:var(--bg);
+             border-radius:6px;cursor:pointer;font-size:15px}
+.btns button.del{color:var(--down);border-color:#f5c2c7}
+.btns button:hover{background:var(--panel)}
+
+/* 队列页分页 */
+.pager{display:flex;align-items:center;gap:10px;font-size:15px;color:var(--ink-2);margin-top:10px}
+.pager button{height:28px;min-width:32px;border:1px solid var(--line);background:var(--bg);
+              border-radius:6px;cursor:pointer}
+
+@media(max-width:1200px){
+  .market{grid-template-columns:1fr}
+  .cards{grid-template-columns:repeat(2,1fr)}
+  .grid2{grid-template-columns:1fr}
+  .nav{width:160px}
+}
+</style>
+</head>
+<body>
+
+<!-- ============ 顶栏 ============ -->
+<header class="topbar">
+  <span class="brand">叶赫那拉市场 · 1.1</span>
+  <span class="tick">tick <b id="t-tick">0000</b> / 周期 <b id="t-cycle">0.0s</b></span>
+  <div class="speeds" role="group" aria-label="模拟速度">
+    <button data-sp="0" aria-pressed="false">⏸ 0</button>
+    <button data-sp="1" aria-pressed="true">×1</button>
+    <button data-sp="2" aria-pressed="false">×2</button>
+    <button data-sp="5" aria-pressed="false">×5</button>
+  </div>
+  <span class="tick" id="t-frames">1 tick / 60 帧</span>
+  <span class="spacer"></span>
+  <span class="pill"><span class="dot" id="t-dot"></span><span id="t-health">运行正常</span></span>
+  <span class="pill">货币存量 <b class="num" id="t-money">4.31e6</b></span>
+</header>
+
+<div class="body">
+  <!-- ============ 一级菜单 ============ -->
+  <nav class="nav" role="tablist">
+    <button role="tab" aria-selected="true" data-page="market">市场</button>
+    <button role="tab" aria-selected="false" data-page="build">建筑</button>
+    <button role="tab" aria-selected="false" data-page="queue">建筑队列</button>
+    <button role="tab" aria-selected="false" data-page="other">其他</button>
+  </nav>
+
+  <main>
+    <!-- ==================== 市场 ==================== -->
+    <section class="page on" id="p-market">
+      <h2 class="pt">市场</h2>
+      <div class="market">
+        <div class="goodlist" id="goodlist">
+    <div class="row on" data-g="0">
+      <input type="checkbox" checked="" data-hide="谷物">
+      <span class="swatch" style="background:#0969da"></span>
+      <span>谷物</span>
+      <span class="num ink2" style="margin-left:auto">551.40</span>
+    </div>
+    <div class="row" data-g="1">
+      <input type="checkbox" checked="" data-hide="加工食品">
+      <span class="swatch" style="background:#1a7f37"></span>
+      <span>加工食品</span>
+      <span class="num ink2" style="margin-left:auto">857.20</span>
+    </div>
+    <div class="row" data-g="2">
+      <input type="checkbox" checked="" data-hide="织物">
+      <span class="swatch" style="background:#8250df"></span>
+      <span>织物</span>
+      <span class="num ink2" style="margin-left:auto">339.30</span>
+    </div>
+    <div class="row" data-g="3">
+      <input type="checkbox" checked="" data-hide="服装">
+      <span class="swatch" style="background:#bf3989"></span>
+      <span>服装</span>
+      <span class="num ink2" style="margin-left:auto">546.50</span>
+    </div>
+    <div class="row" data-g="4">
+      <input type="checkbox" checked="" data-hide="高档服装">
+      <span class="swatch" style="background:#9a6700"></span>
+      <span>高档服装</span>
+      <span class="num ink2" style="margin-left:auto">1,041</span>
+    </div>
+    <div class="row" data-g="5">
+      <input type="checkbox" checked="" data-hide="煤">
+      <span class="swatch" style="background:#57606a"></span>
+      <span>煤</span>
+      <span class="num ink2" style="margin-left:auto">2,680</span>
+    </div>
+    <div class="row" data-g="6">
+      <input type="checkbox" checked="" data-hide="铁">
+      <span class="swatch" style="background:#cf222e"></span>
+      <span>铁</span>
+      <span class="num ink2" style="margin-left:auto">3,316</span>
+    </div>
+    <div class="row" data-g="7">
+      <input type="checkbox" checked="" data-hide="钢">
+      <span class="swatch" style="background:#953800"></span>
+      <span>钢</span>
+      <span class="num ink2" style="margin-left:auto">5,638</span>
+    </div>
+    <div class="row" data-g="8">
+      <input type="checkbox" checked="" data-hide="工具">
+      <span class="swatch" style="background:#116329"></span>
+      <span>工具</span>
+      <span class="num ink2" style="margin-left:auto">3,314</span>
+    </div>
+    <div class="row" data-g="9">
+      <input type="checkbox" checked="" data-hide="住房">
+      <span class="swatch" style="background:#0550ae"></span>
+      <span>住房</span>
+      <span class="num ink2" style="margin-left:auto">1,555</span>
+    </div>
+    <div class="row" data-g="10">
+      <input type="checkbox" checked="" data-hide="建造力">
+      <span class="swatch" style="background:#6e7781"></span>
+      <span>建造力</span>
+      <span class="num ink2" style="margin-left:auto">11,144</span>
+    </div>
+    <div class="row" data-g="11">
+      <input type="checkbox" checked="" data-hide="金矿">
+      <span class="swatch" style="background:#d4a72c"></span>
+      <span>金矿</span>
+      <span class="num ink2" style="margin-left:auto">10,000</span>
+    </div>
+    <div class="row" data-g="12">
+      <input type="checkbox" checked="" data-hide="中央银行">
+      <span class="swatch" style="background:#6639ba"></span>
+      <span>中央银行</span>
+      <span class="num ink2" style="margin-left:auto">1.00</span>
+    </div>
+    <div class="row" data-g="13">
+      <input type="checkbox" checked="" data-hide="仓库">
+      <span class="swatch" style="background:#1b7c83"></span>
+      <span>仓库</span>
+      <span class="num ink2" style="margin-left:auto">1.00</span>
+    </div></div>
+        <div>
+          <div class="card" style="margin-bottom:var(--gap)">
+            <div style="display:flex;align-items:baseline;gap:14px">
+              <b style="font-size:22px" id="g-name">谷物</b>
+              <span class="ink2" style="font-size:16px">当前价 <b class="num" id="g-price">551.40</b></span>
+            </div>
+            <div class="grid2 tight" style="margin-top:12px">
+              <dl class="kv">
+                <dt>相对当期零利润价 P/P⁰</dt><dd id="g-r0">0.976</dd>
+                <dt>相对开局价 P/Pinit</dt><dd id="g-r1">0.817</dd>
+                <dt>市场生产量</dt><dd id="g-sup">12,803</dd>
+                <dt>市场消费（期望）量</dt><dd id="g-dem">5,487</dd>
+              </dl>
+              <dl class="kv">
+                <dt>工资总额</dt><dd class="num">3,266,943</dd>
+                <dt>消费支出</dt><dd class="num down">1,993,656</dd>
+                <dt>结余入池</dt><dd class="num">1,273,287</dd>
+                <dt>利润率</dt><dd id="g-margin" class="down">-2.41%</dd>
+              </dl>
+            </div>
+            <div class="note">
+              <b>两处口径必须分开显示</b>：<code>P/P⁰</code> 是相对<b>当期</b>零利润价（随成本漂移），
+              <code>P/Pinit</code> 才是相对开局价 —— 契约 §二 明确要求分行呈现，不可混为一谈。<br>
+              另并列<b>工资总额 / 消费支出 / 结余入池</b>三项：1.0 已删除「全部工资用于消费」，
+              且 σ_save 默认 1 ⇒ 只看「消费量」会把储蓄渠道误读成「没人买东西」。
+            </div>
+          </div>
+
+          <div class="grid2" style="margin-bottom:var(--gap)">
+            <div class="canvaswrap">
+              <div class="ct"><span>近期价格变化（末 60 周期）</span><span>对数轴</span></div>
+              <canvas id="c-recent" height="200" width="524"></canvas>
+            </div>
+            <div class="canvaswrap">
+              <div class="ct"><span>全期价格变化</span><span>对数轴 · 基期 = 1</span></div>
+              <canvas id="c-full" height="200" width="524"></canvas>
+            </div>
+          </div>
+
+          <div class="canvaswrap">
+            <div class="ct"><span>全商品总价格图（每条一个商品，可在左侧菜单取消显示）</span><span>对数轴</span></div>
+            <canvas id="c-all" height="260" width="524"></canvas>
+            <div class="legend" id="legend"><span class="on" data-lg="谷物"><i style="background:#0969da"></i>谷物</span><span class="on" data-lg="加工食品"><i style="background:#1a7f37"></i>加工食品</span><span class="on" data-lg="织物"><i style="background:#8250df"></i>织物</span><span class="on" data-lg="服装"><i style="background:#bf3989"></i>服装</span><span class="on" data-lg="高档服装"><i style="background:#9a6700"></i>高档服装</span><span class="on" data-lg="煤"><i style="background:#57606a"></i>煤</span><span class="on" data-lg="铁"><i style="background:#cf222e"></i>铁</span><span class="on" data-lg="钢"><i style="background:#953800"></i>钢</span><span class="on" data-lg="工具"><i style="background:#116329"></i>工具</span><span class="on" data-lg="住房"><i style="background:#0550ae"></i>住房</span><span class="on" data-lg="建造力"><i style="background:#6e7781"></i>建造力</span><span class="on" data-lg="金矿"><i style="background:#d4a72c"></i>金矿</span><span class="on" data-lg="中央银行"><i style="background:#6639ba"></i>中央银行</span><span class="on" data-lg="仓库"><i style="background:#1b7c83"></i>仓库</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== 建筑 ==================== -->
+    <section class="page" id="p-build">
+      <h2 class="pt">建筑 <span class="ink2" style="font-size:16px">（含自给农场 · 共 15 类）</span></h2>
+      <div class="card" style="padding:0">
+        <table>
+          <thead>
+            <tr><th>建筑</th><th class="r">数量</th><th class="r">扩建中</th><th class="r">雇佣率</th>
+                <th class="r">现金池</th><th class="r">利润率 EMA</th><th class="r">状态</th><th class="r">操作</th></tr>
+          </thead>
+          <tbody id="buildbody"><tr>
+      <td><b class="down">谷物农场</b></td>
+      <td class="r num">71.1</td>
+      <td class="r num ink2">—</td>
+      <td class="r num down">0.000</td>
+      <td class="r num down">▼-48,210</td>
+      <td class="r num down">-2.41%</td>
+      <td class="r"><span class="tag bad">原材料不足</span></td>
+      <td class="r"><span class="btns">
+        <button>+1</button><button>+5</button><button>+10</button>
+        <button class="del">−1</button>
+      </span></td>
+    </tr><tr>
+      <td><b class="down">加工食品厂</b></td>
+      <td class="r num">182.9</td>
+      <td class="r num ink2">2</td>
+      <td class="r num ">0.412</td>
+      <td class="r num ">152,340</td>
+      <td class="r num down">-32.90%</td>
+      <td class="r"><span class="tag bad">原材料不足</span></td>
+      <td class="r"><span class="btns">
+        <button>+1</button><button>+5</button><button>+10</button>
+        <button class="del">−1</button>
+      </span></td>
+    </tr><tr>
+      <td>棉花种植园</td>
+      <td class="r num">5.5</td>
+      <td class="r num ink2">—</td>
+      <td class="r num down">0.000</td>
+      <td class="r num down">▼-9,120</td>
+      <td class="r num down">-45.95%</td>
+      <td class="r"><span class="tag warn">停产</span></td>
+      <td class="r"><span class="btns">
+        <button>+1</button><button>+5</button><button>+10</button>
+        <button class="del">−1</button>
+      </span></td>
+    </tr><tr>
+      <td>服装厂</td>
+      <td class="r num">23.4</td>
+      <td class="r num ink2">1</td>
+      <td class="r num ">0.883</td>
+      <td class="r num ">76,450</td>
+      <td class="r num down">-1.81%</td>
+      <td class="r"><span class="tag ok">正常</span></td>
+      <td class="r"><span class="btns">
+        <button>+1</button><button>+5</button><button>+10</button>
+        <button class="del">−1</button>
+      </span></td>
+    </tr><tr>
+      <td>高档服装厂</td>
+      <td class="r num">13.0</td>
+      <td class="r num ink2">—</td>
+      <td class="r num ">0.941</td>
+      <td class="r num ">55,120</td>
+      <td class="r num down">-27.14%</td>
+      <td class="r"><span class="tag ok">正常</span></td>
+      <td class="r"><span class="btns">
+        <button>+1</button><button>+5</button><button>+10</button>
+        <button class="del">−1</button>
+      </span></td>
+    </tr><tr>
+      <td>煤矿</td>
+      <td class="r num">500.0</td>
+      <td class="r num ink2">—</td>
+      <td class="r num ">1.000</td>
+      <td class="r num ">228,400</td>
+      <td class="r num up">+23.19%</td>
+      <td class="r"><span class="tag ok">正常</span></td>
+      <td class="r"><span class="btns">
+        <button>+1</button><button>+5</button><button>+10</button>
+        <button class="del">−1</button>
+      </span></td>
+    </tr><tr>
+      <td>铁矿</td>
+      <td class="r num">500.0</td>
+      <td class="r num ink2">—</td>
+      <td class="r num ">1.000</td>
+      <td class="r num ">301,770</td>
+      <td class="r num up">+52.44%</td>
+      <td class="r"><span class="tag ok">正常</span></td>
+      <td class="r"><span class="btns">
+        <button>+1</button><button>+5</button><button>+10</button>
+        <button class="del">−1</button>
+      </span></td>
+    </tr><tr>
+      <td>炼钢厂</td>
+      <td class="r num">214.7</td>
+      <td class="r num ink2">3</td>
+      <td class="r num ">0.972</td>
+      <td class="r num ">118,300</td>
+      <td class="r num up">+51.75%</td>
+      <td class="r"><span class="tag ok">正常</span></td>
+      <td class="r"><span class="btns">
+        <button>+1</button><button>+5</button><button>+10</button>
+        <button class="del">−1</button>
+      </span></td>
+    </tr><tr>
+      <td>工具厂</td>
+      <td class="r num">150.2</td>
+      <td class="r num ink2">1</td>
+      <td class="r num ">0.955</td>
+      <td class="r num ">84,200</td>
+      <td class="r num up">+70.93%</td>
+      <td class="r"><span class="tag ok">正常</span></td>
+      <td class="r"><span class="btns">
+        <button>+1</button><button>+5</button><button>+10</button>
+        <button class="del">−1</button>
+      </span></td>
+    </tr><tr>
+      <td>住房</td>
+      <td class="r num">99.8</td>
+      <td class="r num ink2">—</td>
+      <td class="r num ">0.998</td>
+      <td class="r num ">193,450</td>
+      <td class="r num up">+13.87%</td>
+      <td class="r"><span class="tag ok">正常</span></td>
+      <td class="r"><span class="btns">
+        <button>+1</button><button>+5</button><button>+10</button>
+        <button class="del">−1</button>
+      </span></td>
+    </tr><tr>
+      <td><b class="down">建造部门</b></td>
+      <td class="r num">1000.0</td>
+      <td class="r num ink2">5</td>
+      <td class="r num ">0.830</td>
+      <td class="r num down">▼-1.85e6</td>
+      <td class="r num down">-51.69%</td>
+      <td class="r"><span class="tag bad">原材料不足</span></td>
+      <td class="r"><span class="btns">
+        <button>+1</button><button>+5</button><button>+10</button>
+        <button class="del">−1</button>
+      </span></td>
+    </tr><tr>
+      <td>金融区</td>
+      <td class="r num">50.0</td>
+      <td class="r num ink2">—</td>
+      <td class="r num ">1.000</td>
+      <td class="r num down">▼-2.77e9</td>
+      <td class="r num ink2">0.00%</td>
+      <td class="r"><span class="tag ok">正常</span></td>
+      <td class="r"><span class="btns">
+        <button>+1</button><button>+5</button><button>+10</button>
+        <button class="del">−1</button>
+      </span></td>
+    </tr><tr>
+      <td>宅邸庄园</td>
+      <td class="r num">50.0</td>
+      <td class="r num ink2">—</td>
+      <td class="r num ">1.000</td>
+      <td class="r num down">▼-1.60e9</td>
+      <td class="r num ink2">0.00%</td>
+      <td class="r"><span class="tag ok">正常</span></td>
+      <td class="r"><span class="btns">
+        <button>+1</button><button>+5</button><button>+10</button>
+        <button class="del">−1</button>
+      </span></td>
+    </tr><tr>
+      <td>仓库</td>
+      <td class="r num">1.0</td>
+      <td class="r num ink2">—</td>
+      <td class="r num ">1.000</td>
+      <td class="r num ">135,512</td>
+      <td class="r num ink2">0.00%</td>
+      <td class="r"><span class="tag ok">正常</span></td>
+      <td class="r"><span class="btns">
+        <button>+1</button><button>+5</button><button>+10</button>
+        <button class="del">−1</button>
+      </span></td>
+    </tr><tr>
+      <td>自给农场</td>
+      <td class="r num">994.0</td>
+      <td class="r num ink2">—</td>
+      <td class="r num ">0.929</td>
+      <td class="r num ">0.00</td>
+      <td class="r num ink2">0.00%</td>
+      <td class="r"><span class="tag ok">正常</span></td>
+      <td class="r"><span class="btns">
+        <button>+1</button><button>+5</button><button>+10</button>
+        <button class="del">−1</button>
+      </span></td>
+    </tr></tbody>
+        </table>
+      </div>
+      <div class="note">
+        <b>原材料不足</b>按 <code>produce</code> 的<b>配给比 &lt; 1</b> 判定（契约 §0.5-U2），
+        <b>不用</b> <code>MarginEMA &lt; 0</code> —— 后者会把「亏损」误报成「缺料」。<br>
+        <b>现金池允许为负</b>（1.0 实测政府池可到 −1.85e12），负值着色 + 方向符号，<b>不得显示为 0</b>。<br>
+        <b>拆除</b>需二次确认，并提示「资产与货币一并核销、在途订单不退款」（契约 §0.2-7）。
+      </div>
+    </section>
+
+    <!-- ==================== 建筑队列 ==================== -->
+    <section class="page" id="p-queue">
+      <h2 class="pt">建筑队列 <span class="ink2" style="font-size:16px">（每页 20 条，逐级建造）</span></h2>
+      <div class="card" style="padding:0">
+        <table>
+          <thead>
+            <tr><th class="r">#</th><th>建筑类型</th><th>已建部分 ÷ 总建造力</th>
+                <th class="r">进度</th><th class="r">剩余时间</th><th>来源</th><th class="r">操作</th></tr>
+          </thead>
+          <tbody id="queuebody"><tr>
+      <td class="r num ink2">1</td>
+      <td>加工食品厂</td>
+      <td class="num ink2">11 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar warn"><i style="width:7%"></i></span>
+        <span class="num" style="margin-left:8px">7%</span></td>
+      <td class="r num">1 周期</td>
+      <td><span class="tag warn">玩家·置顶</span></td>
+      <td class="r"><span class="btns"><button>置顶</button><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">2</td>
+      <td>炼钢厂</td>
+      <td class="num ink2">48 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar"><i style="width:48%"></i></span>
+        <span class="num" style="margin-left:8px">48%</span></td>
+      <td class="r num">2 周期</td>
+      <td><span class="tag warn">玩家·置顶</span></td>
+      <td class="r"><span class="btns"><button>置顶</button><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">3</td>
+      <td>工具厂</td>
+      <td class="num ink2">85 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar"><i style="width:89%"></i></span>
+        <span class="num" style="margin-left:8px">89%</span></td>
+      <td class="r num">3 周期</td>
+      <td><span class="tag warn">玩家·置顶</span></td>
+      <td class="r"><span class="btns"><button>置顶</button><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">4</td>
+      <td>建造部门</td>
+      <td class="num ink2">22 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar"><i style="width:33%"></i></span>
+        <span class="num" style="margin-left:8px">33%</span></td>
+      <td class="r num">4 周期</td>
+      <td>扩建</td>
+      <td class="r"><span class="btns"><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">5</td>
+      <td>高档服装厂</td>
+      <td class="num ink2">59 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar"><i style="width:74%"></i></span>
+        <span class="num" style="margin-left:8px">74%</span></td>
+      <td class="r num">5 周期</td>
+      <td>收购</td>
+      <td class="r"><span class="btns"><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">6</td>
+      <td>服装厂</td>
+      <td class="num ink2">96 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar warn"><i style="width:18%"></i></span>
+        <span class="num" style="margin-left:8px">18%</span></td>
+      <td class="r num">6 周期</td>
+      <td>公共工程</td>
+      <td class="r"><span class="btns"><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">7</td>
+      <td>加工食品厂</td>
+      <td class="num ink2">33 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar"><i style="width:59%"></i></span>
+        <span class="num" style="margin-left:8px">59%</span></td>
+      <td class="r num">7 周期</td>
+      <td>扩建</td>
+      <td class="r"><span class="btns"><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">8</td>
+      <td>炼钢厂</td>
+      <td class="num ink2">70 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar warn"><i style="width:3%"></i></span>
+        <span class="num" style="margin-left:8px">3%</span></td>
+      <td class="r num">8 周期</td>
+      <td>扩建</td>
+      <td class="r"><span class="btns"><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">9</td>
+      <td>工具厂</td>
+      <td class="num ink2">7 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar"><i style="width:44%"></i></span>
+        <span class="num" style="margin-left:8px">44%</span></td>
+      <td class="r num">9 周期</td>
+      <td>收购</td>
+      <td class="r"><span class="btns"><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">10</td>
+      <td>建造部门</td>
+      <td class="num ink2">44 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar"><i style="width:85%"></i></span>
+        <span class="num" style="margin-left:8px">85%</span></td>
+      <td class="r num">1 周期</td>
+      <td>扩建</td>
+      <td class="r"><span class="btns"><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">11</td>
+      <td>高档服装厂</td>
+      <td class="num ink2">81 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar warn"><i style="width:29%"></i></span>
+        <span class="num" style="margin-left:8px">29%</span></td>
+      <td class="r num">2 周期</td>
+      <td>公共工程</td>
+      <td class="r"><span class="btns"><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">12</td>
+      <td>服装厂</td>
+      <td class="num ink2">18 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar"><i style="width:70%"></i></span>
+        <span class="num" style="margin-left:8px">70%</span></td>
+      <td class="r num">3 周期</td>
+      <td>扩建</td>
+      <td class="r"><span class="btns"><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">13</td>
+      <td>加工食品厂</td>
+      <td class="num ink2">55 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar warn"><i style="width:14%"></i></span>
+        <span class="num" style="margin-left:8px">14%</span></td>
+      <td class="r num">4 周期</td>
+      <td>收购</td>
+      <td class="r"><span class="btns"><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">14</td>
+      <td>炼钢厂</td>
+      <td class="num ink2">92 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar"><i style="width:55%"></i></span>
+        <span class="num" style="margin-left:8px">55%</span></td>
+      <td class="r num">5 周期</td>
+      <td>扩建</td>
+      <td class="r"><span class="btns"><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">15</td>
+      <td>工具厂</td>
+      <td class="num ink2">29 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar"><i style="width:96%"></i></span>
+        <span class="num" style="margin-left:8px">96%</span></td>
+      <td class="r num">6 周期</td>
+      <td>扩建</td>
+      <td class="r"><span class="btns"><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">16</td>
+      <td>建造部门</td>
+      <td class="num ink2">66 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar"><i style="width:40%"></i></span>
+        <span class="num" style="margin-left:8px">40%</span></td>
+      <td class="r num">7 周期</td>
+      <td>公共工程</td>
+      <td class="r"><span class="btns"><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">17</td>
+      <td>高档服装厂</td>
+      <td class="num ink2">3 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar"><i style="width:81%"></i></span>
+        <span class="num" style="margin-left:8px">81%</span></td>
+      <td class="r num">8 周期</td>
+      <td>收购</td>
+      <td class="r"><span class="btns"><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">18</td>
+      <td>服装厂</td>
+      <td class="num ink2">40 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar warn"><i style="width:25%"></i></span>
+        <span class="num" style="margin-left:8px">25%</span></td>
+      <td class="r num">9 周期</td>
+      <td>扩建</td>
+      <td class="r"><span class="btns"><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">19</td>
+      <td>加工食品厂</td>
+      <td class="num ink2">77 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar"><i style="width:66%"></i></span>
+        <span class="num" style="margin-left:8px">66%</span></td>
+      <td class="r num">1 周期</td>
+      <td>扩建</td>
+      <td class="r"><span class="btns"><button class="del">撤单</button></span></td>
+    </tr><tr>
+      <td class="r num ink2">20</td>
+      <td>炼钢厂</td>
+      <td class="num ink2">14 / 100</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar warn"><i style="width:10%"></i></span>
+        <span class="num" style="margin-left:8px">10%</span></td>
+      <td class="r num">2 周期</td>
+      <td>扩建</td>
+      <td class="r"><span class="btns"><button class="del">撤单</button></span></td>
+    </tr></tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <button id="q-prev">←</button><span>第 <b id="q-page">1</b> / <b id="q-pages">2</b> 页</span><button id="q-next">→</button>
+        <span style="margin-left:auto">置顶优先级：<b>玩家 &gt; §4.2 预警插队 &gt; FIFO</b>（契约 §0.2-6）</span>
+      </div>
+    </section>
+
+    <!-- ==================== 其他 ==================== -->
+    <section class="page" id="p-other">
+      <h2 class="pt">其他 <span class="ink2" style="font-size:16px">（栏目已冻结 · 契约 §四-4）</span></h2>
+
+      <div class="cards">
+        <div class="card metric"><div class="label">名义 GDP（年化）</div>
+          <div class="value num">2.60e13</div><div class="sub warn">▲ 由债务与价格膨胀驱动</div></div>
+        <div class="card metric"><div class="label">名义 GDP（本周）</div>
+          <div class="value num">4.72e9</div><div class="sub">52 周折算口径见 §7.1</div></div>
+        <div class="card metric"><div class="label">实际工农总产值</div>
+          <div class="value num">4.14e7</div><div class="sub ink2">固定 P_ref（§7.2）· 名义 1.96e7</div></div>
+        <div class="card metric"><div class="label">中间投入</div>
+          <div class="value num down">4.95e7</div><div class="sub down">▲ 增长几乎全被投入吃掉</div></div>
+      </div>
+
+      <div class="card" style="padding:0;margin-bottom:var(--gap-lg)">
+        <table>
+          <thead><tr>
+            <th>市场</th><th class="r">本周 GDP</th><th class="r">年化 GDP</th><th class="r">实际总产值</th>
+            <th class="r">中间投入</th><th class="r">人口</th><th class="r">幸福度</th><th class="r">加权均价</th>
+          </tr></thead>
+          <tbody>
+            <tr><td>本地市场 #1</td><td class="r num">4.72e9</td><td class="r num">2.60e13</td>
+                <td class="r num">4.14e7</td><td class="r num down">4.95e7</td>
+                <td class="r num">5,153,902</td><td class="r num">0.5955</td>
+                <td class="r num">3,120.7</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="grid2" style="margin-bottom:var(--gap)">
+        <div class="canvaswrap">
+          <div class="ct"><span>名义 GDP vs 实际增加值（双口径必须并列）</span><span>对数轴</span></div>
+          <canvas id="c-gdp" height="220" width="600"></canvas>
+          <div class="legend">
+            <span data-lg="nom"><i style="background:var(--accent)"></i>名义 GDP</span>
+            <span data-lg="real"><i style="background:var(--up)"></i>实际增加值</span>
+          </div>
+          <div class="note">1.0 长跑实测：价格指数 ×9.9e4、名义 GDP 2.6e13，而居民实际货币余额从 6.7e6 掉到 319。
+            <b>只看名义会把恶性通胀读成高速增长</b>。</div>
+        </div>
+        <div class="canvaswrap">
+          <div class="ct"><span>阶级比例 · 阶级现金池</span><span>饼图（仅 2 个，契约 §四-4）</span></div>
+          <canvas id="c-pie" height="220" width="600"></canvas>
+          <div class="legend">
+            <span class="on"><i style="background:var(--accent)"></i>劳工</span>
+            <span class="on"><i style="background:var(--up)"></i>工程师</span>
+            <span class="on"><i style="background:var(--neutral)"></i>资本家</span>
+          </div>
+          <div class="note">按<b>固定阶级</b> <code>Pools[].Class</code> 切；<code>WealthTier</code> 用的是固定工资带
+            <code>{5,10,20}</code>，而农业/庄园有<b>自己的</b>阶级结构（农民 7 元）⇒ 图注须注明该差异。</div>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="canvaswrap">
+          <div class="ct"><span>政府现金池 vs 债务上限</span><span>越界标注</span></div>
+          <canvas id="c-gov" height="200" width="600"></canvas>
+          <div class="note">A7 实测<b>债务÷上限 = +Inf</b>（上限归零）、越界 714/2000 tick —— 红区即越界。</div>
+        </div>
+        <div class="canvaswrap">
+          <div class="ct"><span>价格贴边率 · 亏损等级占比</span><span>行内条即数值</span></div>
+          <canvas id="c-judge" height="200" width="600"></canvas>
+          <div class="note">A1 贴边 <b class="down">59.70%</b>（阈值 &lt; 5%）· A2 亏损等级占比 <b class="warn">49.57%</b>（阈值 ≤ 50%，压线）。</div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ============ 状态栏（固定：记账不变量必须常驻） ============ -->
+<footer class="statusbar">
+  <span class="chip"><span class="k">借贷违规</span><span class="v up">0</span></span>
+  <span class="chip"><span class="k">逐建筑对账残差</span><span class="v up">0.00</span></span>
+  <span class="chip"><span class="k">A8 货币守恒残差</span><span class="v up">3.07e-3</span></span>
+  <span class="chip"><span class="k">核销累计</span><span class="v">0.00</span></span>
+  <span class="chip"><span class="k">判据</span><span class="v warn">5 / 9</span></span>
+  <span class="chip"><span class="k">A1</span><span class="v down">×</span></span>
+  <span class="chip"><span class="k">A7</span><span class="v down">×</span></span>
+  <span class="chip"><span class="k">A9</span><span class="v down">×</span></span>
+  <span class="chip" style="margin-left:auto"><span class="k">视觉稿 · 假数据</span></span>
+</footer>
+
+<script>
+// =====================================================================================
+// 1.1 界面视觉稿 —— 假数据，但形状取自真实实测（10,000 tick 默认参数）
+// =====================================================================================
+const GOODS = [
+  {n:'谷物',    color:'#0969da', p:551.4,    p0:0.976, pi:0.817, s:12803,  d:5487,  m:-2.41},
+  {n:'加工食品',color:'#1a7f37', p:857.2,    p0:0.671, pi:0.611, s:8231,   d:4100,  m:-32.90},
+  {n:'织物',    color:'#8250df', p:339.3,    p0:0.541, pi:0.452, s:3675,   d:2100,  m:-45.95},
+  {n:'服装',    color:'#bf3989', p:546.5,    p0:0.982, pi:0.693, s:2337,   d:1900,  m:-1.81},
+  {n:'高档服装',color:'#9a6700', p:1041.4,   p0:0.729, pi:0.595, s:390,    d:320,   m:-27.14},
+  {n:'煤',      color:'#57606a', p:2679.8,   p0:1.232, pi:2.664, s:454,    d:120,   m:23.19},
+  {n:'铁',      color:'#cf222e', p:3316.0,   p0:1.524, pi:3.297, s:454,    d:90,    m:52.44},
+  {n:'钢',      color:'#953800', p:5638.4,   p0:1.514, pi:4.083, s:680,    d:150,   m:51.75},
+  {n:'工具',    color:'#116329', p:3314.3,   p0:1.707, pi:4.322, s:727,    d:200,   m:70.93},
+  {n:'住房',    color:'#0550ae', p:1554.9,   p0:1.138, pi:2.098, s:5990,   d:5990,  m:13.87},
+  {n:'建造力',  color:'#6e7781', p:11143.7,  p0:0.482, pi:1.369, s:300,    d:300,   m:-51.69},
+  {n:'金矿',    color:'#d4a72c', p:10000,    p0:1.02,  pi:1.0,   s:95,     d:20,    m:2.1},
+  {n:'中央银行',color:'#6639ba', p:1,        p0:1.0,   pi:1.0,   s:0,      d:0,     m:0},
+  {n:'仓库',    color:'#1b7c83', p:1,        p0:1.0,   pi:1.0,   s:4102,   d:4102,  m:0},
+];
+
+// 15 类建筑（含自给农场）；shortage = 配给比 < 1；cash 可为负
+const BUILDS = [
+  {n:'谷物农场',   lv:71.1,  q:0,  hire:0.000, cash:-48210,   m:-2.41,  shortage:true},
+  {n:'加工食品厂', lv:182.9, q:2,  hire:0.412, cash:152340,   m:-32.90, shortage:true},
+  {n:'棉花种植园', lv:5.5,   q:0,  hire:0.000, cash:-9120,    m:-45.95, shortage:false},
+  {n:'服装厂',     lv:23.4,  q:1,  hire:0.883, cash:76450,    m:-1.81,  shortage:false},
+  {n:'高档服装厂', lv:13.0,  q:0,  hire:0.941, cash:55120,    m:-27.14, shortage:false},
+  {n:'煤矿',       lv:500.0, q:0,  hire:1.000, cash:228400,   m:23.19,  shortage:false},
+  {n:'铁矿',       lv:500.0, q:0,  hire:1.000, cash:301770,   m:52.44,  shortage:false},
+  {n:'炼钢厂',     lv:214.7, q:3,  hire:0.972, cash:118300,   m:51.75,  shortage:false},
+  {n:'工具厂',     lv:150.2, q:1,  hire:0.955, cash:84200,    m:70.93,  shortage:false},
+  {n:'住房',       lv:99.8,  q:0,  hire:0.998, cash:193450,   m:13.87,  shortage:false},
+  {n:'建造部门',   lv:1000.0,q:5,  hire:0.830, cash:-1845190, m:-51.69, shortage:true},
+  {n:'金融区',     lv:50.0,  q:0,  hire:1.000, cash:-2771479061, m:0,   shortage:false},
+  {n:'宅邸庄园',   lv:50.0,  q:0,  hire:1.000, cash:-1604822396, m:0,   shortage:false},
+  {n:'仓库',       lv:1.0,   q:0,  hire:1.000, cash:135512,   m:0,     shortage:false},
+  {n:'自给农场',   lv:994.0, q:0,  hire:0.929, cash:0,        m:0,     shortage:false},
+];
+
+const QUEUE = [];
+for (let i=0;i<23;i++){
+  const b = BUILDS[[1,7,8,10,4,3][i%6]];
+  QUEUE.push({id:i+1, n:b.n, built:(i*37+11)%100, total:100,
+              cost:600+i*120, prog:((i*41+7)%97)/100, left:(i%9)+1,
+              src: i<3?'玩家':(i%5===0?'公共工程':(i%4===0?'收购':'扩建'))});
+}
+
+// 历史序列（120 点，形状取自实测：价格对数增长、实际增加值见顶后回落）
+const N = 120;
+const series = {};
+for (const g of GOODS){
+  const a = [];
+  // 价格：早期向 P⁰ 收敛，晚期被货币推动上行
+  const base = g.p/ (1 + g.p0*0.1);
+  for (let i=0;i<N;i++){
+    const t = i/(N-1);
+    const conv = 1 + (g.pi - 1) * Math.exp(-t*6);
+    const infl = Math.pow(1 + 0.045, i*0.9);   // 每周期 4.5% 复合 → 对数轴下为直线
+    a.push(base * conv * (i>N*0.45 ? infl : 1));
+  }
+  series[g.n] = a;
+}
+// 名义 GDP（指数增长）与实际增加值（见顶回落）
+const gdpNom = [], gdpReal = [];
+for (let i=0;i<N;i++){
+  const t=i/(N-1);
+  gdpNom.push(3.13e6 * Math.pow(1.06, i*0.6));
+  gdpReal.push(3.13e6 * (1 + 3.2*Math.sin(Math.PI*Math.min(1,t*1.35))) / (t>0.75? 1+2.2*(t-0.75):1));
+}
+const govCash = [], govCap = [], judgeA1 = [], judgeA2 = [];
+for (let i=0;i<N;i++){
+  const t=i/(N-1);
+  govCash.push(-1.85e12 * Math.pow(t, 2.2));
+  govCap.push(Math.max(0, 6e9 * (1 - Math.pow(t,1.6))));
+  judgeA1.push(Math.min(0.60, 0.02 + 0.58*Math.pow(t,1.3)));
+  judgeA2.push(0.30 + 0.20*Math.sin(t*3.1) + 0.08*t);
+}
+
+// ===================== 通用绘图工具（canvas，一次绘制） =====================
+const $ = s => document.querySelector(s);
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+function setup(cv){
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth || 600, h = parseInt(cv.getAttribute('height'),10);
+  cv.width = w*dpr; cv.height = h*dpr;
+  const x = cv.getContext('2d'); x.setTransform(dpr,0,0,dpr,0,0);
+  x.clearRect(0,0,w,h);
+  return {x,w,h};
+}
+function fmt(v){
+  const a=Math.abs(v);
+  if(a>=1e12) return (v/1e12).toFixed(2)+'e12';
+  if(a>=1e9)  return (v/1e9).toFixed(2)+'e9';
+  if(a>=1e6)  return (v/1e6).toFixed(2)+'e6';
+  if(a>=1e3)  return v.toLocaleString('en-US',{maximumFractionDigits:0});
+  return v.toFixed(2);
+}
+function drawLines(cv, opts){
+  const {x,w,h} = setup(cv);
+  const padL=54,padR=10,padT=10,padB=22;
+  const iw=w-padL-padR, ih=h-padT-padB;
+  const all = opts.lines.flatMap(l=>l.data);
+  let mn=Math.min(...all), mx=Math.max(...all);
+  if(opts.log){ mn=Math.max(mn,1e-9); }
+  if(mn===mx){ mx=mn+1; }
+  const Y = v => {
+    if(opts.log){
+      const l0=Math.log10(mn), l1=Math.log10(mx);
+      return padT + ih - (Math.log10(Math.max(v,1e-9))-l0)/(l1-l0)*ih;
+    }
+    return padT + ih - (v-mn)/(mx-mn)*ih;
+  };
+  const X = i => padL + (i/(opts.n-1))*iw;
+
+  // 网格 + y 轴刻度
+  x.strokeStyle=css('--grid'); x.lineWidth=1;
+  x.fillStyle=css('--ink-2'); x.font='12px '+css('--mono');
+  for(let k=0;k<=4;k++){
+    const v = opts.log ? Math.pow(10, Math.log10(mn)+(Math.log10(mx)-Math.log10(mn))*k/4)
+                       : mn+(mx-mn)*k/4;
+    const y=Math.round(Y(v))+.5;
+    x.beginPath(); x.moveTo(padL,y); x.lineTo(w-padR,y); x.stroke();
+    x.textAlign='right'; x.fillText(fmt(v), padL-6, y+4);
+  }
+  // 基准线
+  if(opts.base!==undefined){
+    const y=Math.round(Y(opts.base))+.5;
+    x.strokeStyle=css('--neutral'); x.setLineDash([5,4]);
+    x.beginPath(); x.moveTo(padL,y); x.lineTo(w-padR,y); x.stroke(); x.setLineDash([]);
+  }
+  // 数据线
+  for(const l of opts.lines){
+    if(l.off) continue;
+    x.strokeStyle=l.color; x.lineWidth=l.width||1.6; x.beginPath();
+    l.data.forEach((v,i)=>{ const px=X(i),py=Y(v); i?x.lineTo(px,py):x.moveTo(px,py); });
+    x.stroke();
+  }
+  x.fillStyle=css('--ink-2'); x.font='12px '+css('--mono'); x.textAlign='right';
+  x.fillText('tick '+(opts.n-1), w-padR, h-6);
+  x.textAlign='left'; x.fillText('0', padL, h-6);
+}
+function drawPie(cv, parts){
+  const {x,w,h} = setup(cv);
+  const cx=w*0.32, cy=h/2, r=Math.min(h/2-8, w*0.24);
+  const total = parts.reduce((s,p)=>s+p.v,0) || 1;
+  let a0=-Math.PI/2;
+  parts.forEach(p=>{
+    const a1=a0+p.v/total*Math.PI*2;
+    x.beginPath(); x.moveTo(cx,cy); x.arc(cx,cy,r,a0,a1); x.closePath();
+    x.fillStyle=p.color; x.fill();
+    x.strokeStyle=css('--bg'); x.lineWidth=2; x.stroke();
+    a0=a1;
+  });
+  // 图例
+  x.font='13px '+css('--font');
+  parts.forEach((p,i)=>{
+    const ly=cy-r+i*22;
+    x.fillStyle=p.color; x.fillRect(w*0.62, ly-10, 10,10);
+    x.fillStyle=css('--ink');
+    x.fillText(p.n+'  '+(p.v/total*100).toFixed(1)+'%', w*0.62+16, ly);
+  });
+}
+function drawBars(cv, items){
+  const {x,w,h} = setup(cv);
+  const padL=8,padR=8,padT=14,padB=8;
+  const rowH=(h-padT-padB)/items.length;
+  items.forEach((it,i)=>{
+    const y=padT+i*rowH;
+    x.font='13px '+css('--font'); x.fillStyle=css('--ink');
+    x.fillText(it.n, padL, y+12);
+    x.font='13px '+css('--mono'); x.fillStyle=css('--ink-2');
+    x.fillText(it.txt, padL, y+28);
+    const bx=padL+130, bw=w-padL-padR-130, bh=12, by=y+8;
+    x.fillStyle=css('--grid'); x.fillRect(bx,by,bw,bh);
+    x.fillStyle=it.color; x.fillRect(bx,by,Math.min(1,it.v)*bw,bh);
+    if(it.thr!==undefined){
+      const tx=bx+it.thr*bw;
+      x.strokeStyle=css('--ink-2'); x.setLineDash([3,3]);
+      x.beginPath(); x.moveTo(tx,by-3); x.lineTo(tx,by+bh+3); x.stroke(); x.setLineDash([]);
+    }
+  });
+}
+
+// ===================== 市场页 =====================
+let hidden = new Set();
+function renderGoodList(){
+  $('#goodlist').innerHTML = GOODS.map((g,i)=>`
+    <div class="row${i===0?' on':''}" data-g="${i}">
+      <input type="checkbox" ${hidden.has(g.n)?'':'checked'} data-hide="${g.n}">
+      <span class="swatch" style="background:${g.color}"></span>
+      <span>${g.n}</span>
+      <span class="num ink2" style="margin-left:auto">${fmt(g.p)}</span>
+    </div>`).join('');
+}
+function selectGood(i){
+  const g=GOODS[i];
+  $('#g-name').textContent=g.n;
+  $('#g-price').textContent=fmt(g.p);
+  $('#g-r0').textContent=g.p0.toFixed(3);
+  $('#g-r1').textContent=g.pi.toFixed(3);
+  $('#g-sup').textContent=g.s.toLocaleString();
+  $('#g-dem').textContent=g.d.toLocaleString();
+  const me=$('#g-margin');
+  me.textContent=(g.m>0?'+':'')+g.m.toFixed(2)+'%';
+  me.className = g.m<0?'down':'up';
+  document.querySelectorAll('#goodlist .row').forEach((r,k)=>r.classList.toggle('on',k===i));
+}
+function renderAllChart(){
+  drawLines($('#c-all'), {n:N, log:true, lines:GOODS.map(g=>({
+    data:series[g.n], color:g.color, off:hidden.has(g.n), width:1.4 }))});
+}
+function renderLegend(){
+  $('#legend').innerHTML = GOODS.map(g=>{
+    const a=hidden.has(g.n)?' off':' on';
+    return `<span class="${a.trim()}" data-lg="${g.n}"><i style="background:${g.color}"></i>${g.n}</span>`;
+  }).join('');
+}
+
+// ===================== 建筑页 =====================
+function renderBuilds(){
+  $('#buildbody').innerHTML = BUILDS.map(b=>{
+    const neg=b.cash<0;
+    const st = b.shortage ? '<span class="tag bad">原材料不足</span>'
+             : (b.hire<0.05 ? '<span class="tag warn">停产</span>'
+             : '<span class="tag ok">正常</span>');
+    const mcls = b.m<0?'down':(b.m>0?'up':'ink2');
+    return `<tr>
+      <td>${b.shortage?'<b class="down">':''}${b.n}${b.shortage?'</b>':''}</td>
+      <td class="r num">${b.lv.toFixed(1)}</td>
+      <td class="r num ink2">${b.q||'—'}</td>
+      <td class="r num ${b.hire<0.05?'down':''}">${b.hire.toFixed(3)}</td>
+      <td class="r num ${neg?'down':''}">${neg?'▼':''}${fmt(b.cash)}</td>
+      <td class="r num ${mcls}">${b.m>0?'+':''}${b.m.toFixed(2)}%</td>
+      <td class="r">${st}</td>
+      <td class="r"><span class="btns">
+        <button>+1</button><button>+5</button><button>+10</button>
+        <button class="del">−1</button>
+      </span></td>
+    </tr>`;
+  }).join('');
+}
+
+// ===================== 队列页 =====================
+let qpage=0; const PER=20;
+function renderQueue(){
+  const pages=Math.max(1,Math.ceil(QUEUE.length/PER));
+  qpage=Math.min(qpage,pages-1);
+  const rows=QUEUE.slice(qpage*PER,(qpage+1)*PER);
+  $('#queuebody').innerHTML = rows.map(o=>{
+    const p=Math.round(o.prog*100);
+    const pct=Math.round(o.built/o.total*100);
+    return `<tr>
+      <td class="r num ink2">${o.id}</td>
+      <td>${o.n}</td>
+      <td class="num ink2">${o.built} / ${o.total}</td>
+      <td class="r" style="min-width:180px">
+        <span class="bar${p<30?' warn':''}"><i style="width:${p}%"></i></span>
+        <span class="num" style="margin-left:8px">${p}%</span></td>
+      <td class="r num">${o.left} 周期</td>
+      <td>${o.src==='玩家'?'<span class="tag warn">玩家·置顶</span>':o.src}</td>
+      <td class="r"><span class="btns">${o.src==='玩家'?'<button>置顶</button>':''}<button class="del">撤单</button></span></td>
+    </tr>`;
+  }).join('');
+  $('#q-page').textContent=qpage+1; $('#q-pages').textContent=pages;
+}
+
+// ===================== 其他页图表 =====================
+function renderOther(){
+  drawLines($('#c-gdp'), {n:N, log:true, lines:[
+    {data:gdpNom, color:css('--accent'), label:'名义'},
+    {data:gdpReal,color:css('--up'),     label:'实际'}], base:1});
+  drawPie($('#c-pie'), [
+    {n:'劳工', v:0.75, color:css('--accent')},
+    {n:'工程师', v:0.20, color:css('--up')},
+    {n:'资本家', v:0.05, color:css('--neutral')},
+  ]);
+  drawLines($('#c-gov'), {n:N, lines:[
+    {data:govCash, color:css('--down'), width:1.8},
+    {data:govCap,  color:css('--warn'), width:1.6}], base:0});
+  drawBars($('#c-judge'), [
+    {n:'A1 价格贴边率', v:0.597, thr:0.05, color:css('--down'), txt:'59.70% （阈值 < 5%）'},
+    {n:'A2 亏损等级占比', v:0.4957, thr:0.50, color:css('--warn'), txt:'49.57% （阈值 ≤ 50%，压线）'},
+    {n:'A7 债务 ÷ 上限', v:1.0, thr:1.0, color:css('--down'), txt:'+Inf （上限归零）'},
+    {n:'A9 实际增加值斜率', v:0.02, thr:0.5, color:css('--down'), txt:'−1.53e3 （须 ≥ 0）'},
+  ]);
+}
+
+// ===================== 交互 =====================
+document.querySelectorAll('.nav button').forEach(b=>{
+  b.addEventListener('click',()=>{
+    document.querySelectorAll('.nav button').forEach(x=>x.setAttribute('aria-selected','false'));
+    b.setAttribute('aria-selected','true');
+    document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
+    $('#p-'+b.dataset.page).classList.add('on');
+    redraw();
+  });
+});
+document.querySelectorAll('.speeds button').forEach(b=>{
+  b.addEventListener('click',()=>{
+    document.querySelectorAll('.speeds button').forEach(x=>x.setAttribute('aria-pressed','false'));
+    b.setAttribute('aria-pressed','true');
+    const sp=+b.dataset.sp;
+    $('#t-frames').textContent = sp===0 ? '已暂停' : `1 tick / ${60/sp} 帧`;
+    $('#t-health').textContent = sp===0 ? '已暂停' : '运行正常';
+    $('#t-dot').className = 'dot' + (sp===0?' warn':'');
+  });
+});
+$('#goodlist').addEventListener('click',e=>{
+  const row=e.target.closest('.row'); if(!row) return;
+  if(e.target.dataset.hide!==undefined){
+    const n=e.target.dataset.hide;
+    hidden.has(n)?hidden.delete(n):hidden.add(n);
+    renderLegend(); renderAllChart(); return;
+  }
+  selectGood(+row.dataset.g);
+});
+$('#legend').addEventListener('click',e=>{
+  const s=e.target.closest('[data-lg]'); if(!s) return;
+  const n=s.dataset.lg;
+  hidden.has(n)?hidden.delete(n):hidden.add(n);
+  renderLegend(); renderAllChart(); renderGoodList();
+});
+$('#q-prev').addEventListener('click',()=>{qpage=Math.max(0,qpage-1);renderQueue();});
+$('#q-next').addEventListener('click',()=>{qpage++;renderQueue();});
+document.addEventListener('keydown',e=>{
+  if(e.key===' '){e.preventDefault();document.querySelector('.speeds button').click();}
+  if(e.key==='ArrowRight'&&$('#p-queue').classList.contains('on')){qpage++;renderQueue();}
+  if(e.key==='ArrowLeft' &&$('#p-queue').classList.contains('on')){qpage=Math.max(0,qpage-1);renderQueue();}
+});
+
+// ===================== 初始化 + 每帧轻量"心跳" =====================
+function redraw(){
+  renderGoodList(); renderLegend();
+  drawLines($('#c-recent'), {n:60, log:true, base:1, lines:[
+    {data:series[GOODS[0].n].slice(-60), color:GOODS[0].color, width:1.8},
+    {data:series[GOODS[3].n].slice(-60), color:GOODS[3].color, width:1.4}]});
+  drawLines($('#c-full'), {n:N, log:true, base:1, lines:[
+    {data:series[GOODS[0].n].map(v=>v/Math.max(1e-9,series[GOODS[0].n][0])), color:GOODS[0].color, width:1.8}]});
+  renderAllChart(); renderBuilds(); renderQueue(); renderOther(); selectGood(0);
+}
+window.addEventListener('resize',()=>{ clearTimeout(window.__rz); window.__rz=setTimeout(redraw,120); });
+
+// 顶栏 tick 心跳（演示"帧与 tick 解耦"：帧恒定 60，tick 按档位推进）
+let tick=0, acc=0, sp=1;
+(function loop(){
+  acc++;
+  const per = sp===0 ? Infinity : 60/sp;
+  if(acc>=per){ acc=0; tick++; $('#t-tick').textContent=String(tick).padStart(4,'0'); }
+  requestAnimationFrame(loop);
+})();
+document.querySelectorAll('.speeds button').forEach(b=>b.addEventListener('click',()=>{sp=+b.dataset.sp;}));
+redraw();
+</script>
+
+
+</body></html>
