@@ -57,6 +57,7 @@ package fiscal
 
 import (
 	"fmt"
+	"math"
 
 	"yehenala/market/internal/ledger"
 	"yehenala/market/internal/model"
@@ -261,6 +262,124 @@ type Capital struct {
 	WageBill        float64 // 金融区自身工资支出
 	InvestInflow    float64 // 扣除工资后的净额中真正入池的部分（K_f 的本期增量）
 	InvestPaid      float64 // 金融栈本期支付的建造力货款（由投资池出资）
+
+	// ===== §4.5.1a / 1.2 M8：借贷台账（2026-09-20 第 39/40 轮）=====
+	//
+	// 【为什么是字段而不是 ledger 账户】1.0 的 `ledger.Auditor` 里**只有现金余额**，
+	// `Total()` 的定义就是"全部账户余额之和 = 货币总量"；而**负债不是钱**。
+	// 若把负债做成 `AccountKind`，它会被算进货币总量，必须在
+	// `Total` / `TotalOf` / 借贷相等 / GDP 存量口径**四处**显式排除，漏一处即出错。
+	// 故负债与"持股"（`BuildingState.GovLevel/PrivLevel`）同族——都是**字段**。
+	// 用户裁决（1.2 M8.7）：选 (A) `Capital.Debt` 字段。
+	//
+	// 【默认不生效】`Params.BankEnabled = false` 时 `Debt` 恒为空，
+	// 本结构对 1.0 的全部不变量与判据**零影响**（逐位不变）。
+	Debt []Loan
+
+	// DebtServiceDue 是本 tick 应还的本息合计（由 sim 在入池前先扣）。
+	DebtServiceDue float64
+	// DebtPaid 是本 tick 实际支付的还本息。
+	DebtPaid float64
+	// DebtDeferred 是本 tick 因资金不足而滚入未偿余额的部分（M8.4.1 违约则延期）。
+	DebtDeferred float64
+}
+
+// Loan 是一笔**借贷凭证**（1.2 M8 的"债券"，**不是商品**）。
+//
+// 台账字段依据 1.2 M8.1：本金 / 利率 / 期限 / 已还本 / 已付息 / 余额 / 延期次数。
+// 还款方式为**等额本息**（M8.2）：每周期固定金额
+//
+//	A = P·i(1+i)^n / ((1+i)^n − 1)，  i = 年化利率/52，n = 期限(年)×52
+//
+// 默认参数（M8.1/§1.2-7 裁决）：本金 500,000、年化 5%、5 年 ⇒ **2,182.68 元/周期**。
+type Loan struct {
+	// Principal 是本金（元）。
+	Principal float64
+	// AnnualRate 是**年化**利率（0.05 = 年化 5%）。
+	AnnualRate float64
+	// TermYears 是期限（年）；ActualTermYears 是"最短期限"，延期后实际结清时间后移（M8.4.1）。
+	TermYears float64
+	// PaidPrincipal / PaidInterest 是累计已还本 / 已付息。
+	PaidPrincipal float64
+	PaidInterest  float64
+	// Outstanding 是当前未偿余额（含已滚入的延期金额与利息，M8.4.1 的复利展期）。
+	Outstanding float64
+	// Deferrals 是延期次数（诊断用，M8.4.1 边界 2 要求记录）。
+	Deferrals int
+}
+
+// PeriodicPayment 返回等额本息的每周期还款额（M8.2）。
+//
+// i = AnnualRate/52（按 1 年 = 52 周期，与 §5 的时间语义一致），n = TermYears×52。
+// AnnualRate ≤ 0 时退化为"本金均摊"（无息），仅用于对照与测试。
+func (l Loan) PeriodicPayment() float64 {
+	n := l.TermYears * 52
+	if n <= 0 {
+		return l.Outstanding
+	}
+	if l.AnnualRate <= 0 {
+		return l.Principal / n
+	}
+	i := l.AnnualRate / 52
+	g := math.Pow(1+i, n)
+	return l.Principal * i * g / (g - 1)
+}
+
+// Service 按 M8.4.1 推进一期还款：能付多少付多少，付不出的部分**延期**
+// （滚入 Outstanding 并按同一利率继续计息，**不核销、不加速、不没收**）。
+//
+// 返回本期的 (应付额, 实付额, 滚入额)。
+//
+// 【口径】本期先计息（对 Outstanding 按 i 计息），再拿 available 去还：
+//   - available ≥ 应付 ⇒ 全额还清本期，Outstanding 按摊还表下降；
+//   - 0 < available < 应付 ⇒ 部分支付，差额滚入；
+//   - available ≤ 0 ⇒ 实付 0、全额滚入（Deferrals++）。
+func (l *Loan) Service(available float64) (due, paid, deferred float64) {
+	i := l.AnnualRate / 52
+	if i < 0 {
+		i = 0
+	}
+	// 本期计息（对未偿余额）
+	interest := l.Outstanding * i
+	due = l.PeriodicPayment()
+	if due > l.Outstanding+interest {
+		due = l.Outstanding + interest
+	}
+	if available < 0 {
+		available = 0
+	}
+	paid = available
+	if paid > due {
+		paid = due
+	}
+	deferred = due - paid
+	// 本金部分 = 应付 − 利息（利息优先，符合等额本息的构成）
+	principalPart := paid - interest
+	if principalPart < 0 {
+		principalPart = 0
+	}
+	interestPart := paid - principalPart
+	l.PaidPrincipal += principalPart
+	l.PaidInterest += interestPart
+	l.Outstanding += interest - paid
+	if l.Outstanding < 1e-9 {
+		l.Outstanding = 0
+	}
+	if deferred > 1e-9 {
+		l.Deferrals++
+	}
+	return due, paid, deferred
+}
+
+// DebtServiceDue / DebtPaid / DebtDeferredTotal 是台账的汇总口径（诊断与报告用）。
+func (c *Capital) DebtServiceDueTotal() float64 { return c.DebtServiceDue }
+func (c *Capital) DebtPaidTotal() float64       { return c.DebtPaid }
+func (c *Capital) DebtOutstandingTotal() float64 {
+	var v float64
+	for i := range c.Debt {
+		v += c.Debt[i].Outstanding
+	}
+	return v
 }
 
 // CollectTax 按 G1 计算交易税（审计用独立算式）。

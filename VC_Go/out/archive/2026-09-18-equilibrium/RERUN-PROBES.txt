@@ -1,0 +1,27 @@
+# RERUN-PROBES -- arithmetic probes of the 2026-09-18 equilibrium round, REGENERATED
+# generated: 2026-09-19 14:05:50 +08:00
+# runner   : powershell -ExecutionPolicy Bypass -File out/archive/2026-09-18-equilibrium/rerun-probes.ps1
+# node     : DSH Desktop Electron in ELECTRON_RUN_AS_NODE mode (no standalone node/npm on this machine)
+# NOTE     : regenerated files, NOT the originals; original archive is unrecoverable.
+
+equilibrium_handcheck.js     exit=0       118 ms  lines=62    product=(stdout only)                          independent re-derivation of the equilibrium (stdout only)
+calibration_probe.js         exit=0       120 ms  lines=61    product=out/calibration_probe.txt:ok           three-table joint calibration (k)
+margin_base_probe.js         exit=0       107 ms  lines=100   product=out/margin_base_probe.txt:ok           opening margin under two cost bases
+structure_probe.js           exit=0       118 ms  lines=129   product=out/structure_probe.txt:ok             industrial-structure feasibility (Leontief / gap LP)
+construction_sink_probe.js   exit=0       117 ms  lines=99    product=out/construction_sink_probe.txt:ok     missing payer for construction power (5.1e4x gap)
+accounting_probe.js          exit=0       114 ms  lines=82    product=out/accounting_probe.txt:ok            static money-loop accounting
+gov_capital_accounting.js    exit=0       123 ms  lines=104   product=out/gov_capital_accounting.txt:ok      money loop with government + capital
+debt_cap_probe.js            exit=0       130 ms  lines=70    product=out/debt_cap_probe.txt:ok              G7 debt-cap sizing
+tick_probe.js                exit=0       158 ms  lines=77    product=(stdout only)                          single-good tick-level feasibility (stdout only)
+price_dynamics_probe.js      exit=0       354 ms  lines=75    product=out/price_dynamics_probe.txt:ok        isolated test of the sec.2 price ODE
+steady_profit_probe.js       exit=0       131 ms  lines=146   product=out/steady_profit_probe.txt:ok         steady-state margin distribution (A2 reachability)
+expansion_probe.js           exit=0       233 ms  lines=101   product=out/expansion_probe.txt:ok             expansion-rule convergence
+leontief_probe.js            exit=0       115 ms  lines=45    product=(stdout only)                          Leontief inverse sanity (stdout only)
+spring_price_probe.js        exit=0       225 ms  lines=91    product=(stdout only)                          price-ODE spring analogy / T and zeta
+spring_price_scale.js        exit=0       130 ms  lines=33    product=(stdout only)                          dimensional diagnosis for the spring analogy
+food_s_curve_probe.js        exit=0       115 ms  lines=98    product=out/food_s_curve_probe.txt:ok          S-curve candidate for basic-food demand
+housing_curve_probe.js       exit=0       118 ms  lines=125   product=out/housing_curve_probe.txt:ok         exponential candidate for housing demand
+demand_table_final.js        exit=0       139 ms  lines=77    product=out/demand_table_final.txt:ok          discrete completion of the sec.6.3 demand table
+welfare_table_probe.js       exit=0       127 ms  lines=108   product=out/welfare_table_probe.txt:ok         wealth-tier table and welfare feasibility
+
+# slow probes (multigood_probe.js / core_sim_probe.js): skipped -- pass -IncludeSlow to run them

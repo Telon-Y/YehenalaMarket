@@ -23,6 +23,8 @@ package sim
 
 import (
 	"fmt"
+	"math"
+	"sort"
 
 	"yehenala/market/internal/book"
 	"yehenala/market/internal/calibrate"
@@ -191,7 +193,823 @@ type Order struct {
 	UnitPrice float64
 }
 
-// hasAcquireOrder 报告某建筑类别是否已有一张未完工的**收购订单**（§4.5.1a 第 27 轮）。
+// serviceDebt 推进 1.2 的借贷台账（M8.4 / M8.4.1）：**入池前先扣本期还款额**，不足则延期。
+//
+// 调用点：`step` 的 ⑧（资本入池）里、`InvestmentInflow` **之前**。
+// 本方法会**就地修改** financeNet（扣掉实付的还本息）。
+//
+// 【口径（严格按裁决）】
+//
+//	应付 due = Σ 各笔贷款的等额本息（M8.2）
+//	实付 paid = min(due, max(0, financeNet))
+//	延期 deferred = due − paid   → 滚入 Loan.Outstanding 并按 5%/年继续计息（M8.4.1）
+//
+// 【记账】只有**实付额**过账（借 金融区 / 贷 储蓄银行）；延期部分**不走账**
+// （它不是资金流动，只是负债余额增加）——这与 M8.7 的裁决一致：
+// 负债是**字段**，不进 `Auditor.balances`、不参与借贷相等。
+//
+// 【违约规则的边界（M8.4.1）】不核销、不加速、不没收；`Loan.Deferrals` 记次数供诊断。
+//
+// 【默认不生效】仅当 `Params.BankEnabled = true` 时由 step 调用。
+func (s *State) serviceDebt(financeNet *float64) {
+	s.Cap.DebtServiceDue, s.Cap.DebtPaid, s.Cap.DebtDeferred = 0, 0, 0
+	if len(s.Cap.Debt) == 0 {
+		return
+	}
+	// ① 先汇总本 tick 应付额（各笔的等额本息）
+	var due float64
+	for i := range s.Cap.Debt {
+		due += s.Cap.Debt[i].PeriodicPayment()
+	}
+	s.Cap.DebtServiceDue = due
+	if due <= 0 {
+		return
+	}
+	// ② 可用额 = 金融区**本期净额**（可为负 ⇒ 实付 0）。这就是"入池前先扣"的含义。
+	avail := *financeNet
+	if avail < 0 {
+		avail = 0
+	}
+	paid := avail
+	if paid > due {
+		paid = due
+	}
+	// ③ 记账（只过实付额）
+	if paid > 0 {
+		s.Cap.DebtPaid = s.Bk().DebtService(paid)
+		*financeNet -= s.Cap.DebtPaid
+	}
+	// ④ 台账推进：按各笔的占比分摊实付，差额滚入未偿余额（M8.4.1 违约则延期）
+	var remaining = s.Cap.DebtPaid
+	for i := range s.Cap.Debt {
+		l := &s.Cap.Debt[i]
+		share := l.PeriodicPayment()
+		if due > 0 {
+			share = paid * (l.PeriodicPayment() / due)
+		}
+		if share > remaining {
+			share = remaining
+		}
+		remaining -= share
+		l.Service(share)
+	}
+	s.Cap.DebtDeferred = due - s.Cap.DebtPaid
+}
+
+// issueLoan 发放一笔 1.2 的贷款（M8.3 的 ①）：**借 储蓄银行 / 贷 投资池**，
+// 并把负债登记到金融区头上（**非现金科目**，`fiscal.Capital.Debt`）。
+//
+// 【为什么资金直连投资池】裁决原文："将贷款**记在金融区头上**，然后**投入投资池**"。
+// 1.0 实测金融区营运净额长期为负；若钱先进它的现金池，会被先拿去补亏损，
+// 到不了投资池。故**资金腿**与**负债腿**分开（M8.3）。
+//
+// 【放贷方 = 储蓄银行】它的钱来自"劳动力多余的资金"（M4.3 / step 的 ④c）。
+// 若储蓄银行余额不足，本函数不发放（不透支）。
+//
+// 返回实际发放的本金（0 表示未发放）。
+func (s *State) issueLoan() float64 {
+	if !s.Params.BankEnabled {
+		return 0
+	}
+	p := s.Params.LoanPrincipal
+	if p <= 0 {
+		return 0
+	}
+	// 【R71 收口(a)：放贷额度锚到银行余额】
+	//
+	// R70 实测的致命失衡：`LoanPrincipal` 每 52 tick 固定放 50 万，
+	// 而储蓄银行**每 tick** 存入约 180 万 ⇒ 存入速率是放出速率的 **190 倍**
+	// ⇒ 800 tick 后银行握着 **18.75 亿**却只贷出 **750 万**（0.4%），
+	// 而同一笔钱在 1.0 里本会进投资池去付建造力 ⇒ **投资池被抽干 99.6%**。
+	//
+	// 收口口径：**每期可贷额 = 银行余额 × LoanBalanceFraction**。
+	// 于是"贷出能力"随存款增长，190 倍的失衡被结构性消除，
+	// 而 R61 的"每笔 50 万"降格为**下限保护**——不推翻任何已裁决的原则。
+	//
+	// 【为什么是**替换**而不是 min()：R71 第一次实测的教训】
+	// 先写成 `min(余额 × f, LoanPrincipal)` —— 结果与 R65 **逐位相同**：
+	// 因为 50 万这个**绝对**上限永远小于"余额 × f"（余额很快就到亿级），
+	// `min` 恒取 50 万，收口完全没生效。
+	// ⇒ 必须让余额比例**取代**绝对上限，否则收口是空操作。
+	//
+	// 【默认不生效】`LoanFromBalance=false` 时 `p` 保持原值 ⇒ 逐位复现 R65 行为。
+	if s.Params.LoanFromBalance {
+		if f := s.Params.LoanBalanceFraction; f > 0 {
+			pool := s.SavingsBankBalance()
+			if pool <= 0 {
+				return 0
+			}
+			p = pool * f
+		}
+	}
+	got := s.Bk().SavingsBankLend(p)
+	if got <= 0 {
+		return 0
+	}
+	// 负债腿：登记在金融区头上（非现金科目，不进账本）
+	s.Cap.Debt = append(s.Cap.Debt, fiscal.Loan{
+		Principal:   got,
+		AnnualRate:  s.Params.LoanAnnualRate,
+		TermYears:   s.Params.LoanTermYears,
+		Outstanding: got,
+	})
+	return got
+}
+
+// SavingsStockBalance 返回 1.2 M1 第 3 条的**储蓄余额（已积累但尚未分配）**
+// = `savingsStock − savingsAlloc`。
+//
+// 【量纲】元。它是**累计流量之差**，不是账本余额（不进 `Auditor`，
+// 因为那些钱已在投资池/储蓄银行里、已被计入货币总量）。
+// `Params.SavingsStockTrack = false`（默认）时恒为 0。
+func (s *State) SavingsStockBalance() float64 { return s.savingsStock - s.savingsAlloc }
+
+// SavingsStockTotal 返回累计**已积累**的储蓄结余（§5.3 第一步的累计）。
+func (s *State) SavingsStockTotal() float64 { return s.savingsStock }
+
+// SavingsAllocatedTotal 返回累计**已分配为投资**的储蓄（§5.3 第二步的累计）。
+func (s *State) SavingsAllocatedTotal() float64 { return s.savingsAlloc }
+
+// GoldProducedTotal 返回累计产出的黄金（盎司）——1.2 §1.2-5。
+//
+// 【它为什么是一个累计量而不是"库存"】金矿每 tick 产出黄金，中央银行**同期收购买币**
+// （见 `mintGold`），故黄金不做库存：产出即被央行买走。累计量用于诊断与审计。
+// `Params.CentralBankEnabled = false`（默认）时恒为 0。
+func (s *State) GoldProducedTotal() float64 { return s.goldProduced }
+
+// MintedTotal 返回中央银行累计创造的货币量（元）——1.2 §1.2-5。
+//
+// 【它与货币守恒的关系】造币是**货币注入**，走 `PostInjection` 并计入 `InfusionTotal`。
+// 若漏计，A8 的恒等式 `ΔM == NewCapital + 注入` 会报一个恰等于造币额的假残差。
+func (s *State) MintedTotal() float64 { return s.mintedTotal }
+
+// priceIndex 返回**消费品价格的加权通胀比例**（1.0 = 基期价格水平）。
+//
+//	通胀比例 = Σ_g w_g·P_g(当期) / Σ_g w_g·P_g(基期)
+//
+// 权重 `w_g` 用 §6.1 四个消费组的**使用价值**（`ConsumeGroupSpecs` 的 `Uses`），
+// 即"居民实际在买的东西"——建造力等非消费品不参与（它们不进消费篮子）。
+//
+// 【为什么按消费权重而不是等权/产出权重】"通胀"要回答的是
+// "**居民买同一篮子东西要花多少钱**"，故权重必须与消费篮子一致。
+//
+// 【基期价格】`GoodSpecs()` 的 `Pcost`（零利润价）——它是契约里**标定过的**
+// 一组固定价格，且 1.0 的价格体系本就围绕它波动。用当期价 ÷ Pcost 得到
+// "相对基期的倍数"。
+//
+// 【默认不生效】`InflationDeflation = false` 时本函数不被调用。
+func (s *State) priceIndex() float64 {
+	prices := s.Market.Prices()
+	groups := model.ConsumeGroupSpecs()
+	var num, den float64
+	for _, g := range groups {
+		for gi, w := range g.Uses {
+			if w <= 0 || gi < 0 || gi >= len(prices) || gi >= len(s.Goods) {
+				continue
+			}
+			base := s.Goods[gi].Pcost
+			if base <= 0 {
+				continue
+			}
+			num += w * prices[gi]
+			den += w * base
+		}
+	}
+	if den <= 0 {
+		return 1
+	}
+	idx := num / den
+	if idx <= 0 || math.IsNaN(idx) || math.IsInf(idx, 0) {
+		return 1
+	}
+	return idx
+}
+
+// deflatedBudgets 返回**平减后**的各人群池消费预算（1.2 工资平减）。
+//
+// 【口径（第 72 轮裁决）】"将工资除以通胀比例后**套入需求表**，
+// 再用**原始工资**以**原始价格**购买消费品。"
+//
+// 实现：`预算 = 人群池现金 ÷ 通胀比例`。于是"这笔钱能买多少消费品"
+// 按**基期价格**计量 ⇒ 通胀不再通过预算反馈成需求。
+//
+// 【它只影响"买多少"，不影响"记多少"】记账仍用名义金额 ⇒
+// 货币守恒、借贷相等、利润归属**全部不变**（已用审计断言守住）。
+func (s *State) deflatedBudgets(taxRate float64) []float64 {
+	out := s.Houses.Budgets(taxRate)
+	if !s.Params.InflationDeflation {
+		return out
+	}
+	idx := s.priceIndex()
+	if idx <= 0 {
+		return out
+	}
+	for i := range out {
+		out[i] /= idx
+	}
+	return out
+}
+
+// hasOrderFor 报告**是否已有在途订单**指向该建筑（R96 的去重判据）。
+//
+// 【为什么需要它】`build.Plan` 每个 tick 都会为"仍然盈利"的建筑重新给出意向，
+// 而原实现**无条件**把意向追加成新订单 ⇒ 同一建筑会累积多条并行订单
+// （实测末期高档服装厂有 **4 条**：90.2% / 65.7% / 35.8% / 12.0%）。
+// 后果是建造力预算被摊薄、谁都不完工，且 `stackDemand` 把重复订单都计成需求
+// ⇒ 需求被系统性高估。
+//
+// 注意它查的是**全部**订单（含 `Acquire` 收购单），因为收购单同样占用该建筑的
+// 建造队列语义。"是否已在途"与"进度多少"无关——进度由 `completeOrders` 判定。
+func (s *State) hasOrderFor(bi int) bool {
+	for i := range s.Orders {
+		if s.Orders[i].BuildingIndex == bi {
+			return true
+		}
+	}
+	return false
+}
+
+// goldMineIndex 返回**第一个金矿**的场地下标；没有金矿时返回 -1。
+//
+// 【为什么只用第一个金矿作收款方】§1.2-5 的购金付款是"给金矿"，
+// 没有规定多家金矿时如何分配。本实现取**第一个**金矿（specs 里只有一个金矿类别，
+// 故它同时代表该类别的全部等级）——这是一处**登记在案的简化**。
+func (s *State) goldMineIndex() int {
+	for i := range s.Buildings {
+		if s.Buildings[i].Spec.ProducesGold {
+			return i
+		}
+	}
+	return -1
+}
+
+// centralBankIndex 返回中央银行的场地下标；未启用时返回 -1。
+//
+// 【为什么要查而不是写常量】央行只有开启 `CentralBankEnabled` 时才存在于 specs 里，
+// 且将来若调整追加顺序，写死的下标会静默指向别的建筑。查一次并缓存即可。
+func (s *State) centralBankIndex() int {
+	for i := range s.Buildings {
+		if s.Buildings[i].Spec.IsCentralBank {
+			return i
+		}
+	}
+	return -1
+}
+
+// goldPerTick 返回本 tick 金矿的黄金产出（盎司）。
+//
+//	产出 = Σ_{金矿} (等级 × 雇佣率) × 每级产出量
+//
+// 与 §3.3 对普通商品的 `ActualOutput` 同口径（都是 `等级 × 雇佣率 × 配方量`），
+// 区别只是它**不进商品市场**（裁决：黄金外生价格、不进 A 矩阵）。
+func (s *State) goldPerTick() float64 {
+	var out float64
+	for i := range s.Buildings {
+		b := &s.Buildings[i]
+		if !b.Spec.ProducesGold || b.Spec.Recipe.Qty <= 0 {
+			continue
+		}
+		out += b.Level * b.HireRate * b.Spec.Recipe.Qty
+	}
+	return out
+}
+
+// mintGold 结算本 tick 的**购金造币**（1.2 §1.2-5）。
+//
+// 原文："单位中央银行消耗 20 黄金，生产 400,000 货币进入现金池。
+// 其中一半用于支付 10,000 原每单位黄金给金矿。剩余部分进入中央银行现金池。"
+//
+// 口径（本实现）：
+//
+//	可造币批数 n = floor(金矿本期产出 / GoldPerMint)      （未满一批的黄金留待下期）
+//	造币额 M     = n × MoneyPerMint                        ← **货币注入**
+//	付给金矿 P   = n × GoldPerMint × GoldPrice             ← 借 央行 / 贷 金矿
+//	央行留存     = M − P
+//
+// 【两条腿的记账】
+//   - **造币**是唯一的货币创造 ⇒ 走 `PostInjection`（贷 央行账户），计入 `InfusionTotal`；
+//   - **购金付款**是普通转移 ⇒ 走 `Post`（借 央行 / 贷 金矿）。
+//
+// 【为什么"未满一批的黄金"不累加库存】金矿产出是**连续**的（每 tick 都有），
+// 而造币是**离散**的（每 20 单位一批）。若把不足一批的黄金丢弃，会低估造币；
+// 若累积库存，则要再引入一个存量账。本实现取**累计小数批**的做法：
+// `goldCarry` 记住"已产出但尚未造币"的黄金，跨 tick 累加 ⇒ 长期造币量精确、
+// 且不丢弃产出。这是**登记在案的实现口径**（原文没有说不足一批时怎么办）。
+func (s *State) mintGold() (produced, minted, paidToMine float64) {
+	if !s.Params.CentralBankEnabled {
+		return 0, 0, 0
+	}
+	produced = s.goldPerTick()
+	s.goldProduced += produced
+	s.goldCarry += produced
+
+	perMint := s.Params.GoldPerMint
+	if perMint <= 0 {
+		return produced, 0, 0
+	}
+	batches := math.Floor(s.goldCarry / perMint)
+	if batches <= 0 {
+		return produced, 0, 0
+	}
+	// 消耗掉已造币的那部分黄金（余数留下期）
+	s.goldCarry -= batches * perMint
+
+	// 【R86：造币额的两种口径】
+	//
+	//	MintWageFraction > 0 ⇒ M = 批数 × f × **当期工资总额**   （推荐：锚到经济体量）
+	//	否则                ⇒ M = 批数 × MoneyPerMint           （§1.2-5 草案固定值）
+	//
+	// 工资锚的理由见 `Params.MintWageFraction` 的注释：固定值会每 tick 印出
+	// 货币存量的 58%。用**当期工资总额**作锚，是因为 1.0 的初始货币本身就是
+	// 按"一周工资流量"标定的（§4.3 修订）——同一条纪律。
+	var perBatch float64
+	if f := s.Params.MintWageFraction; f > 0 {
+		perBatch = f * s.wageBillTick
+	} else {
+		perBatch = s.Params.MoneyPerMint
+	}
+	if perBatch <= 0 {
+		return produced, 0, 0
+	}
+	minted = batches * perBatch
+	// 【R87：按 §1.2-5 的**二分之一**分成，而不是"黄金价 × 单位数"】
+	//
+	// 原文："生产 400,000 货币进入现金池。**其中一半**用于支付 10,000 原每单位
+	// 黄金给金矿。**剩余部分**进入中央银行现金池。"
+	//
+	// 即：M 中 **二分之一**归金矿、**二分之一**留央行。
+	// 【为什么不用"黄金 × GoldPrice"】那样在 `GoldPrice = 10000` 时会付掉
+	// `20 × 10000 = 200,000`，恰好也是 400,000 的一半——**两个口径在
+	// §1.2-5 的原始数值下恰好等价**。但有工资锚之后 `M` 变小，两者就**不再等价**：
+	// 实测 `M ≈ 141,600` 而"黄金 × GoldPrice"仍是 200,000 ⇒ 被 `min` 封顶到 M
+	// ⇒ **央行一分不留**（实测央行池恒为 0，与原文"剩余部分进央行池"矛盾）。
+	//
+	// 故改为**按 M 的二分之一**分成：无论 M 因何种口径变化，
+	// "一半给金矿、一半留央行"这条**结构**始终成立。
+	// 此时 `GoldPrice` 退为**诊断/校验用的名义价**（`20 × GoldPrice` 应等于
+	// 固定口径下的一半；`TestCentralBankSpecs` 会断言这一点）。
+	paidToMine = minted / 2
+	s.mintedTotal += minted
+	// 用于造币的黄金单位数（诊断量）：批数 × 每批黄金数
+	s.goldMintedUnits += batches * perMint
+
+	// ① 造币：唯一的货币创造腿（注入）
+	s.Bk().MintMoney(minted)
+	// 【R87】造币必须计入 `infusionTotal`，否则 A8 的
+	// `ΔM == NewCapital + InfusionTotal` 会报一个恰等于造币额的残差。
+	s.infusionTotal += minted
+	// ② 购金付款：央行 → 金矿（普通转移）
+	if paidToMine > 0 {
+		if mineIdx := s.goldMineIndex(); mineIdx >= 0 {
+			s.Bk().PayForGold(mineIdx, paidToMine)
+		}
+	}
+	s.mintTick = minted
+	s.goldPaidTick = paidToMine
+	return produced, minted, paidToMine
+}
+
+// expandCentralBank 实现 §1.2-5 的第三项："**当黄金有剩余时，中央银行自动扩建**"。
+//
+// 【怎样表达"黄金有剩余"】本实现里黄金产出即被造币消耗，没有库存，
+// 故"剩余"必须通过**产能**表达：
+//
+//	央行吞吐量 = 级数 × GoldPerBankLevel          （每 tick 能吃进多少黄金）
+//	本期产出   = 金矿产出
+//	产出 > 吞吐量 ⇒ **黄金有剩余**（央行吃不完）⇒ 扩建
+//
+// 【目标级数】把本期产出全部吃下所需的级数 = ceil(产出 / GoldPerBankLevel)。
+// 【为什么不用建造力】§1.2-5 把央行的扩建写成**自动**（"当黄金有剩余时…自动扩建"），
+// 与仓库的"额度驱动自动扩建"同类（§4.5.6）——但仓库走公共工程的**建造订单**，
+// 而央行是货币机构、没有建造成本（`BuildCost = 0`）。
+// 故这里**直接改级数**，不产生建造订单、不消耗建造力。
+//
+// 【默认不生效】`CentralBankEnabled = false` 或 `GoldPerBankLevel <= 0` 时直接返回。
+//
+// 返回本 tick 新增的级数。
+func (s *State) expandCentralBank() float64 {
+	ci := s.centralBankIndex()
+	if ci < 0 || s.Params.GoldPerBankLevel <= 0 {
+		return 0
+	}
+	produced := s.goldPerTick()
+	if produced <= 0 {
+		return 0
+	}
+	b := &s.Buildings[ci]
+	// 目标级数 = 把本期产出全部吃下所需
+	want := math.Ceil(produced / s.Params.GoldPerBankLevel)
+	if want <= b.Level {
+		return 0
+	}
+	added := want - b.Level
+	b.Level = want
+	// 央行是国有的（与仓库同口径：它的钱是造出来的，不属于私人）
+	b.GovLevel = want
+	b.PrivLevel = 0
+	s.centralBankExpandedTick = added
+	return added
+}
+
+// goldProducedTotal 见 `GoldProducedTotal`。
+
+// payGovDebtInterest 结算本 tick 的**政府债务利息**（1.2 M5 ①）。
+//
+// 【裁决（第 67 轮）】"政府债务计息，**利息付给央行**"。
+//
+// 【口径】
+//
+//	本金 = 政府债务 = max(0, −政府现金池)          （1.0 §4.5.4 的定义，不改）
+//	利率 = Params.GovDebtInterestRate（默认 5%，= M8.5 的统一曲线）
+//	本期利息 = 本金 × 利率 / TicksPerYear
+//
+// 过账：`借 政府 / 贷 央行` ⇒ **政府的现金池更负**（即债务增加）、**央行的现金池实增**。
+// 货币总量**不变**（它不是创造，只是转移）——这一点很重要，故它**不**进 `InfusionTotal`。
+//
+// 【为什么"以举债付息"是自洽的】1.0 的债务不是一笔独立台账，而是"现金池为负"的
+// **等价说法**。既然没有独立的还本付息现金流，利息就只能表现为"债务增加"
+// （借记政府）。这与 M8.4.1"违约则延期、滚入未偿余额"是同一性质的处理。
+//
+// 【默认不生效】`GovDebtInterestEnabled = false` 时直接返回 0（1.0 逐位不变）。
+func (s *State) payGovDebtInterest() float64 {
+	if !s.Params.GovDebtInterestEnabled {
+		return 0
+	}
+	principal := s.GovDebt()
+	if principal <= 0 {
+		return 0
+	}
+	rate := s.Params.GovDebtInterestRate
+	if rate <= 0 {
+		return 0
+	}
+	tpy := float64(s.Params.TicksPerYear)
+	if tpy <= 0 {
+		tpy = 52
+	}
+	interest := principal * rate / tpy
+	if interest <= 0 {
+		return 0
+	}
+	paid := s.Bk().PayGovDebtInterest(interest)
+	s.govDebtInterestTick = paid
+	s.govDebtInterestTotal += paid
+	return paid
+}
+
+// GovDebt 返回政府债务 = max(0, −政府现金池)（1.0 §4.5.4 的定义）。
+func (s *State) GovDebt() float64 {
+	b := s.balGov()
+	if b < 0 {
+		return -b
+	}
+	return 0
+}
+
+// GovDebtInterestTotal 返回累计支付的政府债务利息（1.2 M5 ①，诊断用）。
+func (s *State) GovDebtInterestTotal() float64 { return s.govDebtInterestTotal }
+
+// laborPrivateShare 返回**私人份额中归劳动力**的比例（1.2 M4.2 所有权重构）。
+//
+//	未开重构                    ⇒ **0**（利润归属走单腿 ⇒ 1.0 逐位不变）
+//	开启（默认资本份额 0.30）    ⇒ **0.70**
+//
+// 【口径来源】R57 第 3 条："资本直接承接政府 30%、劳动力直接承接资本 70%"，
+// 两条划转各自一跳：① 政府 → 资本 30%；② 资本 → 劳动力 70%。
+// 于是私人份额由"资本 0.70"变为"资本 0.30 + 劳动力 0.70"。
+func (s *State) laborPrivateShare() float64 {
+	if !s.Params.OwnershipRestructure {
+		return 0
+	}
+	f := 1 - s.Params.OwnershipCapitalShare
+	if f < 0 {
+		return 0
+	}
+	if f > 1 {
+		return 1
+	}
+	return f
+}
+
+// laborLegs 按**人头等分**构造"统一入口 → 人群池"的派发腿（1.2 M4.2 / M8.6）。
+//
+// 【受益人集合（2026-09-20 第 51 轮裁决）】"**统一：在职人口，失业者不参与**"。
+// 即排除 `s.UnemployedSite` 那个虚拟场地；其余有 `Population > 0` 的池按人头平分。
+//
+// 【为什么两条腿共用本函数】M4.2 的分红派发与 M8.6 ③ 的利息当期分配是**同一机制**：
+//
+//	统一入口（劳动力分红池 / 储蓄银行）→ 按人头分摊 → §5.1 的人群池
+//
+// 故两者都走这里，规则只有一处、不会漂移。
+//
+// 【为什么按人头而不是按阶级】M4.2 裁决："劳动力**不分阶级**，视作**一同管理**"，
+// 且第 3 次裁决澄清"按人头平分**就是**按场地人数比例平分——两者**等价**"。
+// 故不需要为分红改造 §5.1 的池结构，只需一个统一入口 + 按人口加权。
+//
+// `amount` 是**可分配总额**；各腿金额之和恒等于返回值（按比例裁剪时同除一个 scale）。
+func (s *State) laborLegs(amount float64) []book.WelfareLeg {
+	if amount <= 0 || s.Houses == nil {
+		return nil
+	}
+	type want struct {
+		idx int
+		pop float64
+	}
+	var wants []want
+	var totalPop float64
+	for i := range s.Houses.Pools {
+		p := &s.Houses.Pools[i]
+		if p.Population <= 1e-12 {
+			continue
+		}
+		// 裁决：失业者不参与
+		if p.Worksite == s.UnemployedSite {
+			continue
+		}
+		wants = append(wants, want{idx: i, pop: p.Population})
+		totalPop += p.Population
+	}
+	if totalPop <= 0 {
+		return nil
+	}
+	legs := make([]book.WelfareLeg, 0, len(wants))
+	for _, w := range wants {
+		amt := amount * (w.pop / totalPop)
+		if amt <= 1e-9 {
+			continue
+		}
+		legs = append(legs, book.WelfareLeg{Pool: s.Houses.Account(w.idx), Amount: amt})
+	}
+	return legs
+}
+
+// distributeLaborDividend 把**劳动力分红池**的余额派发给在职人口（1.2 M4.2）。
+//
+//	借 劳动力分红池   Σ金额
+//	贷 人群池[p]       各池按人头分摊
+//
+// 【为什么派发"该账户的余额"而不是"本 tick 新增"】该账户是**净额累计器**
+// （亏损期 `Owner < 0` ⇒ 分红为负 ⇒ 被借记），若只派发本 tick 净额，
+// 历史累积会永远留在池里（R75 实测 800 tick 沉淀 30.13 亿）。
+// 派发**余额**则每 tick 归零，符合 M4.2"持有者获每周期对应分红"的口径。
+//
+// 【默认不生效】`OwnershipRestructure=false` 时分红池恒为 0 ⇒ 本函数直接返回。
+func (s *State) distributeLaborDividend() float64 {
+	acc := ledger.LaborDividend()
+	bal := s.Aud.Balance(acc)
+	if bal <= 0 {
+		return 0
+	}
+	legs := s.laborLegs(bal)
+	if len(legs) == 0 {
+		return 0
+	}
+	return s.Bk().PayLaborDividend(legs)
+}
+
+// cappedMargin 返回参与抬价的**利润率因子**，按 `Params.WageBidMarginCap` 封顶。
+//
+// 【R92 的口径】实测（R68/R69）稀缺局里参与抬价的场地利润率高达 **20.17**
+// （正常开局是 0.20）⇒ "按比例拿利润加价"必然给出相对工资 15~37 倍的加价。
+//
+//	封顶后 m' = min(m, cap)      （cap ≤ 0 表示不封顶，逐位复现裁决原文）
+//
+// 【为什么用它而不是"封顶溢价本身"】封顶溢价 = 给结果设一个"工资倍数上限"，
+// 那正是 M7.2 裁决⑤(c) **明确回避**过的做法。封顶**输入**（利润率）不动结果的上界，
+// 只把"什么样的利润率才配参与抬价"这件事说清楚——**对准根因**。
+func (s *State) cappedMargin(margin float64) float64 {
+	if margin <= 0 {
+		return 0
+	}
+	if cap := s.Params.WageBidMarginCap; cap > 0 && margin > cap {
+		return cap
+	}
+	return margin
+}
+
+// effectiveWagePerLevel 返回第 i 个场地的**每级工资成本**（含竞标溢价）。
+//
+//	= (baseWage_i + p_i) × LaborPerLevel
+//
+// `WageBidEnabled=false` 时它**恒等于** `Spec.WagePerLevel()`——
+// 这是"1.0 逐位不变"的关键：当期零利润价 P⁰(t) 与标定用的口径因此完全一致。
+func (s *State) effectiveWagePerLevel(i int) float64 {
+	if i < 0 || i >= len(s.Buildings) {
+		return 0
+	}
+	b := &s.Buildings[i]
+	w := b.Spec.WagePerLevel()
+	if p := s.WagePremium(i); p > 0 {
+		w += p * b.Spec.LaborPerLevel
+	}
+	return w
+}
+
+// allocateByWageOrder 实现 1.2 M7.2 第 4 步：**按实际人均工资降序配给劳动力**。
+//
+// 返回**全局配给系数** k（= 实际到岗总量 / 申报总量），供调用方按 1.0 第 23 轮的
+// 同一条口径缩放工资与产出——注意这里是**诊断量与兜底**，真正的配给已按工资排序完成。
+//
+// 【与 §5.1 人群池的关系】本函数只决定"每个场地拿到多少**总**劳动力"，
+// 场地内的**阶级构成**仍按 §5 的劳动结构比例（75/20/5）分摊——
+// 这与 M7.2 第 5 步"溢价按比例放大到各阶级、保持工资结构"一致。
+//
+// 【为什么"排序即配置"】裁决④定"无迁徙成本"：模型里工人没有"地点"状态，
+// 只有"场地 × 阶级"的池，故同一 tick 内按工资降序分配完毕，不需要迁移率。
+//
+// 【默认不生效】仅当 `Params.WageBidEnabled` 时由 `allocateSubsistenceLabor` 调用。
+func (s *State) allocateByWageOrder(levels, hire []float64) float64 {
+	n := len(s.Buildings)
+	if len(s.wageShortTick) != n {
+		s.wageShortTick = make([]bool, n)
+	}
+	type slot struct {
+		idx  int
+		wage float64
+	}
+	order := make([]slot, 0, n)
+	var demanded float64
+	for i := 0; i < n && i < len(levels) && i < len(hire); i++ {
+		sp := s.Buildings[i].Spec
+		if sp.LaborPerLevel <= 0 {
+			continue
+		}
+		demand := levels[i] * hire[i] * sp.LaborPerLevel
+		if demand <= 0 {
+			continue
+		}
+		demanded += demand
+		order = append(order, slot{idx: i, wage: s.EffectiveWage(i)})
+	}
+	// 降序：工资高者先拿人；同工资按场地下标稳定排序（保证确定性）
+	sort.SliceStable(order, func(a, b int) bool { return order[a].wage > order[b].wage })
+	remaining := s.Population
+	var allocated float64
+	for _, o := range order {
+		sp := s.Buildings[o.idx].Spec
+		demand := levels[o.idx] * hire[o.idx] * sp.LaborPerLevel
+		give := demand
+		if give > remaining {
+			give = remaining
+		}
+		if give < 0 {
+			give = 0
+		}
+		remaining -= give
+		allocated += give
+		// 缺员标记：申报量未被满足（供 ⑭ 的溢价更新用，M7.2 裁决①）
+		s.wageShortTick[o.idx] = give < demand-1e-9
+	}
+	if demanded <= 0 {
+		return 1
+	}
+	k := allocated / demanded
+	if k > 1 {
+		k = 1
+	}
+	return k
+}
+
+// SavingsBank 返回储蓄银行现金池余额（1.2 M4.3 的诊断口径）。
+func (s *State) SavingsBankBalance() float64 {
+	return s.Aud.Balance(ledger.SavingsBank())
+}
+
+// ===== 1.2 M7 工资竞标 =====
+
+// BaseWage 返回第 i 个场地的**基准人均工资**（§5 的劳动结构，不含竞标溢价）。
+func (s *State) BaseWage(i int) float64 {
+	if i < 0 || i >= len(s.Buildings) {
+		return 0
+	}
+	sp := s.Buildings[i].Spec
+	if sp.LaborPerLevel <= 0 {
+		return 0
+	}
+	return sp.WagePerLevel() / sp.LaborPerLevel
+}
+
+// EffectiveWage 返回第 i 个场地的**实际人均工资** = 基准 + 竞标溢价（1.2 M7.2 第 1 步）。
+//
+// `WageBidEnabled=false` 或 `wagePremium` 为空时退化为基准工资。
+func (s *State) EffectiveWage(i int) float64 {
+	w := s.BaseWage(i)
+	if i >= 0 && i < len(s.wagePremium) {
+		w += s.wagePremium[i]
+	}
+	return w
+}
+
+// WagePremium 返回第 i 个场地的当期竞标溢价（诊断）。
+func (s *State) WagePremium(i int) float64 {
+	if i < 0 || i >= len(s.wagePremium) {
+		return 0
+	}
+	return s.wagePremium[i]
+}
+
+// updateWageBids 按 1.2 M7.2 的第 2–3 步更新各场地的竞标溢价。
+//
+// 规则（严格按裁决）：
+//
+//	① 只在**本期缺员**时抬价（裁决①(a)）；
+//	② 抬价额 = wageBidCap × max(0, 本期纯利) / 在岗人数（第 2 步的 A_i ÷ 人数）；
+//	③ **招满即回落**（裁决②(b)）——本期招满且未缺员 ⇒ 按衰减率下调；
+//	④ **缓慢衰减**（裁决②(c)）——任何情形下都先按年化速率向 0 衰减；
+//	⑤ 不设显式上限（裁决⑤(c)）：由 §4.1 的 10% 阈值隐式约束。
+//
+// 【为什么每 tick 只抬一次】避免"抬价 → 成本 → 利润率 → 抬价"在同一 tick 内递归。
+//
+// 【默认不生效】`WageBidEnabled=false` 时本函数不被调用，`wagePremium` 保持全 0。
+func (s *State) updateWageBids() {
+	n := len(s.Buildings)
+	if len(s.wagePremium) != n {
+		s.wagePremium = make([]float64, n)
+	}
+	if len(s.wageShortTick) != n {
+		s.wageShortTick = make([]bool, n)
+	}
+	decayPerTick := s.Params.WageBidDecay / float64(s.Params.TicksPerYear)
+	if decayPerTick < 0 {
+		decayPerTick = 0
+	}
+	if decayPerTick > 1 {
+		decayPerTick = 1
+	}
+	for i := range s.Buildings {
+		b := &s.Buildings[i]
+		p := s.wagePremium[i]
+		// ④ 先衰减（对所有场地生效：只有上抬没有下探会重现棘轮）
+		p *= (1 - decayPerTick)
+		// ③ 招满即回落：本期没缺员 ⇒ 额外下调一次（比"缓慢衰减"更明确）
+		if !s.wageShortTick[i] {
+			p *= (1 - decayPerTick)
+		}
+		// ①② 缺员则抬价（额度受利润约束）
+		if s.wageShortTick[i] && b.HireRate > 1e-9 {
+			// 【R68 核查：分母口径**不改**】
+			//
+			// R67 遗留问题里我提出过"缺员时在岗人数被压缩 ⇒ 分母变小 ⇒ 人均溢价被放大"，
+			// 并据此把分母从 `Level × HireRate × LaborPerLevel` 改成了 `Level × LaborPerLevel`。
+			// **实测反驳了这个诊断**：改动前后峰值溢价一位不变（97.8249 → 97.8249）。
+			//
+			// 原因（`premium_anatomy_test.go` 逐 tick 拆解）：`HireRate` 由 `build.AdjustHire`
+			// 产生且被 `math.Min(1, …)` 封顶，它是**雇佣率（申报口径）**，不是"到岗比例"；
+			// 真正的配给结果记在 `s.LaborMarketRatio`，而 `payWages` 的 `eff = levels×hire`
+			// 支付的正是**申报量**。所以 `Level × HireRate × LaborPerLevel` **本来就是**申报满编，
+			// `Level × LaborPerLevel` 反而在 `HireRate < 1` 时**多算**了分母。
+			// 故回滚为原口径——它忠实于裁决措辞"在岗人数"，且是三者中唯一正确的。
+			workers := b.Level * b.HireRate * b.Spec.LaborPerLevel
+			if workers > 1e-9 {
+				// 第 2 步：A_i = wageBidCap × 基数（R68 新增 `WageBidBase` 对照口径）
+				//
+				// 基数按 `Params.WageBidBase` 分派：
+				//   ""/"profit" ⇒ **纯利**（裁决原文；默认，逐位复现）
+				//   "wagebill"  ⇒ **当期工资总额 × max(0, 利润率)**（R68 建议的收口口径）
+				var A float64
+				switch s.Params.WageBidBase {
+				case "wagebill":
+					// 当期工资总额 = 在岗人数 × 人均基准工资；利润率取本期实际值。
+					// 注意用 `BaseWage` 而非 `EffectiveWage`：以**工资**为基数时若再用
+					// 含溢价的工资，会形成"溢价 → 更大基数 → 更大溢价"的自反馈。
+					//
+					// 【R92】利润率因子按 `WageBidMarginCap` 封顶（0 = 不封顶）。
+					if margin := s.cappedMargin(b.LastMargin); margin > 0 {
+						A = s.Params.WageBidCap * (workers * s.BaseWage(i)) * margin
+					}
+				default:
+					profit := b.LastProfit
+					if profit > 0 {
+						A = s.Params.WageBidCap * profit
+						// 【R92】利润率封顶：把"参与抬价的利润率"压到上限。
+						//
+						// `b.LastProfit` 已经含了当期利润率（纯利 = 收入 − 成本 − 工资），
+						// 故不能"再乘一个 cap"——那会重复作用。正确做法是按**比例**缩放：
+						//
+						//	A' = A × min(1, cap / 实际利润率)
+						//
+						// 于是"利润率 20.17、cap 0.2"时 A' = A × 0.0099 ⇒ 加价被压回
+						// "正常利润率"应有的水平。cap ≤ 0 时比例恒为 1 ⇒ 逐位复现原口径。
+						if cap := s.Params.WageBidMarginCap; cap > 0 {
+							if m := b.LastMargin; m > cap {
+								A *= cap / m
+							}
+						}
+					}
+				}
+				p += A / workers
+			}
+		}
+		if p < 0 {
+			p = 0
+		}
+		s.wagePremium[i] = p
+	}
+}
+
+// loanIssuedTick 是本 tick 实际发放的贷款本金（1.2 M8，诊断用）。
+func (s *State) LoanIssuedTick() float64 { return s.loanIssuedTick }
+
 func (s *State) hasAcquireOrder(bi int) bool {
 	for i := range s.Orders {
 		o := &s.Orders[i]
@@ -335,6 +1153,16 @@ type State struct {
 	Buildings []BuildingState
 	Market    *market.State
 
+	// UnemployedSite 是本次运行里"**失业**"这一虚拟劳动场地的下标（§5.1 / §6.5）。
+	//
+	// 【为什么是运行时字段而不是常量】1.2 的央行/金矿会向 `BuildingSpecs`
+	// **追加建筑** ⇒ `len(specs)` 变化 ⇒ 失业场地的下标随之变化。
+	// 常量 `model.UnemployedSite` 只对应"关闭央行"这一种规格；若在开启央行时仍用它，
+	// 失业人口会被记到某个真实建筑的池里。
+	//
+	// 关闭央行（默认）时它等于 `model.UnemployedSite`，故 1.0 逐位不变。
+	UnemployedSite int
+
 	// Aud 是【唯一记账账本】（§4.5.3 修订）。
 	//
 	// 政府、资本、建筑、人群四类主体的全部余额都存放在这里，各结构只持有
@@ -396,7 +1224,49 @@ type State struct {
 	//
 	// acquireCommitted 是**本 tick 为收购订单留存的资本额**（§4.5.1a 第 27 轮）。
 	// ⑨b 把资本净额转入投资池之前先扣掉它，使"收购有钱、扩建用剩下的钱"。
-	acquireCommitted float64	//
+	acquireCommitted float64
+	// loanIssuedTick 是本 tick 实际发放的贷款本金（1.2 M8，诊断用）。每 tick 开头清零。
+	loanIssuedTick float64
+	// laborDividendTick 是本 tick 贷记进 `ledger.LaborDividend()` 的**劳动力分红**
+	//（1.2 M4.2 所有权重构，诊断用）。每 tick 开头清零。
+	//
+	// 【它是什么】所有权重构后私人份额纯利中归劳动力的那一腿（默认 70%）。
+	// 未开重构时恒为 0。按 M4.2 裁决"劳动力不分阶级、按人头平分"，
+	// 故它贷记到**一个统一入口**，而不是分散进 §5.1 的 39 个人群池。
+	laborDividendTick float64
+	// laborDividendPaidTick 是本 tick 从分红池**实发到人群池**的金额
+	//（1.2 M4.2 派发腿，诊断用）。每 tick 开头清零。
+	laborDividendPaidTick float64
+	// privateShareTick 是本 tick 归属给"私人"的全部份额 Σ res.Owner
+	//（1.2 M4.2 口径验证用）。每 tick 开头清零。
+	//
+	// 它与 `laborDividendTick` 的关系**逐位成立**：
+	//
+	//	laborDividendTick == privateShareTick × laborPrivateShare()
+	//
+	// 故用这两个量就能验证"资本 30% / 劳动力 70%"，且不受后续资金回流影响
+	//（用期末池余额反算会有 2.75e7 的二阶偏差，见 R76）。
+	privateShareTick float64
+
+	// ===== 1.2 M7 工资竞标（默认关闭）=====
+	//
+	// wagePremium[i] 是第 i 个场地当期的**竞标溢价** p_i ≥ 0（元/人/周期），
+	// 与 §5 的基准工资相加得到**实际人均工资**：
+	//
+	//	实际人均工资_i = baseWage_i + wagePremium[i]
+	//	baseWage_i     = Spec.WagePerLevel() / Spec.LaborPerLevel
+	//
+	// 它**只**在本 tick 的以下三处生效（都与 `WageBidEnabled` 绑定）：
+	//   ① 工资支付（`payWages`）的金额放大；
+	//   ② 当期零利润价 P⁰(t) 的单位劳动成本（`refreshPzero`）；
+	//   ③ 配置顺序（`allocateSubsistenceLabor` 按实际工资降序）。
+	// `WageBidEnabled=false` 时本切片恒为 0 ⇒ 三处都退化为 1.0 口径。
+	wagePremium []float64
+	// wageShortTick[i] 标记第 i 个场地**本期是否缺员**（申报量未被满足），
+	// 供 ⑭ 的溢价更新使用（1.2 M7.2 裁决①：只在缺员时抬价）。
+	wageShortTick []bool
+	// WagePaid 是本 tick 因竞标溢价而多付的工资总额（诊断）。
+	wagePremiumPaidTick float64 //
 	// 当"各场地申报雇佣人口之和 > 总人口"时，本值为 人口 / 申报量，所有场地的
 	// **有效雇佣率**按它等比缩放（见 allocateSubsistenceLabor）。= 1 表示未触限。
 	// 零值（新建 State）由 step 开头的 allocateSubsistenceLabor 立即改写。
@@ -413,6 +1283,78 @@ type State struct {
 	// savingInvestTick 是本 tick 从储蓄账户**实际转入投资池**的金额（§5.3 第二步，
 	// = σ_save × savingTick）。σ_save = 1 时两者相等、储蓄账户期末归零。
 	savingInvestTick float64
+	// ===== 1.2 M1 第 3 条：**存量**口径（储蓄余额 vs 已分配投资）=====
+	//
+	// 【为什么需要它】1.0 的 §5.3 只有两个**流量**口径：`savingTick`（本期结余）
+	// 与 `savingInvestTick`（本期转入）。而 M1 第 3 条要求把
+	// "**储蓄账户余额**"与"**已分配投资**"拆成两个口径——即需要**存量**视图。
+	//
+	// 【机械储蓄账户不能当存量用】`ledger.Savings()`（储蓄固定账户）的余额
+	// **按设计每期归零**（σ_save = 1 时第二步全额转出，R20 的口径）。
+	// 故它**不表达**"居民累计攒了多少"。
+	//
+	// 【做法：两个诊断账（不进 ledger，不影响任何过账）】
+	//   savingsStock   —— 居民累计**攒下**的结余（§5.3 第一步的累计）
+	//   savingsAlloc   —— 其中累计**已分配为投资**的部分（§5.3 第二步的累计）
+	// 二者之差即"**已积累但尚未分配**"的储蓄余额。
+	//
+	// 【为什么不做成 ledger 账户】它会被算进 `Auditor.Total()`（= 货币总量），
+	// 而这些钱**已经**在投资池/储蓄银行里、已被计入 ⇒ 会造成**重复计量**。
+	// 与 `fiscal.Capital.Debt`、`BuildingState.GovLevel` 同族：**都是字段，不是钱**。
+	//
+	// 【默认不生效】`Params.SavingsStockTrack = false` 时两者恒为 0
+	// ⇒ 不写入任何量 ⇒ 1.0 逐位不变。
+	savingsStock float64
+	savingsAlloc float64
+
+	// ===== 1.2 §1.2-5 央行/金矿的诊断量（默认全为 0）=====
+	//
+	// goldProduced 是累计产出的黄金（盎司）；goldCarry 是"已产出但尚未满一批"的黄金，
+	// 跨 tick 累加（见 `mintGold` 的口径说明）。
+	goldProduced float64
+	goldCarry    float64
+	// goldMintedUnits 是累计**用于造币**的黄金单位数（= 批数 × GoldPerMint）。
+	goldMintedUnits float64
+	// mintedTotal 是累计创造的货币量（元）——货币注入，计入 InfusionTotal。
+	mintedTotal float64
+	// mintTick / goldPaidTick 是本 tick 的造币额与购金付款额（每 tick 开头清零）。
+	mintTick     float64
+	goldPaidTick float64
+	// wageBillTick 是本 tick 的**工资总额**（满编口径的实付工资，见 step 的 ③）。
+	// 它是 R86 的**造币锚**：`MintWageFraction × wageBillTick` = 每批造币额。
+	wageBillTick float64
+	// goldPaidPrev 是**上一 tick** 央行实付给金矿的购金款。
+	//
+	// 【为什么需要单独存】`goldPaidTick` 每 tick 开头被清零（它是"本 tick"的诊断量），
+	// 而金矿的**收入信号**必须读**上一期已结算**的量（§8：用上一期结算量做决策信号）。
+	// 若直接读 `goldPaidTick`，拿到的恒为 0 ⇒ 金矿 `LastRevenue = 0`
+	// ⇒ 明明收着钱却显示零收入（R86 实测到该现象）。
+	goldPaidPrev float64
+	// centralBankExpandedTick 是本 tick 由"黄金有剩余"自动新增的央行级数（§1.2-5）。
+	centralBankExpandedTick float64
+
+	// ===== 1.2 M5 ① 政府债务利息（默认关闭）=====	//
+	// govDebtInterestTick 是本 tick 支付的利息（每 tick 开头清零）；
+	// govDebtInterestTotal 是累计值（诊断）。
+	govDebtInterestTick  float64
+	govDebtInterestTotal float64
+
+	// goldMineSlotTick 是**诊断量**（R94）：金矿本 tick 在建造力分配里拿到的额度。
+	//
+	// 【为什么需要它】R93 发现"金矿盈利但永不扩建、且 0 个订单"，
+	// 并已排除意图/利润信号/上限/预算/`PowerNeed` 五项。
+	// 剩下最可能的一环是**建造力分配**：`slots` 按顺序消耗 `remaining`，
+	// 用尽即 `break` ⇒ 排在后面的场地（金矿下标 15，最靠后）可能**永远拿不到额度**
+	// ——即使它有预算、有意向。本字段把这个"拿到的额度"暴露出来，
+	// 使"是分配问题"还是"其它问题"能被直接读出，而不必再靠推断。
+	goldMineSlotTick float64
+	// goldMineInSlotsTick 记录**金矿本 tick 的意向是否进入了 slots 列表**（诊断，R94）。
+	//
+	// 它把"金矿拿不到建造力"这件事分成两种完全不同的原因：
+	//
+	//	false ⇒ 意向**根本没进 lists*（被 `capByBudget` 或更早的过滤挡掉）
+	//	true  ⇒ 意向进了列表，但**排在后面、额度被前面的槽位吃光**（分配顺序问题）
+	goldMineInSlotsTick bool
 	// welfarePaidTick 是本 tick 政府发放的福利金总额（§4.5.8）。
 	welfarePaidTick float64
 	// publicWorksSpendTick 是本 tick 公共工程采购建造力的国库支出（§4.5.8）。
@@ -450,8 +1392,8 @@ type State struct {
 	// warehouseGoodsOutTick 是仓库本 tick **付出**的入库货款（含增值税）。
 	warehouseGoodsOutTick float64
 	// warehouseVATTick / warehouseConsumeTaxTick 是本 tick 两段税的税额（诊断）。
-	warehouseVATTick         float64
-	warehouseConsumeTaxTick  float64
+	warehouseVATTick        float64
+	warehouseConsumeTaxTick float64
 	// warehouseExpandUnitsTick 是本 tick 因额度不足而下达的仓库扩建订单等级数。
 	warehouseExpandUnitsTick float64
 	// warehouseExpandSpendTick 是本 tick 为仓库扩建而采购的建造力金额（国库支出）。
@@ -650,19 +1592,29 @@ func (s *State) infuse(acc ledger.Account, amount float64) {
 	s.infusionTotal += amount
 }
 
-// InfusionTotal 返回累计的诊断注入额（UnlimitedFunds 关闭时恒为 0）。
+// InfusionTotal 返回累计的**货币注入**额（= 诊断注入 + 中央银行的造币）。
+//
+// 【R87 更正：它必须包含造币】此前它只统计 `UnlimitedFunds` 诊断注入，
+// 而 A8 的货币守恒恒等式是
+//
+//	ΔM == NewCapital + InfusionTotal
+//
+// 造币是**第二处**货币创造（1.2 §1.2-5），若不进这个口径，
+// 守恒审计会报一个**恰等于造币额**的残差。
+// 实测（R87 的 `TestAuditCentralBankMinting`）：货币守恒差 **84,981,088.07**，
+// 与累计造币额**逐位相同** —— 正是这里漏计的。
 func (s *State) InfusionTotal() float64 { return s.infusionTotal }
 
 // refreshPzero 重算全部商品的**当期零利润价**（§七 R32）。
 //
-//	P⁰_j(t) = Σ_i A[i][j]·P_i(t) + l_j
+//		P⁰_j(t) = Σ_i A[i][j]·P_i(t) + l_j
 //
-//   - A[i][j] = 商品 i 每单位商品 j 的投入（calibrate.InputMatrix，**含自投入**，
-//     例如煤矿烧煤——故必须用**当期**价格估值，不能解固定点）；
-//   - l_j = 单位劳动成本 = b.WagePerLevel() / 单级产出（满编口径，§3.4）；
-//     其中 WagePerLevel() 随建筑的劳动结构而不同（§5 第 20 轮：农业 28,250、
-//     城镇 33,750）。
-//   - P_i(t) = **上一 tick 结算后的当期价格**（本 tick 的价格方程尚未跑）。
+//	  - A[i][j] = 商品 i 每单位商品 j 的投入（calibrate.InputMatrix，**含自投入**，
+//	    例如煤矿烧煤——故必须用**当期**价格估值，不能解固定点）；
+//	  - l_j = 单位劳动成本 = b.WagePerLevel() / 单级产出（满编口径，§3.4）；
+//	    其中 WagePerLevel() 随建筑的劳动结构而不同（§5 第 20 轮：农业 28,250、
+//	    城镇 33,750）。
+//	  - P_i(t) = **上一 tick 结算后的当期价格**（本 tick 的价格方程尚未跑）。
 //
 // 这就是"让人均满编的该生产单位恰好 0 利润"的售价。它与静态 P_cost 的差别在于：
 // 静态解用"全部投入品也处于各自零利润价"这一长期条件（Leontief 固定点），
@@ -686,7 +1638,7 @@ func (s *State) refreshPzero() {
 		}
 		// 【§4.5.6】投入按**买家的实际成本**计：仓库加价与消费税都落在买家身上，
 		// 故零利润价方程是 P⁰ = w·Σ A·P + l（w = 买家加载系数）。
-		pz = s.Params.BuyerWedge()*pz + b.Spec.WagePerLevel()/b.Spec.Recipe.Qty
+		pz = s.Params.BuyerWedge()*pz + s.effectiveWagePerLevel(j)/b.Spec.Recipe.Qty
 		s.Market.SetPzero(j, pz)
 	}
 }
@@ -783,10 +1735,10 @@ type Recon struct {
 	//	DepositNet   —— 入库净额（生产者实收合计，正向）
 	//	DepositGross —— 入库含税总额（仓库实付合计，负向）
 	//	ConsumerTaxWh / InputTaxWh —— 两段税的税额（诊断，已含在 Gov.TaxCollected）
-	DepositNet     float64
-	DepositGross   float64
-	ConsumerTaxWh  float64
-	InputTaxWh     float64
+	DepositNet    float64
+	DepositGross  float64
+	ConsumerTaxWh float64
+	InputTaxWh    float64
 	// SubsidyPaid 是政府补贴入账合计（§4.5.7；建筑池的流入，聚合口径）。
 	//
 	// 【为什么必须进汇总式】补贴是"借政府 / 贷建筑"的转移支付，建筑池确有流入；
@@ -885,9 +1837,9 @@ type BuildingRecon struct {
 //
 // 【口径】逐条列出该建筑现金池本 tick 实际发生的资金腿：
 //
-//	+ 消费收入、中间投入收入、**入库净额**、**出库收款**、建造力净额、
-//	  新资本（唯一注入）、利润归属净腿、补贴、作为所属资本建筑收到的私人份额纯利
-//	− 工资、中间投入付款（含税）、**入库付款（含税）**、入池款（§4.5.1b）
+//   - 消费收入、中间投入收入、**入库净额**、**出库收款**、建造力净额、
+//     新资本（唯一注入）、利润归属净腿、补贴、作为所属资本建筑收到的私人份额纯利
+//     − 工资、中间投入付款（含税）、**入库付款（含税）**、入池款（§4.5.1b）
 //
 // 其中利润归属净腿是 ProfitLeg（= 补足额 − 纯利），**不是** Retained——
 // 记账用的是"借全额纯利、贷补足额"两条腿，见 BuildingRecon.ProfitLeg 的说明。
@@ -913,9 +1865,9 @@ func (r Recon) Residual() float64 { return r.actual - r.ExpectedDelta() }
 //
 // 【口径】汇总层面同样逐条列出实际资金腿：
 //
-//	+ 消费收入(仓库从消费代理收到) + 中间投入收入(仓库从生产买家收到)
-//	  + 入库净额(生产者收到) + 建造力收入(净) + 新资本 + 利润划分净腿
-//	− 工资 − 中间投入付款(含税) − 入库付款(含税) − 建造力支出(净)
+//   - 消费收入(仓库从消费代理收到) + 中间投入收入(仓库从生产买家收到)
+//   - 入库净额(生产者收到) + 建造力收入(净) + 新资本 + 利润划分净腿
+//     − 工资 − 中间投入付款(含税) − 入库付款(含税) − 建造力支出(净)
 //
 // 【§4.5.6】仓库路径把"销售"拆成两条腿：买家付给仓库（IntermediateIn / ConsumerRevenue）、
 // 仓库付给生产者（DepositNet / DepositGross）。两条腿都发生在**建筑池内部**，
@@ -992,14 +1944,14 @@ type FlowDiag struct {
 	// ===== §4.5.6 仓库路径（2026-09-19 第 16 轮）=====
 	//
 	// 贸易量、额度、仓库收支与两段税，全部取【记账事实】而不是公式推算。
-	TradeVolume    float64 // 本 tick 过库贸易量（单位数，单向）
-	TradeQuota     float64 // 贸易额度 = 仓库级数 × 每级额度
-	WarehouseIn    float64 // 仓库出库收款（含加价、不含消费税）
-	WarehouseOut   float64 // 仓库入库付款（含增值税）
-	VATCollected   float64 // 增值税 ν（入库环节，已含在 GovTax 内，单列供核对）
-	ConsumeTaxCollected float64 // 消费税 τ（出库环节，已含在 GovTax 内，单列供核对）
-	WarehouseCash  float64 // 仓库期末现金池
-	AgentCash      float64 // 消费代理期末余额（恒为 0）
+	TradeVolume          float64 // 本 tick 过库贸易量（单位数，单向）
+	TradeQuota           float64 // 贸易额度 = 仓库级数 × 每级额度
+	WarehouseIn          float64 // 仓库出库收款（含加价、不含消费税）
+	WarehouseOut         float64 // 仓库入库付款（含增值税）
+	VATCollected         float64 // 增值税 ν（入库环节，已含在 GovTax 内，单列供核对）
+	ConsumeTaxCollected  float64 // 消费税 τ（出库环节，已含在 GovTax 内，单列供核对）
+	WarehouseCash        float64 // 仓库期末现金池
+	AgentCash            float64 // 消费代理期末余额（恒为 0）
 	WarehouseExpandSpend float64 // 本 tick 因额度不足而下达的仓库扩建采购额
 	WarehouseExpandUnits float64 // 本 tick 新建的仓库扩建订单等级数
 	// GovWarehouseExpand 是仓库自动扩建的国库支出（§4.5.6）。
@@ -1203,6 +2155,74 @@ type Options struct {
 	ExpandPlanHorizon int
 	// BasketScale 是 §6.3 需求篮子的整体缩放系数（默认 1.0；见 model.Params 字段说明）。
 	BasketScale float64
+	// ===== 1.2 借贷台账（M8）：默认全关 =====
+	//
+	// BankEnabled / Loan* 对应 model.Params 的同名字段（见那里的说明）。
+	// 默认值为零值/显式默认，**保证 1.0 基线逐位不变**。
+	BankEnabled         bool
+	LoanPrincipal       float64
+	LoanAnnualRate      float64
+	LoanTermYears       float64
+	LoanIssueInterval   int
+	LoanFromBalance     bool
+	LoanBalanceFraction float64
+	// ===== 1.2 M4.2 所有权重构（默认关闭）=====
+	OwnershipRestructure  bool
+	OwnershipCapitalShare float64
+	// ===== 1.2 配置档（R80）=====
+	//
+	// Profile12 一次性打开全部 1.2 行为（四个开关），使"1.2 的完整配置"
+	// 有一个**单一入口**。默认 false ⇒ 与 1.0 基线逐位相同。
+	Profile12 bool
+	// 四个**显式覆盖**指针：非 nil 时以指针为准，优先级高于 Profile12。
+	//
+	// 用 `*bool` 而不是 `bool`：Go 的零值无法区分"没设置"与"显式设为 false"，
+	// 而"1.2 但关掉某个开关"这个对照实验正需要后者。
+	// 与既有的 `AnchorExpenditureShare *bool` 同法。
+	BankEnabledOverride     *bool
+	OwnershipOverride       *bool
+	WageBidOverride         *bool
+	LoanFromBalanceOverride *bool
+	// SavingsStockTrack 打开 1.2 M1 第 3 条的储蓄**存量**口径（默认 false）。
+	SavingsStockTrack bool
+	// ===== 1.2 §1.2-5 央行/金矿（默认关闭）=====
+	CentralBankEnabled       bool
+	GoldMineLaborPerLevel    float64
+	CentralBankLaborPerLevel float64
+	GoldPrice                float64
+	GoldPerMint              float64
+	MoneyPerMint             float64
+	MintWageFraction         float64
+	// ===== 1.2 M3/M6 玩家投资接口（默认关闭）=====
+	//
+	// 【为什么用 `InvestAIOff` 而不是 `InvestAIEnabled bool`】Go 的零值 `false`
+	// 会让"没设置"与"显式关闭 AI"无法区分，而后者正是本接口的目的
+	// （M6："当玩家控制时**自动关闭**该 AI"）。用一个**反向命名**的布尔量，
+	// 零值即 = "AI 仍开启" = 1.0 基线口径。
+	InvestAIOff bool
+	// InvestManorShare 是玩家指定的庄园栈预算占比 ∈ [0,1]；**nil = 未设定**，交回 AI。
+	//
+	// 【为什么必须用 `*float64`（R89 实测的坑）】我第一版用 `float64` 并约定
+	// "−1 = 未设定"。但**调用方不写这个字段时，Go 的零值是 0**，而 0 是一个
+	// **有效的玩家选择**（全给金融）⇒ `opt.InvestManorShare >= 0` 恒为真
+	// ⇒ 每一局都被当成"玩家选了全给金融"，把 AI 口径**静默覆盖**掉。
+	// 实测：`New(Options{InvestAIOff: true})` 得到 `InvestManorShare = 0`，
+	// 而 `DefaultParams()` 是 −1 ⇒ 连"只关 AI、不给方向"都变成了显式方向。
+	//
+	// 指针能区分"未设置"（nil）与"显式 0"，与 `AnchorExpenditureShare *bool` 同法。
+	InvestManorShare *float64
+	// ===== 1.2 M5 ① 政府债务计息（默认关闭）=====
+	GovDebtInterestEnabled bool
+	GovDebtInterestRate    float64
+	// InflationDeflation 打开 1.2 的**工资平减**（默认 false ⇒ 1.0 逐位不变）。
+	InflationDeflation bool
+	// ===== 1.2 M7 工资竞标（默认关闭）=====
+	WageBidEnabled bool
+	WageBidCap     float64
+	WageBidDecay   float64
+	WageBidBase    string
+	// WageBidMarginCap 参与抬价的利润率因子上限（默认 0 = 不封顶）。见 `Params.WageBidMarginCap`。
+	WageBidMarginCap float64
 	// CapStartupFraction 覆盖资本（金融区）现金池的初始规模（单位：周工资倍数）。
 	//
 	// 【为什么需要它】§4.5.1a 的私有化可行性直接由**资本池规模**决定
@@ -1282,6 +2302,140 @@ func New(opt Options) (*State, error) {
 	if opt.BasketScale > 0 {
 		p.BasketScale = opt.BasketScale
 	}
+	// 1.2 借贷台账（M8）：总开关与条款覆盖（默认全关 ⇒ 1.0 逐位不变）
+	if opt.BankEnabled {
+		p.BankEnabled = true
+	}
+	if opt.LoanPrincipal > 0 {
+		p.LoanPrincipal = opt.LoanPrincipal
+	}
+	if opt.LoanAnnualRate > 0 {
+		p.LoanAnnualRate = opt.LoanAnnualRate
+	}
+	if opt.LoanTermYears > 0 {
+		p.LoanTermYears = opt.LoanTermYears
+	}
+	if opt.LoanIssueInterval > 0 {
+		p.LoanIssueInterval = opt.LoanIssueInterval
+	}
+	// R71 收口(a)：放贷额度锚到银行余额。默认 false ⇒ 逐位复现 R65 行为。
+	if opt.LoanFromBalance {
+		p.LoanFromBalance = true
+	}
+	if opt.LoanBalanceFraction > 0 {
+		p.LoanBalanceFraction = opt.LoanBalanceFraction
+	}
+	// 1.2 M4.2 所有权重构。默认 false ⇒ 逐位复现 1.0。
+	if opt.OwnershipRestructure {
+		p.OwnershipRestructure = true
+	}
+	if opt.OwnershipCapitalShare > 0 {
+		p.OwnershipCapitalShare = opt.OwnershipCapitalShare
+	}
+	// 1.2 M1 第 3 条：储蓄存量口径（默认关闭 ⇒ 1.0 逐位不变）
+	if opt.SavingsStockTrack {
+		p.SavingsStockTrack = true
+	}
+	// 1.2 §1.2-5 央行/金矿（默认关闭 ⇒ 1.0 逐位不变）
+	if opt.CentralBankEnabled {
+		p.CentralBankEnabled = true
+	}
+	if opt.GoldMineLaborPerLevel > 0 {
+		p.GoldMineLaborPerLevel = opt.GoldMineLaborPerLevel
+	}
+	if opt.GoldPrice > 0 {
+		p.GoldPrice = opt.GoldPrice
+	}
+	if opt.MoneyPerMint > 0 {
+		p.MoneyPerMint = opt.MoneyPerMint
+	}
+	if opt.GoldPerMint > 0 {
+		p.GoldPerMint = opt.GoldPerMint
+	}
+	if opt.MintWageFraction > 0 {
+		p.MintWageFraction = opt.MintWageFraction
+	}
+	// 1.2 M3/M6 玩家投资接口（默认 AI 开启、占比未设定 ⇒ 逐位复现 1.0）
+	if opt.InvestAIOff {
+		p.InvestAIEnabled = false
+	}
+	if opt.InvestManorShare != nil {
+		p.InvestManorShare = *opt.InvestManorShare
+	}
+	// 1.2 M5 ① 政府债务计息（默认关闭 ⇒ 1.0 逐位不变）
+	if opt.GovDebtInterestEnabled {
+		p.GovDebtInterestEnabled = true
+	}
+	if opt.GovDebtInterestRate > 0 {
+		p.GovDebtInterestRate = opt.GovDebtInterestRate
+	}
+	// 1.2 工资平减（默认关闭 ⇒ 1.0 逐位不变）
+	if opt.InflationDeflation {
+		p.InflationDeflation = true
+	}
+	// 1.2 M7 工资竞标开关（**必须**在下面的 Profile12 / 覆盖块之前）
+	//
+	// 【R80 为什么强调顺序】`Profile12` 与 `*Override` 的语义是
+	// "显式 opt > profile > 默认"。若把本行留在它们**之后**，
+	// `WageBidEnabled=true` 会把 `WageBidOverride=&false` 覆盖回 true，
+	// 于是"1.2 但关掉竞标"这个对照**做不到**。实测已确认该顺序问题存在。
+	if opt.WageBidEnabled {
+		p.WageBidEnabled = true
+	}
+	// 【1.2 配置档：一次性打开全部 1.2 行为】
+	//
+	// 【为什么需要它】到本轮为止 1.2 有四个独立开关，默认**全关**（以守住 1.0 基线）。
+	// 但那意味着**"1.2 的完整配置"没有任何单一入口**——目标"完成 1.2 的实现"
+	// 无法用一条命令实例化，只能靠人工记住四个开关。
+	// `Profile12` 就是那个入口：它把"1.2 的全部行为"作为一个**可复现的配置**给出。
+	//
+	// 【优先级：显式 opt > Profile12 > 默认】
+	// 单个开关的"显式覆盖"用 `*bool` 指针表达（与 `AnchorExpenditureShare` 等既有字段同法）：
+	//   - `Profile12=true`、四个指针都 nil ⇒ **四个全开**（1.2 完整配置）
+	//   - 某个指针非 nil ⇒ **该开关以指针为准**（可做单因子对照，例如"1.2 但关掉竞标"）
+	//   - `Profile12=false`（默认）⇒ 与现状**逐位相同**
+	//
+	// 【注意】`Profile12` 不改任何**默认值**，故 1.0 基线仍然逐位不变。
+	if opt.Profile12 {
+		p.BankEnabled = true
+		p.OwnershipRestructure = true
+		p.WageBidEnabled = true
+		p.LoanFromBalance = true
+		// 【R90 补全】配置档必须覆盖**全部**已实现的 1.2 特性，否则它名不副实：
+		// 一个"1.2 档"却要人再手工加 `-central-bank`，那它就不是单一入口。
+		p.CentralBankEnabled = true
+		p.SavingsStockTrack = true
+	}
+	// 显式覆盖放在 profile 之后 ⇒ 它们**优先**
+	if opt.BankEnabledOverride != nil {
+		p.BankEnabled = *opt.BankEnabledOverride
+	}
+	if opt.OwnershipOverride != nil {
+		p.OwnershipRestructure = *opt.OwnershipOverride
+	}
+	if opt.WageBidOverride != nil {
+		p.WageBidEnabled = *opt.WageBidOverride
+	}
+	if opt.LoanFromBalanceOverride != nil {
+		p.LoanFromBalance = *opt.LoanFromBalanceOverride
+	}
+	// ── 以下是**非开关**的 1.2 参数（比例、利率条款、竞标参数）──
+	// 它们不覆盖上面那四个布尔开关，故放在覆盖块之后是安全的。
+	if opt.WageBidCap > 0 {
+		p.WageBidCap = opt.WageBidCap
+	}
+	if opt.WageBidDecay > 0 {
+		p.WageBidDecay = opt.WageBidDecay
+	}
+	// R68：M7.2 第 2 步的计费基数。默认空串 ⇒ `updateWageBids` 走 `default` 分支
+	// = 纯利口径 ⇒ 逐位复现既有行为。
+	if opt.WageBidBase != "" {
+		p.WageBidBase = opt.WageBidBase
+	}
+	// R92：参与抬价的利润率封顶（默认 0 = 不封顶 ⇒ 逐位复现裁决原文）
+	if opt.WageBidMarginCap > 0 {
+		p.WageBidMarginCap = opt.WageBidMarginCap
+	}
 	// §3.4 已裁决采用方案 A + C′（契约默认开启）；显式传值可回退到历史口径做对照。
 	if opt.AnchorExpenditureShare != nil {
 		p.AnchorExpenditureShare = *opt.AnchorExpenditureShare
@@ -1289,7 +2443,19 @@ func New(opt Options) (*State, error) {
 	if opt.AnchorDerivedDemand != nil {
 		p.AnchorDerivedDemand = *opt.AnchorDerivedDemand
 	}
+	// 【1.2 §1.2-5：央行/金矿】开启时改用**追加两类建筑**的规格表。
+	//
+	// 这是"1.0 基线逐位不变"的**唯一分支点**：关闭（默认）时走原来的
+	// `model.BuildingSpecs`，15 项规格逐位不变 ⇒ `UnemployedSite` 仍为 15。
+	// 开启时 17 项 ⇒ `st.UnemployedSite = len(specs) = 17`（见下方 Houses 构造）。
 	specs := model.BuildingSpecs(opt.FinanceLaborPerLevel)
+	if p.CentralBankEnabled {
+		specs = model.BuildingSpecsWithCentralBank(
+			opt.FinanceLaborPerLevel,
+			p.GoldMineLaborPerLevel,
+			p.CentralBankLaborPerLevel,
+		)
+	}
 
 	cal, err := calibrate.Run(specs, 1.0/6.0, p.BuyerWedge())
 	if err != nil {
@@ -1403,7 +2569,21 @@ func New(opt Options) (*State, error) {
 	// 【2026-09-19 第 15 轮裁决】多开一个**虚拟劳动场地**：失业（§6.5）。
 	// 失业人口算劳工（阶级 0），其资金池与就业者严格分开——它只能收到福利金
 	// （§4.5.8），没有工资收入；福利金关闭时预算为 0 ⇒ 无法消费 ⇒ 幸福度 0。
-	// 故 worksites = len(specs) + 1，最后一个场地下标 = model.UnemployedSite。
+	// 故 worksites = len(specs) + 1，最后一个场地下标 = 失业场地。
+	//
+	// 【2026-09-20 第 58 轮：失业场地改为**运行时**确定】
+	// 1.2 的央行/金矿会**追加建筑**（`BuildingSpecs` 末尾），使 `len(specs)` 变大。
+	// 若失业场地下标仍是编译期常量 `s.UnemployedSite`（= 15），
+	// 开启央行时它就会指向某个真实建筑 ⇒ **失业人口被记到别人的池里**。
+	//
+	// 故新增 `State.UnemployedSite`（运行时 = `len(specs)`）；常量
+	// `model.UnemployedSite` 保留为**关闭央行时的取值**与既有测试的参照。
+	//
+	// 【实测依据】本约束不是推测：把两个哑建筑追加到 specs 末尾
+	// （`BuildingTypes`/`UnemployedSite` 各 +2）后跑同一局，
+	// 人口由 **5,688,326 变为 6,381,408** —— 证明**任何**场地数变化都会改变基线。
+	// 故必须让下标随 specs 走，而不是让 specs 去迁就常量。
+	st.UnemployedSite = len(specs)
 	st.Houses = cohort.NewLedger(st.Aud, len(specs)+1)
 
 	// 初始货币存量：必须由【流量】导出，而不是取任意数值。
@@ -1701,7 +2881,26 @@ func (s *State) initialLayout(cal *calibrate.Result) error {
 	if s.Params.ProductionInitLevel > 0 {
 		for i := range s.Buildings {
 			b := &s.Buildings[i]
-			if !b.Spec.Produces() || i == powerGoodIndex {
+			// 【1.2 §1.2-5】金矿**也要**布点：它与消费代理不同，是"有产出、要利润"
+			// 的生产建筑（只是产出不进商品市场）。若不给它起始等级，它会永远停在 0
+			// ⇒ 既不产金也不造币、也不会有扩建意向（实测：600 tick 全程 0 级）。
+			//
+			// 央行**不布点**：它的级数按 §1.2-5 由"黄金有剩余"驱动自动扩建，
+			// 不由建造力产生（与金融区/庄园同理）。
+			//
+			// 建造力（`i == powerGoodIndex`）独立由 `InitialPowerLevel` 决定。
+			if b.Spec.IsCentralBank || i == powerGoodIndex {
+				continue
+			}
+			// 【必须带上 `CentralBankEnabled` 守卫】金矿只在开启央行时才存在于 specs 里，
+			// 所以下面的 `b.Spec.ProducesGold` 分支在关闭时**不可达**；
+			// 但仍显式写出开关条件，使"关闭 ⇒ 不布点"成为**结构性**保证，
+			// 而不是依赖"那个规格根本不存在"这一间接事实。
+			//
+			// 【实测教训】第一次改这里时把条件写成"生产 OR 产金"而没检查开关，
+			// 基线人口立刻由 5,688,326 变成 5,626,879 —— 因为「未开央行」时
+			// 该分支本不该有任何建筑命中，而我让它命中了。
+			if !b.Spec.Produces() && !(b.Spec.ProducesGold && s.Params.CentralBankEnabled) {
 				continue
 			}
 			lv := s.Params.ProductionInitLevel
@@ -1885,6 +3084,15 @@ func (s *State) allocateSubsistenceLabor(levels, hire []float64) {
 		ratio = s.Population / market
 		market = s.Population
 	}
+	// 【1.2 M7.2 第 4 步：按工资降序配给】**只在 wageBidEnabled 时生效**——
+	// 关闭时本块整体跳过，`ratio` 仍是 1.0 第 23 轮的**全局等比**口径（逐位不变）。
+	//
+	// 规则（裁决）：各场地按**实际人均工资** w_i = baseWage_i + p_i **降序**排序，
+	// 依次满足其申报需求，直到人口耗尽；**未获配的申报量按实际到岗/申报比例下调**。
+	// 这与"全局等比"的区别是：**出价高者优先拿满**，出价低者被挤掉（而不是所有人同比例缩水）。
+	if s.Params.WageBidEnabled {
+		ratio = s.allocateByWageOrder(levels, hire)
+	}
 	reserve := s.Population - market
 	if reserve < 0 {
 		reserve = 0
@@ -2002,8 +3210,8 @@ type Snapshot struct {
 	// 动态模式为每 tick 重算值，静态模式为契约的 P_cost）。
 	PriceRatio []float64
 	// Pzero 是当期的零利润价切片（§七 R32），供 A1/A3 判据与报告使用。
-	Pzero  []float64
-	Supply []float64
+	Pzero          []float64
+	Supply         []float64
 	Demand         []float64
 	Margins        []float64
 	Levels         []float64

@@ -74,6 +74,12 @@ func (b *Book) PayWages(legs []WageLeg) float64 {
 	if total <= 0 {
 		return 0
 	}
+	// 【R72 已登记但**未修**】这里遍历 `bySite` map 发出借方 ⇒ 分录顺序随机。
+	// 曾尝试改为"按首次出现顺序"（确定性），但实测**并未消除**非确定性
+	//（仍有 ~2.4e-07 分歧）——因为随机序来源不止这一处：**每一笔**交易的
+	// `Post` 都会把浮点残差并入"最大的一笔分录"，而残差合并本身受余额的
+	// 最后一位影响。要根治须在账本层统一处理，属独立工程。
+	// 故此处回滚为原样，保持基线不受无谓扰动；完整登记见 ACTIVE §七 R72。
 	for site, amount := range bySite {
 		t.Debit(b.sitePayer(site), amount)
 	}
@@ -498,6 +504,119 @@ func (b *Book) PayWelfare(legs []WelfareLeg) float64 {
 		return 0
 	}
 	b.mustPost(ledger.Welfare(total, credits))
+	return total
+}
+
+// SavingsToBank 把储蓄固定账户的余额转入**储蓄银行**（1.2 M4.3，2026-09-20 第 40 轮）。
+//
+//	借 储蓄账户   amount     贷 储蓄银行   amount
+//
+// 【与 SavingsToInvestment 的区别】1.0 的第二步把劳动力结余**直接转入投资池**；
+// 1.2 改为转入**储蓄银行**——因为裁决要求"**资本不再能使用劳动力储蓄购买**"：
+// 钱一旦进了投资池，资本就能用它收购（第 28 轮的实现正是如此）。
+// 转入储蓄银行后，这笔钱只能由储蓄银行**放贷**出去（见 SavingsBankLend）。
+//
+// 返回实际过账金额（受储蓄账户余额约束）。
+func (b *Book) SavingsToBank(amount float64) float64 {
+	if amount <= 0 {
+		return 0
+	}
+	bal := b.BalSavings()
+	if amount > bal {
+		amount = bal
+	}
+	if amount <= 0 {
+		return 0
+	}
+	b.mustPost((&ledger.Txn{Name: "储蓄转入储蓄银行"}).
+		Debit(ledger.Savings(), amount).
+		Credit(ledger.SavingsBank(), amount))
+	return amount
+}
+
+// ===== 1.2 M8：借贷台账的两条资金腿与利息分配（2026-09-20 第 40 轮）=====
+
+// SavingsBankLend 过账"储蓄银行 → 投资池"的放贷腿（1.2 M8.3 的 ①）。
+//
+// 返回实际过账金额（受储蓄银行余额约束，不透支）。
+func (b *Book) SavingsBankLend(amount float64) float64 {
+	bal := b.Aud.Balance(ledger.SavingsBank())
+	if amount > bal {
+		amount = bal
+	}
+	if amount <= 0 {
+		return 0
+	}
+	b.mustPost(ledger.SavingsBankLend(amount))
+	return amount
+}
+
+// DebtService 过账"金融区 → 储蓄银行"的还本息腿（1.2 M8.3 的 ③）。
+//
+// amount 由调用方按 M8.4.1 算好（= min(应付, 金融区净额)）；
+// **付不出的部分不走账**（它滚入 Loan.Outstanding，见 M8.4.1）。
+func (b *Book) DebtService(amount float64) float64 {
+	if amount <= 0 {
+		return 0
+	}
+	b.mustPost(ledger.DebtService(amount))
+	return amount
+}
+
+// SavingsBankToLabor 把储蓄银行本期收到的利息**当期分配**给劳动力（1.2 M8.6 ③）。
+//
+// legs 的金额由调用方按人群池人口分摊算好（与 §5.1 同口径）。
+// 返回实际过账总额。
+func (b *Book) SavingsBankToLabor(legs []WelfareLeg) float64 {
+	return b.payToLabor(ledger.SavingsBank(), legs, ledger.SavingsBankToLabor)
+}
+
+// PayLaborDividend 把**劳动力分红池**的余额派发给在职人口（1.2 M4.2）。//
+// 与 `SavingsBankToLabor` 共用同一个 `payToLabor` 实现 —— 两条腿只在
+// **借方账户**与**交易名**上不同（见 `ledger.LaborDividendToLabor` 的说明）。
+func (b *Book) PayLaborDividend(legs []WelfareLeg) float64 {
+	return b.payToLabor(ledger.LaborDividend(), legs, ledger.LaborDividendToLabor)
+}
+
+// payToLabor 是"统一入口 → 人群池"派发的**共用实现**（1.2 M4.2 / M8.6）。
+//
+//	借 source     Σ金额
+//	贷 人群池[p]   各池金额
+//
+// 【按比例裁剪的纪律】入口余额不足时**同乘一个 scale**，而不是"先到先得"——
+// 与福利金同一纪律（`PayWelfare`），保证同样条件下的池之间不产生人为差异。
+func (b *Book) payToLabor(
+	source ledger.Account,
+	legs []WelfareLeg,
+	mk func(total float64, credits []ledger.Entry) *ledger.Txn,
+) float64 {
+	var credits []ledger.Entry
+	var total float64
+	for _, l := range legs {
+		if l.Amount <= 0 {
+			continue
+		}
+		credits = append(credits, ledger.Entry{Account: l.Pool, Amount: l.Amount})
+		total += l.Amount
+	}
+	if total <= 0 {
+		return 0
+	}
+	bal := b.Aud.Balance(source)
+	if total > bal {
+		if bal <= 0 {
+			return 0
+		}
+		scale := bal / total
+		for i := range credits {
+			credits[i].Amount *= scale
+		}
+		total = bal
+	}
+	if total <= 0 {
+		return 0
+	}
+	b.mustPost(mk(total, credits))
 	return total
 }
 

@@ -1,4 +1,4 @@
-package book
+﻿package book
 
 import (
 	"math"
@@ -120,9 +120,9 @@ func TestAllFlowsConserveMoney(t *testing.T) {
 	// ⑦ 利润归属（含亏损）：三条腿之和恒等于纯利
 	//（站点 0 的现金池已在上面的消费环节被改动，故按实际余额传入 B_i；
 	// 这里只校验"借贷相等 + 三条腿之和 = 纯利"，C* 取一个较大的目标值。）
-	b.ProfitAllocate(0, 8_000, 0.30, 1e12, b.BalBld(0), ledger.Capital())
+	b.ProfitAllocate(0, 8_000, 0.30, 1e12, b.BalBld(0), ledger.Capital(), 0)
 	check("⑦ 利润归属（盈利）")
-	b.ProfitAllocate(9, -5_000, 0.30, 1e12, b.BalBld(9), ledger.Capital())
+	b.ProfitAllocate(9, -5_000, 0.30, 1e12, b.BalBld(9), ledger.Capital(), 0)
 	check("⑦ 利润归属（亏损）")
 
 	// ⑧ 货币注入：这是唯一【允许】改变存量的操作
@@ -269,7 +269,7 @@ func TestProfitAllocatePartitionAndLoss(t *testing.T) {
 	b.Endow(ledger.Building(0), 0)
 
 	// 现金池为空 ⇒ 全额补足（R = min(1000, 10000-0) = 1000），可分配余额为 0。
-	res := b.ProfitAllocate(0, profit, share, cstar, b.BalBld(0), ledger.Capital())
+	res := b.ProfitAllocate(0, profit, share, cstar, b.BalBld(0), ledger.Capital(), 0)
 	if math.Abs(res.Retain-profit) > 1e-9 {
 		t.Errorf("补足额 = %.4f，应为 %.4f（现金池为空 ⇒ 全额留池）", res.Retain, profit)
 	}
@@ -283,7 +283,7 @@ func TestProfitAllocatePartitionAndLoss(t *testing.T) {
 	// 现金池已达标 ⇒ 不补池，余额按 0.30 / 0.70 分配。
 	b2 := New(13, 3, 10, 11)
 	b2.Endow(ledger.Building(1), 10_000)
-	res2 := b2.ProfitAllocate(1, profit, share, cstar, b2.BalBld(1), ledger.Capital())
+	res2 := b2.ProfitAllocate(1, profit, share, cstar, b2.BalBld(1), ledger.Capital(), 0)
 	if math.Abs(res2.Retain) > 1e-9 {
 		t.Errorf("补足额 = %.4f，应为 0（现金池已达 C*）", res2.Retain)
 	}
@@ -296,7 +296,7 @@ func TestProfitAllocatePartitionAndLoss(t *testing.T) {
 
 	// 亏损：三腿之和恒为 0（政府 −300、所有者 −700、建筑池 +1000）。
 	b3 := New(13, 3, 10, 11)
-	res3 := b3.ProfitAllocate(2, -1000, share, cstar, b3.BalBld(2), ledger.Capital())
+	res3 := b3.ProfitAllocate(2, -1000, share, cstar, b3.BalBld(2), ledger.Capital(), 0)
 	if math.Abs(res3.Retain) > 1e-9 {
 		t.Errorf("亏损时不应补池，补足额 = %.4f", res3.Retain)
 	}

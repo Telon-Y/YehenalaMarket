@@ -57,6 +57,7 @@ package ledger
 import (
 	"fmt"
 	"math"
+	"sort"
 )
 
 // Epsilon 是借贷相等的**绝对**容差下限。
@@ -127,6 +128,49 @@ const (
 	// 排序：它放在 KindHousehold **之后**，以保证 Household/Investment 等既有
 	// 账户的常量值不变（审计证据与快照的可比性）。
 	KindSavings
+	// KindSavingsBank 是**储蓄银行**的现金账户（1.2 M4.3 / M8，2026-09-20）。
+	//
+	// 【它的角色】按 1.2 裁决："劳动力多余的资金 → 储蓄银行 → 购买金融区发行的
+	// 商品『债券』→ 向金融区提供贷款"。即：
+	//
+	//   - 它是**劳动力储蓄的代理持有方**（取代 1.0 §5.3 的"储蓄账户 → 投资池"直连）；
+	//   - 它**放贷给金融区**（放贷腿：借储蓄银行 / 贷投资池——钱直接进投资池，
+	//     负债另按 `fiscal.Capital.Debt` 登记在金融区头上，见 1.2 M8.3）；
+	//   - 它收取利息并**当期分配**给劳动力（1.2 M8.6 ③）。
+	//
+	// 【为什么它是现金账户、而负债不是】它是**钱的持有方**，钱在它手里 ⇒ 必须进账本；
+	// 而负债是"欠了多少"（权利/义务）⇒ 按 M8.7 裁决做成 `Capital.Debt` **字段**。
+	//
+	// 排序：放在最后，保证既有账户常量值不变（与 KindSavings 同一条纪律）。
+	KindSavingsBank
+	// KindLaborDividend 是**劳动力分红池**（1.2 M4.2，2026-09-20）。
+	//
+	// 【它是什么】按 M4.2 裁决："劳动力**不分阶级**，视作**一同管理**，
+	// 按**劳动力数量比例平分**分红。" 且第 3 次裁决澄清：
+	// "按人头平分**就是**按场地人数比例平分——两者**等价**"，
+	// 故**不必**改造 §5.1 的 39 个人群池，只需一个**统一入口**。
+	//
+	// 本账户**就是**那个统一入口：所有权重构后，原先归金融区/宅邸庄园的
+	// 私人份额纯利里属于劳动力的那部分（70%）贷记到这里，而不是分散进 39 个池。
+	// 于是"劳动力作为一个主体持股"在账本上是**可读的一个数**。
+	//
+	// 【默认不生效】`Params.OwnershipRestructure=false` 时本账户余额恒为 0
+	//（利润归属仍全额走 `ledger.Capital()` / 庄园池）⇒ 1.0 逐位不变。
+	//
+	// 排序：放在最后，保证既有账户常量值不变（与 KindSavings/SavingsBank 同一条纪律）。
+	KindLaborDividend
+	// KindCentralBank 是**中央银行的现金池**（1.2 §1.2-5，2026-09-20 第 58 轮裁决）。
+	//
+	// 【它为什么是独立账户而不是建筑池】央行是**货币创造机构**：它的钱不是"收到的"
+	// 而是"造出来的"（走 `PostInjection`）。若把它混进 `KindBuilding`，
+	// `TotalBuildings()` 这类"建筑营运资金"口径会把它一并算进去，
+	// 而那些钱没有对应的产出成本。
+	//
+	// 与储蓄银行（`KindSavingsBank`）的区别：储蓄银行**只是资金的搬运方**
+	//（存款来自居民、放贷给金融区），央行**凭空创造货币**。
+	//
+	// 排序：放在最后，保证既有账户常量值不变。
+	KindCentralBank
 )
 
 // Account 定位一个账户。
@@ -140,6 +184,9 @@ func Gov() Account           { return Account{Kind: KindGovernment} }
 func Capital() Account       { return Account{Kind: KindCapital} }
 func Investment() Account    { return Account{Kind: KindInvestment} }
 func Savings() Account       { return Account{Kind: KindSavings} }
+func SavingsBank() Account   { return Account{Kind: KindSavingsBank} }
+func LaborDividend() Account { return Account{Kind: KindLaborDividend} }
+func CentralBank() Account   { return Account{Kind: KindCentralBank} }
 func Building(i int) Account { return Account{Kind: KindBuilding, Index: i} }
 func Household(worksite, class int, classes int) Account {
 	return Account{Kind: KindHousehold, Index: worksite*classes + class}
@@ -160,6 +207,12 @@ func (a Account) String() string {
 		return fmt.Sprintf("人群[%d]", a.Index)
 	case KindSavings:
 		return "居民储蓄"
+	case KindSavingsBank:
+		return "储蓄银行"
+	case KindLaborDividend:
+		return "劳动力分红池"
+	case KindCentralBank:
+		return "中央银行"
 	}
 	return "未知"
 }
@@ -323,20 +376,55 @@ func (a *Auditor) ResetTick() { a.posted = 0 }
 //
 // 由于每笔交易净效应为零，Total 只有在 NewCapital（新建营运本金）
 // 发生时才改变。这就是 §4.5.3「总流通货币不变」的直接含义。
+// sortedAccounts 返回全部账户的**确定性排序**列表（先按 Kind 再按 Index）。
+//
+// 【为什么需要它：R72 实测的确定性缺陷】
+// `balances` 是 map，而 Go **故意随机化** map 的迭代顺序。
+// 于是 `Total()` / `TotalOf()` 里的 `s += v` 每次运行都以**不同的加法顺序**累加，
+// 而浮点加法**不满足结合律** ⇒ 同一个模拟跑两遍，货币总量会差 ~1e-6。
+//
+// 实测（`determinism_probe_test.go`，同一局跑两遍）：
+//
+//	投资池     A= 5324718.457194  B= 5324718.457194  相等=true
+//	未偿负债    A=11102370.273370  B=11102370.273370  相等=true
+//	货币总量    A= 4659152.056846  B= 4659152.056845  **相等=false**
+//
+// 【影响范围】`Total()` / `TotalOf()` **不参与任何演化决策**（`step.go` 里零调用），
+// 只用于 A8 货币守恒等**诊断与审计**。故本缺陷污染的是"报告值"与"审计断言"，
+// 不是模型走向——但它会让审计断言**间歇性**失败（本项目测试正是用这些断言）。
+func (a *Auditor) sortedAccounts() []Account {
+	accs := make([]Account, 0, len(a.balances))
+	for acc := range a.balances {
+		accs = append(accs, acc)
+	}
+	sort.Slice(accs, func(i, j int) bool {
+		if accs[i].Kind != accs[j].Kind {
+			return accs[i].Kind < accs[j].Kind
+		}
+		return accs[i].Index < accs[j].Index
+	})
+	return accs
+}
+
+// Total 返回全部账户余额之和（= 货币总量）。
+//
+// 【确定性】按 `sortedAccounts()` 的固定顺序累加 —— 见该函数的说明。
 func (a *Auditor) Total() float64 {
 	var s float64
-	for _, v := range a.balances {
-		s += v
+	for _, acc := range a.sortedAccounts() {
+		s += a.balances[acc]
 	}
 	return s
 }
 
 // TotalOf 返回某一类账户的余额合计。
+//
+// 【确定性】同样按固定顺序累加。
 func (a *Auditor) TotalOf(kind AccountKind) float64 {
 	var s float64
-	for acc, v := range a.balances {
+	for _, acc := range a.sortedAccounts() {
 		if acc.Kind == kind {
-			s += v
+			s += a.balances[acc]
 		}
 	}
 	return s

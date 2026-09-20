@@ -1,0 +1,46 @@
+# 叶赫那拉市场 —— 版本控制与发布边界
+#
+# 背景：本工作区**曾长期没有 git**（`.git` 与 `.gitignore` 均不存在）。
+# 本文件按"什么属于发布物、什么只是内部工作产物"划定边界。
+#
+# 三条边界：
+#   1) 源码 / 文档 / 工具 / 字体  → **入库**（发布物）
+#   2) 构建缓存 / 内部分析产物    → **忽略**（可重建或仅内部对照）
+#   3) 入库的证据（判决、验收、复核）→ **保留**，因为文档会引用它们
+
+# ---- 1) 发布物（显式列出，便于核对）----
+!README.md
+!gosim/
+!docs/
+!tools/
+!MingChinese.ttf
+
+# ---- 2) 构建缓存与临时目录（可重建，勿入库）----
+out/_cache/
+out/_tmp/
+out/gocache/
+out/gotmp/
+out/gopath/
+out/bin/
+*.exe
+*.test
+
+# ---- 3) 内部分析产物（体量大、仅内部对照；证据版本见 out/verdict、out/verify、out/review）----
+out/runs/
+out/probes/
+out/backup/
+out/anchor_compare/
+out/anchor_r19/
+out/viz/
+
+# ---- 4) 发布的暂存区副本（易与工作区产生分叉，勿入库）----
+upload/
+
+# ---- 5) 通用 ----
+*.log
+*.tmp
+Thumbs.db
+.DS_Store
+node_modules/
+render_test.html
+*_test.html

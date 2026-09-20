@@ -1,4 +1,4 @@
-package sim
+﻿package sim
 
 import (
 	"math"
@@ -550,7 +550,7 @@ func TestUnemployedPoolCannotConsumeWithoutIncome(t *testing.T) {
 	if !found {
 		t.Fatalf("1200 tick 内从未出现失业——失业池的断言被空真通过")
 	}
-	idx := cohortIndex(st, model.UnemployedSite, 0)
+	idx := cohortIndex(st, st.UnemployedSite, 0)
 	if idx < 0 {
 		t.Fatal("找不到失业资金池")
 	}

@@ -1,0 +1,44 @@
+
+==============================================================================
+# DSH_AUDIT=1 go test ./internal/sim/ -run TestAuditGovDecomp -v -count=1
+==============================================================================
+=== RUN   TestAuditGovDecomp
+
+── tick 1 ──
+  Δ政府            =    -1228500.00
+  GovTax           =      127908.09
+  GovSelfTax       =       23473.08
+  GovOperating     =    -1098204.25
+  GovPowerRevenue  =           0.00
+  −GovPowerSpend   =     -213391.61
+  −GovBuildoutPaid =      -21339.16
+  已解释            =    -1228500.00
+  残差              =           0.00
+  税分项：消费79363.68 中间25071.34 采购21339.16 自建2133.92 （合计127908.09，自收23473.08）
+
+── tick 2 ──
+  Δ政府            =    -2901744.86
+  GovTax           =      307637.95
+  GovSelfTax       =      191642.68
+  GovOperating     =    -1101313.32
+  GovPowerRevenue  =           0.00
+  −GovPowerSpend   =    -1319046.90
+  −GovBuildoutPaid =     -597379.90
+  已解释            =    -2901744.86
+  残差              =           0.00
+  税分项：消费78974.35 中间37020.92 采购131904.69 自建59737.99 （合计307637.95，自收191642.68）
+
+── tick 3 ──
+  Δ政府            =     -983997.14
+  GovTax           =      129928.40
+  GovSelfTax       =           0.00
+  GovOperating     =    -1113925.53
+  GovPowerRevenue  =           0.00
+  −GovPowerSpend   =          -0.00
+  −GovBuildoutPaid =          -0.00
+  已解释            =     -983997.14
+  残差              =           0.00
+  税分项：消费78459.15 中间51469.24 采购0.00 自建0.00 （合计129928.40，自收0.00）
+--- PASS: TestAuditGovDecomp (0.00s)
+PASS
+ok  	yehenala/market/internal/sim	0.638s

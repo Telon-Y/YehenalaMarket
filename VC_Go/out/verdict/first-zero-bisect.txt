@@ -1,0 +1,18 @@
+# first zero tick, found by bisection (predicate: total levels at tick N == 0)
+# method: last row of the time-series table of 'market-sim -ticks N' is tick N;
+#         levels are monotone non-increasing after the collapse starts.
+
+default layout (uniform 5 levels), t=0.10
+  first zero tick = 894   (levels at tick 893 = 1)   [sim runs = 14]
+
+default layout (uniform 5 levels), t=0.00
+  first zero tick = 894   (levels at tick 893 = 1)   [sim runs = 14]
+
+default layout (uniform 5 levels), t=2.00
+  first zero tick = 895   (levels at tick 894 = 1)   [sim runs = 14]
+
+material-balance layout (-init-level 0), t=0.10
+  first zero tick = 1334   (levels at tick 1333 = 1)   [sim runs = 14]
+
+material-balance + privatize, t=0.10
+  first zero tick = 1319   (levels at tick 1318 = 1)   [sim runs = 14]

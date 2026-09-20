@@ -30,22 +30,39 @@
 <body>
 <main>
   <h1>叶赫那拉市场 · 1.0 文档索引</h1>
-  <p class="sub">项目只有<strong>两个核心文档</strong>；其余历史文档的现行内容已并入它们，原文归档在 <code>docs/archive/</code>。</p>
+  <p class="sub">项目只有<strong>两个核心文档</strong>；其余历史文档的现行内容已并入它们，原文归档在 <code>docs/archive/</code>。
+  另有 <strong>1.1 / 1.2 两份开发日志</strong>（未完成、<strong>非契约</strong>，均不推翻 1.0）。</p>
 
   <h2>两个核心文档</h2>
   <ul>
     <li><a href="ACTIVE.html">ACTIVE —— 状态、裁决登记与全部订正记录（先读这份）</a>
       <span class="desc">
-        §0 口径速查与 <strong>12 项修改意向登记处（第 1–11 项已裁决）</strong> · §一 一句话状态 · §二 已验证结论 ·
+        §0 口径速查与 <strong>修改意向登记处（第 1–25 项）</strong> · §一 一句话状态 · §二 已验证结论 ·
         §三 30 分钟恢复上下文 · §四 未决事项（8 项，含两处产能自锁）· §五 纪律 ·
         <strong>§六 实现架构(6.2) / 记账内核(6.3) / 价格锚定备选(6.4) / 游戏可行性审计(6.5)</strong> ·
-        <strong>§七 R1–R43 逐轮订正记录</strong>。
+        <strong>§七 R1–R98 逐轮订正记录</strong>。
       </span></li>
     <li><a href="1.0 生产与市场模拟.html">1.0 生产与市场模拟 —— 契约正文（唯一权威）</a>
       <span class="desc">
         §零 当前口径速查与裁决登记 · §一 版本目标 · §二 市场微分方程 · §三 商品与建筑体系（四类建筑 + 仓库）·
         §四 扩建 / 政府 / 资本 · §五 劳动力与工资（含储蓄渠道）· §六 消费与需求 ·
         <strong>§七 GDP（7.1 名义 / 7.2 实际工农生产总值）</strong> · §八 模拟主循环与验收判据 <strong>A1–A9</strong>。
+      </span></li>
+  </ul>
+
+  <h2>开发日志 / 骨架（未完成，非契约）</h2>
+  <ul>
+    <li><a href="1.1 图形化界面.html">1.1 图形化界面 —— 骨架 v0.1（讨论稿）</a>
+      <span class="desc">
+        <strong>玩家 ＝ 政府</strong> · HTML 界面 · 三级菜单（市场 / 建筑 / 队列）+ 杂类总表 ·
+        <strong>§0.2 修改意向登记处：已裁决 10 项 / 待裁决 6 项</strong> ·
+        每格数据的取数锚点（<code>file:line</code>）· 拆除核销对 <strong>A8′</strong> 的改写。
+        <br>⚠ 在 §0.2 的 6 项待裁决清空之前，本文件<strong>不具备契约效力</strong>。
+      </span></li>
+    <li><a href="1.2 货币与金融.html">1.2 货币与金融 —— 开发日志（未完成）</a>
+      <span class="desc">
+        第一部分 = 自 1.0 迁入的 M1/M2/M3（个人投资 / 债务计息口径 / 玩家投资接口）；
+        第二部分 = 用户 docx 的忠实转换。需多轮迭代"1.0 化"。
       </span></li>
   </ul>
 
@@ -66,10 +83,10 @@
   <div class="note">
     <strong>重新渲染</strong>（改了 <code>.md</code> 之后）：<br>
     <code>powershell -ExecutionPolicy Bypass -File D:\Code\YehenalaMarket\tools\render_all.ps1</code><br>
-    脚本重渲染两个核心 + README，并校验产物本身（HTML 已更新、无渲染失败的公式），
-    再对契约跑 <code>html_audit</code>（必须"全部检查通过"）。<br>
+    脚本重渲染两个核心 + <strong>1.1 / 1.2 开发日志</strong> + README，并校验产物本身
+    （HTML 已更新、无渲染失败的公式），再对契约跑 <code>html_audit</code>（必须"全部检查通过"）。<br>
     ⚠ <strong>本页（<code>index.html</code>）是手写静态页，不由该脚本生成</strong>——
-    文档结构、轮次范围（现为 R1–R43）或待裁决项数变化时，需一并手工订正。
+    文档结构、轮次范围（现为 R1–R98）或待裁决项数变化时，需一并手工订正。
   </div>
 </main>
 </body>

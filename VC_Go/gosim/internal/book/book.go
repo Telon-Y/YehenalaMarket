@@ -137,6 +137,11 @@ type ProfitResult struct {
 	Gov float64
 	// Owner 是所属资本建筑的私人份额（盈利时 ≥ 0；亏损时 < 0）。
 	Owner float64
+	// Labor 是私人份额中**归劳动力**的那一腿（1.2 M4.2；未开重构时恒为 0）。
+	//
+	// 口径：`Labor = Owner × laborShare`，而资本实得 `Owner − Labor`
+	// ⇒ 两腿之和逐位等于 `Owner`（见 `ProfitAllocateSplit`）。
+	Labor float64
 	// Profit 是参与划分的纯利 π_i 本身（留池 + 政府 + 所有者 ≡ π_i）。
 	Profit float64
 }
@@ -168,12 +173,29 @@ type ProfitResult struct {
 //	balance 是建筑当前现金池余额 B_i
 //
 // owner 是所属资本建筑的账户（农业建筑 → 宅邸庄园；其余 → 金融区）。
-func (b *Book) ProfitAllocate(i int, profit, govShare, cstar, balance float64, owner ledger.Account) ProfitResult {
+//
+// 【1.2 M4.2 所有权重构】`laborShare` 是**私人份额中归劳动力**的比例（默认 0）：
+//
+//	= 0     ⇒ 走原单腿路径（`ledger.ProfitAllocate`），1.0 逐位不变
+//	= 0.70  ⇒ 走两腿路径（`ledger.ProfitAllocateSplit`），资本留 30%、劳动力得 70%
+//
+// 它由调用方按 `Params.OwnershipRestructure` / `OwnershipCapitalShare` 算好传入，
+// **本函数不做策略判断**——book 层只负责"按给定比例把腿拆对"。
+func (b *Book) ProfitAllocate(
+	i int, profit, govShare, cstar, balance float64,
+	owner ledger.Account, laborShare float64,
+) ProfitResult {
 	if govShare < 0 {
 		govShare = 0
 	}
 	if govShare > 1 {
 		govShare = 1
+	}
+	if laborShare < 0 {
+		laborShare = 0
+	}
+	if laborShare > 1 {
+		laborShare = 1
 	}
 	res := ProfitResult{Profit: profit}
 	if profit >= 0 {
@@ -194,7 +216,13 @@ func (b *Book) ProfitAllocate(i int, profit, govShare, cstar, balance float64, o
 		res.Gov = profit * govShare
 		res.Owner = profit - res.Gov
 	}
-	b.mustPost(ledger.ProfitAllocate(i, res.Retain, res.Gov, owner, res.Owner))
+	// 【同样的纪律用在资本/劳动力拆分上】只算 laborAmt = Owner × laborShare，
+	// 资本那腿取 `Owner − laborAmt`（由 `ProfitAllocateSplit` 内部做减法）
+	// ⇒ 两腿之和**逐位**等于 Owner，不引入浮点乘法误差。
+	laborAmt := res.Owner * laborShare
+	res.Labor = laborAmt
+	b.mustPost(ledger.ProfitAllocateSplit(
+		i, res.Retain, res.Gov, owner, res.Owner, laborAmt))
 	return res
 }
 
@@ -212,6 +240,56 @@ func (b *Book) NewCapital(i int, amount float64) {
 	t.Credit(ledger.Building(i), amount)
 	b.Aud.PostInjection(t)
 	b.injected += amount
+}
+
+// MintMoney 是**中央银行的造币腿**（1.2 §1.2-5）。
+//
+//	贷 中央银行现金池   amount          （没有借方 —— 这是**货币创造**）
+//
+// 【为什么走 PostInjection】1.2 的央行按裁决"购买金矿生产货币"——
+// 这是**货币创造**，与 §4.3 的"新建营运本金"同族，是本系统允许的**第二处**注入。
+// 必须走 `PostInjection` 并累计到 `injected`；否则 A8 的恒等式
+//
+//	ΔM == NewCapital + InfusionTotal
+//
+// 会报一个恰等于造币额的**假残差**。
+func (b *Book) MintMoney(amount float64) {
+	if amount <= 0 {
+		return
+	}
+	t := &ledger.Txn{Name: "中央银行造币（货币注入）"}
+	t.Credit(ledger.CentralBank(), amount)
+	b.Aud.PostInjection(t)
+	b.injected += amount
+}
+
+// PayForGold 是**央行购金付款**（1.2 §1.2-5）。
+//
+//	借 中央银行现金池   amount
+//	贷 金矿营运现金池   amount
+//
+// 它是普通转移（不是创造），故走 `mustPost`。
+// `mineIdx` 由调用方查得——**不写死下标**，因为金矿的位置取决于追加顺序。
+func (b *Book) PayForGold(mineIdx int, amount float64) {
+	if amount <= 0 || mineIdx < 0 {
+		return
+	}
+	t := &ledger.Txn{Name: "央行购金付款"}
+	t.Debit(ledger.CentralBank(), amount)
+	t.Credit(ledger.Building(mineIdx), amount)
+	b.mustPost(t)
+}
+
+// PayGovDebtInterest 过账"政府债务利息 → 中央银行"（1.2 M5 ①）。
+//
+// 与 `MintMoney` 相反：它**不创造货币**（贷方是央行、借方是政府），
+// 只是把政府的债务成本转成央行的现金 ⇒ 走 `mustPost`（借贷相等）。
+func (b *Book) PayGovDebtInterest(amount float64) float64 {
+	if amount <= 0 {
+		return 0
+	}
+	b.mustPost(ledger.GovDebtInterest(amount))
+	return amount
 }
 
 // mustPost 过账；借贷不等时 panic。

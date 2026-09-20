@@ -26,6 +26,45 @@ const FinanceIndex = Goods
 // ManorIndex 是宅邸庄园在建筑类别数组中的下标（§4.5.5）。
 const ManorIndex = Goods + 1
 
+// GoldGood 是"**黄金**"这一特殊商品的下标（1.2 §1.2-5，2026-09-20 第 58 轮裁决）。
+//
+// 【为什么它的下标等于 Goods 而不是 Goods+1】裁决（第 58 轮）：
+// "**黄金作外生价格的商品，不进 A 矩阵**"。而 `Goods = 11` 是**投入产出矩阵的维数**
+// （`Pcost`/`Pinit`/`Eps`/`A[i][j]` 都按它构造）。故：
+//
+//   - 黄金**不做成 `GoodSpecs()` 的第 12 项** ⇒ `len(GoodSpecs())` 仍为 11
+//     ⇒ A 矩阵仍 11×11、价格表仍 11 维 ⇒ **标定与既有商品逐位不变**；
+//   - 黄金的价格由**参数**给定（`Params.GoldPrice`），不参与 §3.4 的标定与钳制。
+//
+// 这样既得到"黄金"这个生产目标与计价，又避开了"零最终需求行使 A 奇异"的风险。
+const GoldGood = Goods
+
+// GoldMineCap 是金矿的等级上限（1.2 §1.2-5："1.2 版本最多建造 50 级金矿"）。
+const GoldMineCap = 50
+
+// 商品下标（§3.1 的表格顺序）。
+//
+// 【为什么提到包级】`BuildingSpecs` 内部有一组同名的局部常量；而
+// `BuildingSpecsWithCentralBank`（1.2 的金矿/央行）在**函数外**构造配方，
+// 取不到那些局部量。把下标提为包级常量后两处共用同一份定义，
+// **不会再有"配方里的煤是 5 还是别的"这种靠猜的可能**。
+//
+// 这些常量与 `GoodSpecs()` 的 `names` 顺序必须一致——
+// `TestGoodIndicesMatchSpecs` 会逐项断言，防止有人改动商品表而漏改这里。
+const (
+	GoodGrain   = 0
+	GoodFood    = 1
+	GoodFabric  = 2
+	GoodClothes = 3
+	GoodLuxury  = 4
+	GoodCoal    = 5
+	GoodIron    = 6
+	GoodSteel   = 7
+	GoodTools   = 8
+	GoodHousing = 9
+	GoodPower   = 10
+)
+
 // BuildingTypes 是建筑类别总数（11 种普通建筑 + 金融区 + 宅邸庄园 + 仓库 + 消费代理）。
 //
 // 【§4.5.6 仓库落地后（2026-09-19 第 16 轮）】由 13 增至 **15**：
@@ -197,6 +236,30 @@ type Building struct {
 	// Structure 决定"这几人是谁、拿多少"。两者相乘的 WagePerLevel()
 	// 才是 §3.4 零利润价方程里 l_j 的分子。
 	Structure *LaborStructure
+
+	// ProducesGold 标记这是**金矿**（1.2 §1.2-5，2026-09-20 第 58 轮裁决）。
+	//
+	// 【它与普通生产建筑的关键区别】**它的产出不进商品市场**。
+	// 按裁决"黄金作**外生价格**的商品，不进 A 矩阵"：
+	//   - 黄金**不是** `GoodSpecs()` 的第 12 项（`Goods` 仍为 11，A 矩阵仍 11×11）；
+	//   - 它的价格由 `Params.GoldPrice` **外生给定**，不参与 §3.4 标定与钳制；
+	//   - 它的产出记入 `State.GoldProduced`（累计盎司），由**中央银行**收购买币。
+	//
+	// 故 `Produces()` 对它**返回 false**（见该方法的实现）——
+	// 否则 §3.3 的"按配方遍历"会试图把黄金当第 11 号商品去配给与定价。
+	ProducesGold bool
+	// IsCentralBank 标记这是**中央银行**（1.2 §1.2-5）。
+	//
+	// 【它的职能】按裁决"中央银行**购买金矿生产货币**"：
+	//   - 每 20 黄金造 **400,000** 货币（§1.2-5 原文）；
+	//   - 其中**一半**按 **10,000 元/单位黄金**付给金矿（即 20 × 10,000 = 200,000）；
+	//   - 剩余部分进入中央银行现金池。
+	//
+	// 它是**唯一的货币创造机构**（除 §4.3 的新建营运本金外），
+	// 故其造币必须走 `PostInjection` 并计入 `InfusionTotal`——否则货币守恒审计会报假残差。
+	//
+	// 与金矿同理，它**不参与商品市场**（`Produces()` 为 false）。
+	IsCentralBank bool
 }
 
 // StructureOf 返回建筑的劳动结构（零值 ⇒ 城镇通用结构）。
@@ -428,7 +491,15 @@ func (b Building) IsTradeNode() bool { return b.IsWarehouse || b.IsAgent }
 // 这个条件不再等价于"是商品生产者"：仓库/代理没有配方，若被当作生产者，
 // 它们的零值 Recipe.Output(=0，即谷物) 与零值 Qty 会污染谷物市场与对账。
 // 因此上述循环一律改用 `!b.Produces()` 判据。
-func (b Building) Produces() bool { return !b.IsNonMarket() && !b.IsTradeNode() }
+//
+// 【2026-09-20 第 58 轮补充：金矿与央行也不是"商品生产者"】
+// 裁决"黄金作**外生价格**的商品，不进 A 矩阵" ⇒ 黄金**不是** `Goods` 里的一项。
+// 若金矿被当作生产者，它的 `Recipe.Output`（= `GoldGood` = 11）会越出
+// 11 维的价格/配给数组 ⇒ 越界或污染。央行同理（它没有配方，只造币）。
+// 故两者都从 `Produces()` 里排除，由各自的专用步序处理。
+func (b Building) Produces() bool {
+	return !b.IsNonMarket() && !b.IsTradeNode() && !b.ProducesGold && !b.IsCentralBank
+}
 
 // Params 是全局参数。全部字段对应契约条文，便于逐条核对。
 type Params struct {
@@ -473,7 +544,6 @@ type Params struct {
 	BasketScale float64
 
 	// PowerByQueue 让建造部门的产能由"队列深度 ÷ 目标周期"驱动（§4.1，第 23 轮新增）。
-	//
 	// 默认 **true**：建造部门**豁免** §4.1 的"利润率 > 10% 就扩建"，改走
 	// `build.PowerCapacityUnits`——只在"按当前产能无法在 QueueWarnTicks 个周期内
 	// 消化在手订单"时才扩产。置 false 可回退到"建造部门也按利润率扩建"的旧口径
@@ -488,7 +558,6 @@ type Params struct {
 	PowerAnchorByQueue bool
 
 	// AcquireFromInvestment 允许**收购用投资池余额出资**（§4.5.1a，第 28 轮新增）。
-	//
 	// 默认 **true**（用户裁决："允许收购用投资池余额出资"）。
 	// 置 false 时收购只能用资本池现金（第 27 轮口径）。
 	//
@@ -497,6 +566,292 @@ type Params struct {
 	// 于是 `privatizePaid / privatizeUnits` 必须恰好等于"建造成本 × 建造力价"）。
 	// 若投资池也参与出资，同一 tick 的成交额会是两个付款方的混合，公式反解失效。
 	AcquireFromInvestment bool
+
+	// ===== 1.2 借贷台账（M8）：默认**全部关闭**，保证 1.0 基线逐位不变 =====
+	//
+	// 【为什么默认关闭】1.2 的设计尚未"1.0 化"（无实测证据/验收判据）。
+	// 按项目纪律（"1.0 优先、不被 1.2 草案推翻"），新机制一律先以**对照开关**接入：
+	// `BankEnabled = false` 时下面的字段**全部不参与计算**，
+	// 1.0 的全部不变量、判据与证据**逐位不变**。
+
+	// BankEnabled 是 1.2 借贷台账（储蓄银行 → 投资池 → 金融区负债）的**总开关**。
+	//
+	// 默认 **false**。置 true 后：
+	//   ① 劳动力结余的去向由 §5.3 的"储蓄账户 → 投资池"改为"**储蓄账户 → 储蓄银行**"；
+	//   ② 储蓄银行按 `LoanPrincipal` 放贷：**借 储蓄银行 / 贷 投资池**，
+	//      同时把负债登记到金融区头上（`fiscal.Capital.Debt`，**非现金科目**）；
+	//   ③ 每 tick 在"金融区净额入池"**之前先扣**本期还款额（M8.4），
+	//      不足则**延期**（M8.4.1）。
+	BankEnabled bool
+	// LoanPrincipal 是单笔贷款本金（元）。默认 **500,000**（1.2 M8.1）。
+	LoanPrincipal float64
+	// LoanAnnualRate 是年化利率。默认 **0.05**（1.2 M8.1；M5 统一利率，无息例外已取消）。
+	LoanAnnualRate float64
+	// LoanTermYears 是期限（年）。默认 **5**（1.2 M8.1）。
+	LoanTermYears float64
+	// LoanIssueInterval 是"每多少 tick 放一笔新贷款"。默认 **52**（每年一笔）。
+	//
+	// 【为什么需要它】M8 定了单笔的条款，但没定**放贷节奏**；没有节奏就没有新贷款、
+	// 台账会单调递减。取"每年一笔"是最小假设，可用 CLI 覆盖。
+	LoanIssueInterval int
+	// LoanFromBalance 决定"每期可贷额"是否**锚到储蓄银行余额**（R71 收口(a)）。默认 **false**。
+	//
+	// 【false = R65/R61 原行为】每期固定放 `LoanPrincipal`（50 万）。
+	// 【true  = R70 收口的对照口径】每期放 `min(余额 × LoanBalanceFraction, LoanPrincipal)`。
+	//
+	// 【为什么需要（R70 实测）】固定额度下，存入速率（每 tick ~180 万）是放出速率
+	// （每 52 tick 50 万）的 **190 倍** ⇒ 银行余额无限堆积（800 tick 达 18.75 亿、
+	// 只贷出 750 万），而 1.0 里同一笔钱会进投资池付建造力
+	// ⇒ **投资池从 22.66 亿被抽到 0.096 亿（−99.58%）**。
+	//
+	// 【与 R61 裁决的关系】R61 定的"每笔 50 万"在本口径下降格为**单笔上限**，
+	// 额度改由余额决定——**不推翻** R61 的任何原则，只补上它没规定的"额度随规模变化"。
+	LoanFromBalance bool
+	// LoanBalanceFraction 是"每期可贷额 ≤ 银行余额 × 本值"的比例。默认 **0.5**。
+	//
+	// 取 0.5 是保守选择：既让贷出能力随存款增长（消除 190 倍失衡），
+	// 又保留至少一半余额作为"下期可贷"的缓冲，避免单期把银行抽空。
+	LoanBalanceFraction float64
+
+	// ===== 1.2 M4.2 所有权重构：默认**关闭**，保证 1.0 基线逐位不变 =====
+
+	// OwnershipRestructure 是 **1.2 M4.2 所有权重构**的开关（2026-09-20）。默认 **false**。
+	//
+	// 【裁决原文（R57 第 3 条）】"**资本直接承接政府 30%、劳动力直接承接资本 70%**，
+	// 这是**初始化改动**"；且两条划转是**各自一跳的直接划转**：
+	//
+	//	① 政府 → 资本   30%（政府现行的 s_gov = 0.30 持股）
+	//	② 资本 → 劳动力 70%（资本现行持有的 70% 私有级）
+	//
+	// 【由此得到的私人份额拆分（本实现的落点）】
+	//   原本私人部分占 1 − s_gov = 0.70；
+	//   ① 之后所有者占 1.00，其中资本从 0.70 涨到 1.00（+0.30）；
+	//   ② 再把资本的 70% 给劳动力 ⇒ 资本留 0.30、劳动力得 0.70。
+	//   ⇒ **私人份额里 资本 : 劳动力 = 0.30 : 0.70**，与 s_gov 无关。
+	//   这正是 R57 的"过渡后 **资本 30% + 劳动力 70%**（合计 100%，不重不漏）"。
+	//
+	// 【农业口径（M4.2 第 2 次裁决）】"**农业中自给农场不变**，**商品农场所有权改变**"。
+	// 【劳动力口径】"劳动力**不分阶级**，视作**一同管理**，按劳动力数量比例平分分红"
+	// （第 3 次裁决澄清：按人头平分 = 按场地人数比例平分，故只需一个统一入口）。
+	//
+	// 【默认不生效】false 时利润归属仍全额走 `ledger.Capital()` / 庄园池 ⇒ 1.0 逐位不变。
+	OwnershipRestructure bool
+	// OwnershipCapitalShare 是**所有权重构后资本在私人份额中的占比**。默认 **0.30**。
+	//
+	// 由裁决推出的 0.30 : 0.70；做成参数是为了让"过渡比例"可被 CLI 覆盖以做对照实验，
+	// 而不是把它硬编码进利润归属的算式。
+	OwnershipCapitalShare float64
+	// SavingsStockTrack 打开 1.2 M1 第 3 条的**存量口径**（储蓄余额 vs 已分配投资）。默认 **false**。
+	//
+	// 【它解决什么】1.0 的 §5.3 只有两个**流量**口径（`savingTick` / `savingInvestTick`），
+	// 而 M1 第 3 条要求把"**储蓄账户余额**"与"**已分配投资**"拆成两个口径——
+	// 即需要**存量**视图。机械储蓄账户（`ledger.Savings()`）按设计每期归零，
+	// **不表达**"居民累计攒了多少"。
+	//
+	// 【它是什么】两个**诊断账**（`State.savingsStock` / `State.savingsAlloc`）：
+	//
+	//	储蓄余额（未分配）= savingsStock − savingsAlloc
+	//	已分配投资        = savingsAlloc
+	//
+	// **不进 ledger**：这些钱已经在投资池/储蓄银行里、已被计入货币总量，
+	// 做成账户会**重复计量**。与 `fiscal.Capital.Debt`、`GovLevel` 同族。
+	//
+	// 【默认不生效】false 时两个字段恒为 0，不写入任何量 ⇒ 1.0 逐位不变。
+	SavingsStockTrack bool
+
+	// ===== 1.2 §1.2-5 中央银行与金矿（2026-09-20 第 58 轮裁决）：默认**关闭** =====
+
+	// CentralBankEnabled 是**中央银行 + 金矿**的总开关。默认 **false**。
+	//
+	// 【裁决原文（第 58 轮）】"**增加中央银行与金矿，中央银行购买金矿生产货币**"。
+	//
+	// 【为什么必须默认关闭】开启后 `sim.New` 改用 `BuildingSpecsWithCentralBank`
+	// （**追加两类建筑**）⇒ `len(specs)` 由 15 变 17 ⇒ 失业场地下标由 15 变 17。
+	// 虽然 `State.UnemployedSite` 已是**运行时**字段（R83），但 1.0 的**基线输出**
+	// 对场地数是敏感的（实测：15 场地人口 5,688,326 vs 17 场地 6,381,408）
+	// ⇒ 必须默认关闭。
+	CentralBankEnabled bool
+	// GoldMineLaborPerLevel 是金矿每级雇佣人数。默认 **5000**（§1.2-5"劳动力需求 5k"）。
+	GoldMineLaborPerLevel float64
+	// CentralBankLaborPerLevel 是央行每级雇佣人数。默认 **0**。
+	//
+	// 【为什么默认 0 而不是 §1.2-5 的 1,000】§1.2-5 说"金融区、银行与中央银行
+	// 每级雇佣 1k 人"，但央行在本实现里是**被动造币机构**（级数由"黄金有剩余"驱动），
+	// 让它雇人会给劳动配给引入一个没有利润信号的新场地。取 0 是**保守起点**，
+	// 可由本参数显式覆盖——这是一处**登记在案的简化**。
+	CentralBankLaborPerLevel float64
+	// GoldPrice 是黄金的**外生价格**（元/单位）。默认 **10000**
+	//（§1.2-5 原文："一半用于支付 10,000 原每单位黄金给金矿"）。
+	//
+	// 【为什么是外生参数而不是市场价】按裁决"黄金作**外生价格**的商品，不进 A 矩阵"——
+	// 黄金不在 `GoodSpecs()` 里，故没有 `Pcost`/`Pinit`/`Eps`，也不参与 §3.4 标定。
+	GoldPrice float64
+	// GoldPerMint 是**每多少单位黄金**触发一次造币。默认 **20**
+	//（§1.2-5："单位中央银行消耗 20 黄金，生产 400,000 货币"）。
+	GoldPerMint float64
+	// MoneyPerMint 是每次造币创造的货币量。默认 **400000**（§1.2-5 原文）。
+	//
+	// 【R86：它现在只是**兜底**——`MintWageFraction > 0` 时不再生效】见下。
+	MoneyPerMint float64
+	// MintWageFraction 把**每次造币额锚到当期工资总额**。默认 **0**（= 关闭本锚）。
+	//
+	//	总造币额 M = 批数 × MintWageFraction × 当期工资总额
+	//
+	// 【为什么必须有这个锚（R85 实测的阻塞项）】§1.2-5 的固定值
+	// "20 黄金 → 400,000 货币"与"金矿每级产 25 黄金/周期"**从未与 1.0 的货币存量对齐**。
+	// 实测：金矿 5 级 ⇒ 每 tick 产 125 黄金 ⇒ **每 tick 造币 2,500,000 元**，
+	// 而 1.0 的货币总量只有 **4,569,738 元** ⇒ **每 tick 印出存量的 58%**
+	// ⇒ 几十 tick 内货币增长数百倍、价格体系脱离标定。
+	//
+	// 而 1.0 的初始货币是**按一周工资流量标定**的（§4.3 修订）。本锚沿用同一条纪律，
+	// 把造币额也表示成**工资流量的一个比例**——于是"新增货币"始终相对于
+	// **实际经济体量**，不再因草案数字的绝对量级而失控。
+	//
+	// 【取值的直觉】`= f` ⇒ 每造币一批，货币存量增加 `f × 一周工资`。
+	// 取 f = 0.005、工资 ~2.2e7 ⇒ 一批约增 1.1e5 元（约千分之五周工资）——
+	// 闸门很紧，价格体系不会被冲垮。
+	//
+	// 【默认 0 ⇒ 退回固定 `MoneyPerMint`】两种口径都能跑，便于对照实验。
+	MintWageFraction float64
+	// GoldPerBankLevel 是**每级中央银行每 tick 能吃进的黄金**（盎司）。默认 **20**。
+	//
+	// 【它是什么】§1.2-5 的第三项："**当黄金有剩余时，中央银行自动扩建**。"
+	// 要表达"黄金有剩余"，必须有一个**产能**概念——否则"剩余"无从定义
+	//（本实现里黄金产出即被造币消耗，没有库存）。
+	//
+	// 口径：中央银行的"吞吐量" = `级数 × GoldPerBankLevel`。
+	// 当金矿本期产出**超过**该吞吐量时，说明"黄金有剩余"（央行吃不完）
+	// ⇒ 自动扩建央行，直到吞吐量追上产出。
+	//
+	// 取默认 **20** = 一个造币批次（§1.2-5"20 黄金 → 400,000 货币"）——
+	// 即"每级每 tick 处理一批"是最自然的起点。
+	GoldPerBankLevel float64
+
+	// ===== 1.2 M3/M6 玩家投资接口（2026-09-20 第 58 轮裁决）：默认**关闭** =====
+
+	// InvestAIEnabled 是**政府投资 AI** 的开关。默认 **true**（AI 自动分配预算）。
+	//
+	// 【裁决原文（M6）】"玩家投资额度**即**政府投资额度；设置**政府投资 AI 开关**，
+	// 当玩家控制时**自动关闭**（为之后接入**国家系统**做准备）。"
+	//
+	// 【它控制什么】1.0 的投资预算是"§4.5.1b 两条投资栈按**当期意向需求**比例自动分配"
+	//（§0.4 第 8 项选 (a)）。本开关为 true 时保持该口径；为 false 时**改用**玩家给的
+	// `InvestManorShare`（见下）——即"**额度与方向交给玩家**"（M3）。
+	//
+	// 【默认 true ⇒ 1.0 逐位不变】关闭它才进入玩家口径。
+	InvestAIEnabled bool
+	// InvestManorShare 是**玩家指定的庄园栈预算占比** ∈ [0,1]。默认 **−1 = 未设定**。
+	//
+	// 【口径（M3/M6）】玩家接管的额度**就是政府的投资额度**（同一个池，
+	// 不是两份额度）——即投资池可动用额 `pool`。玩家决定的是它的**方向**：
+	//
+	//	庄园栈预算 = pool × InvestManorShare
+	//	金融栈预算 = pool − 庄园栈预算
+	//
+	// 【为什么默认 −1 而不是 0.5】0.5 是一个**有效的玩家选择**，
+	// 不能与"玩家没设定"混为一谈。−1（或任何 <0 的值）表示"未设定"
+	// ⇒ 交回 AI（需求比例）。这与"用 `*bool` 区分未设置与显式 false"是同一条纪律。
+	//
+	// 【与 M6"只接政府额度"的关系（第 58 轮裁决）】玩家**不**接管投资池的**收入端**
+	//（居民储蓄照常自动流入），只接管它的**支出方向**。
+	InvestManorShare float64
+
+	// ===== 1.2 M5 ① 政府债务计息（第 67 轮裁决）：默认**关闭** =====
+
+	// GovDebtInterestRate 是**政府债务的年化利率**。默认 **0.05**（= M8.5 的统一 5%）。
+	//
+	// 【为什么默认关闭整个机制而不是"利率 0"】1.0 的 §4.5.4 明确"**不计息**：本版债务
+	// 不计息、不设期限，只设上限"——那是 1.0 的**声明口径**。1.2 才加利息（M2/M5）。
+	// 故用**开关**（`GovDebtInterestEnabled`）而不是把利率设 0 来表达"1.0 不计息"：
+	// 前者是"机制未启用"，后者是"利率恰为 0%"，两者语义不同。
+	GovDebtInterestRate float64
+	// GovDebtInterestEnabled 打开政府债务计息。默认 **false** ⇒ 1.0 逐位不变。
+	//
+	// 【裁决（M5，第 67 轮）】"政府债务计息，**利息付给央行**"。
+	// 计入口径见 `State.payGovDebtInterest`。
+	GovDebtInterestEnabled bool
+
+	// ===== 1.2 工资平减（第 72 轮裁决）：默认**关闭** =====
+
+	// InflationDeflation 打开**工资平减**。默认 **false** ⇒ 1.0 逐位不变。
+	//
+	// 【裁决原文（第 72 轮）】"金矿扩张等于通胀，**将工资除以通胀比例后套入需求表**，
+	// 再用**原始工资**以**原始价格**购买消费品（消费品同样通胀）。"
+	//
+	// 【它解决什么】金矿/央行扩张（§1.2-5）会把货币印发出来 ⇒ 名义工资暴涨。
+	// 而 §6.3 的消费预算 `Budget = 人群池现金` 是**名义**量 ⇒ 名义工资涨多少，
+	// 消费预算就涨多少 ⇒ 需求追着供给涨 ⇒ **通胀自我强化**。
+	// （实测 R96：金矿扩到 22.97 级时造币率 22.90%/tick，货币 900 tick 涨 369.6 倍。）
+	//
+	// 【口径】本开关把消费预算**平减回基期价格水平**：
+	//
+	//	预算 = 人群池现金 ÷ 通胀比例
+	//
+	// 于是"工资的实际购买力"按基期价格计量 ⇒ 通胀不再通过预算反馈到需求上。
+	// 通胀比例 = `State.priceIndex()` = 消费品价格的加权平均 ÷ 基期同一加权平均。
+	//
+	// 【它**不是**"把名义工资改小"】记账、工资支付、利润归属全部照常使用**名义**金额；
+	// 只有"这笔钱能买多少消费品"这一处用实际口径。故货币守恒与借贷相等等
+	// **全部不受影响**（预算只决定"买多少"，不决定"记多少"）。
+	InflationDeflation bool
+
+	// ===== 1.2 M7 工资竞标：默认**关闭**，保证 1.0 基线逐位不变 =====
+
+	// WageBidEnabled 是**工资竞标**总开关（1.2 M7）。默认 **false**。
+	//
+	// 开启后每场地获得一个**竞标溢价** $p_i \ge 0$（元/人/周期），配置机制从
+	// "§4.2 就业顺序 + 全局等比配给"改为"**按实际人均工资 $baseWage_i+p_i$ 降序配给**"；
+	// 溢价由"缺员 + 利润"驱动、并按年化速率衰减（1.2 M7.2 的五步规则）。
+	//
+	// 【false 时必须逐位复现 1.0】与 `-static-pcost` / `-no-expand-dilution` 同一条纪律。
+	WageBidEnabled bool
+	// WageBidCap 是"可竞标资金"占剩余利润的比例上限 σ_bid。默认 **0.5**
+	//（1.2 草案原文"最高 50% 投入到工资提升"）。
+	WageBidCap float64
+	// WageBidDecay 是溢价的**年化**衰减率。默认 **0.05**（5%/年，每 tick 5%/52）。
+	//
+	// 1.2 M7.2 的裁决②(b)+(c)：**招满即回落** + **缓慢衰减**两条同时实施，
+	// 使"降价试探"成为可能（否则只有上抬、没有下探——正是 1.0 踩过的棘轮形态）。
+	WageBidDecay float64
+	// WageBidBase 是 M7.2 第 2 步 `A_i` 的**计费基数**，取值：
+	//
+	//	""/"profit"  —— **默认**：A_i = WageBidCap × max(0, 本期纯利)（裁决原文口径）
+	//	"wagebill"   —— 对照口径：A_i = WageBidCap × 本期工资总额 × max(0, 利润率)
+	//
+	// 【为什么要有这个对照口径（R68 的结论）】原文口径以**纯利**为基数，
+	// 在"利润远高于工资"的经济里必然给出远超工资的加价：
+	// 实测（人口 50 万的稀缺局）场地 13 的**人均纯利 243.96 元/tick**、
+	// 人均基准工资只有 **6.75 元/tick**（36 倍）⇒ 加价 = 纯利的 50% = 121.98 元/tick
+	// ⇒ 人均工资冲到基准的 **15~37 倍**（峰值 247 元）。
+	//
+	// 机制本身不发散（R67 已证：溢价被"利润→成本→下一期纯利"自限），
+	// 但"工资"这个名义量在稀缺局里失去可比性。
+	//
+	// `"wagebill"` 把基数换成**当期工资总额**并乘以利润率，于是
+	// `A_i ≤ WageBidCap × 工资总额` ⇒ **加价幅度天然以"工资的倍数"为界**
+	//（cap = 0.5 ⇒ 最多涨 50%），且**不引入**裁决⑤(c) 明确回避的"显式工资上限"；
+	// 不稀缺时（利润率 ≤ 0）自动为 0，与裁决①一致。
+	//
+	// 【默认必须为空/"profit"】保证 `WageBidEnabled=false` 与
+	// `WageBidEnabled=true, WageBidBase=""` 两种情形逐位复现既有行为。
+	WageBidBase string
+	// WageBidMarginCap 是参与抬价的**利润率因子上限**。默认 **0 = 不封顶**（裁决原文口径）。
+	//
+	// 【它是什么（R92，为 M7 量级问题准备的对照口径）】M7.2 第 2 步的抬价额度是
+	//
+	//	纯利基数   A_i = cap × max(0, 纯利)
+	//	工资基数   A_i = cap × 工资总额 × max(0, **利润率**)
+	//
+	// 两条口径都用到"利润率"这个量。实测（R68/R69）：稀缺局里参与抬价的场地
+	// **利润率高达 20.17**（而正常开局是 0.20）⇒ 无论哪条口径都必然给出
+	// 相对工资 15~37 倍的加价。
+	//
+	// 本参数把参与计算的利润率**封顶**：`m' = min(m, WageBidMarginCap)`。
+	// 于是"只有正常利润率才参与抬价"——**直接对准根因**，
+	// 而不是去限制结果（那样会引入裁决⑤(c) 回避过的"显式工资上限"）。
+	//
+	// 【默认 0 = 不封顶 ⇒ 逐位复现裁决原文】故 1.0 与既有 M7 行为都不变。
+	WageBidMarginCap float64
 
 	// ExpectedMarginFloor 是 §5.2 **增雇判定**的下限（2026-09-19 第 22 轮新增）。
 	//
@@ -851,6 +1206,47 @@ func DefaultParams() Params {
 		// §4.5.1a 第 28 轮：收购可用投资池余额出资（用户裁决）。
 		AcquireFromInvestment: true,
 
+		// ===== 1.2 借贷台账（M8）：默认全部关闭，保证 1.0 基线逐位不变 =====
+		BankEnabled:       false,
+		LoanPrincipal:     500_000,
+		LoanAnnualRate:    0.05,
+		LoanTermYears:     5,
+		LoanIssueInterval: 52,
+		// R71 收口(a)：额度锚到余额的**比例**默认 0.5；
+		// 开关 `LoanFromBalance` 本身默认 false（在下方"1.2 开关默认全关"处显式说明）。
+		LoanBalanceFraction: 0.5,
+		// 1.2 M4.2 所有权重构：比例默认 0.30（资本 : 劳动力 = 0.30 : 0.70），
+		// 开关 `OwnershipRestructure` 默认 false。
+		OwnershipCapitalShare: 0.30,
+		// 1.2 §1.2-5 央行/金矿：开关默认 false；下面是打开后的条款默认值。
+		GoldMineLaborPerLevel:    5000,
+		CentralBankLaborPerLevel: 0,
+		GoldPrice:                10_000,
+		GoldPerMint:              20,
+		MoneyPerMint:             400_000,
+		// R86：造币额锚到工资流量（默认一个**很紧**的比例）——
+		// 见该字段的长注释：§1.2-5 的固定 400,000 会每 tick 印出货币存量的 58%。
+		// 【R91 裁决：调到 0.015（金矿扩张优先）】R87 的阈值表：0.0128 收支平衡、
+		// 0.0132 才过 §4.1 的 10% 扩建阈值。取 0.015 ⇒ 金矿利润率约 +27.5%、
+		// **会扩建**（金矿部门真正发展起来），代价是造币率升到约 7.5%/tick。
+		MintWageFraction: 0.015,
+		// §1.2-5 第三项：每级央行每 tick 能吃进的黄金（= 一个造币批次）
+		GoldPerBankLevel: 20,
+		// M3/M6 玩家投资接口：默认**AI 开启**（= 1.0 的需求比例口径），
+		// 玩家占比未设定（−1）。
+		InvestAIEnabled:  true,
+		InvestManorShare: -1,
+		// 1.2 M5 ①：利率默认取统一曲线（5%），但**机制默认关闭**（1.0 声明不计息）。
+		GovDebtInterestRate:    0.05,
+		GovDebtInterestEnabled: false,
+		// 1.2 工资平减（第 72 轮裁决）：默认**关闭** ⇒ 1.0 逐位不变。
+		InflationDeflation: false,
+
+		// ===== 1.2 M7 工资竞标：默认关闭，保证 1.0 基线逐位不变 =====
+		WageBidEnabled: false,
+		WageBidCap:     0.5,
+		WageBidDecay:   0.05,
+
 		SitePowerLimit: 30,
 		QueueWarnTicks: 52,
 
@@ -863,7 +1259,7 @@ func DefaultParams() Params {
 		HireAnnual: 0.05,
 		MarginEMA:  12,
 
-		TaxRate:           0.05,
+		TaxRate: 0.05,
 		// §4.5.2 的掌控比：2026-09-19 由 5 上调到 20（金融区与宅邸庄园共用）。
 		ControlPerFinance: 20,
 
@@ -976,8 +1372,7 @@ func GoodSpecs() []Good {
 // 【2026-09-19 裁决】金融区**不再是建造出来的建筑**：它是所有权的显式表达，
 // 级数由掌控比推导（sim.syncFinanceLevel）且 BuildCost 恒为 0，因此
 // **没有"金融区建造成本"这个参数**——原先的 financeBuildCost 形参已删除。
-func BuildingSpecs(financeLabor float64) []Building {
-	// 商品下标常量，便于核对 §3.3 的表格。
+func BuildingSpecs(financeLabor float64) []Building { // 商品下标常量，便于核对 §3.3 的表格。
 	const (
 		grain, food, fabric, clothes, luxury = 0, 1, 2, 3, 4
 		coal, iron, steel, tools, housing    = 5, 6, 7, 8, 9
@@ -1043,6 +1438,58 @@ func BuildingSpecs(financeLabor float64) []Building {
 		// 它的账本余额恒为 0（审计断言），因此不参与利润归属、不进入人群池的场地循环。
 		{Name: "消费代理", Category: CatDevelopment, BuildCost: 0, LaborPerLevel: 0, IsAgent: true, AllowPrivatize: false},
 	}
+	return specs
+}
+
+// BuildingSpecsWithCentralBank 在 `BuildingSpecs` 之上**追加** 1.2 的
+// **金矿**与**中央银行**两类建筑（§1.2-5，2026-09-20 第 58 轮裁决）。
+//
+// 【为什么另开一个函数而不是给 BuildingSpecs 加开关参数】
+// 追加建筑会改变 `len(specs)` ⇒ 失业场地下标随之变化（见 `State.UnemployedSite`）。
+// 把这条**条件性**留在**调用方**（`sim.New` 按 `Params.CentralBankEnabled` 选择），
+// 使 `BuildingSpecs` 的 1.0 语义**完全不受影响**——
+// 这是"1.0 基线逐位不变"最省心的保证方式。
+//
+// 追加顺序（下标）：
+//
+//	15  金矿        —— 产出"黄金"（不进商品市场）
+//	16  中央银行     —— 购买黄金造币
+//
+// 于是开启央行时 `State.UnemployedSite = 17`（而不是 15）。
+func BuildingSpecsWithCentralBank(financeLabor float64, goldMineLabor, centralBankLabor float64) []Building {
+	specs := BuildingSpecs(financeLabor)
+	// ── 金矿（§1.2-5 原文）──
+	//
+	//	"金矿劳动力需求 5k，比例同一般矿场。单位金矿消耗 15 煤炭、15 工具，生产 25 黄金。
+	//	 1.2 版本最多建造 50 级金矿。"
+	//
+	// 劳力比例"同一般矿场" ⇒ 不设 Structure，走 §5 城镇通用结构（6.75 元/人），
+	// 与煤矿/铁矿一致。建造成本取 600（与煤矿/铁矿同类）。
+	//
+	// 产出**不进商品市场**：`Recipe.Output` 只作记账标记（= `GoldGood`），
+	// 真正的产出累计在 `State.GoldProduced`。故它 `Produces()` 为 false。
+	specs = append(specs, Building{
+		Name: "金矿", Category: CatResource, AllowSubsidy: false,
+		BuildCost:     600,
+		Recipe:        Recipe{Output: GoldGood, Qty: 25, Inputs: map[int]float64{GoodCoal: 15, GoodTools: 15}},
+		LaborPerLevel: 5000, Cap: GoldMineCap,
+		AllowPrivatize: false, ProducesGold: true,
+	})
+	// ── 中央银行（§1.2-5 原文）──
+	//
+	//	"单位中央银行消耗 20 黄金，生产 400,000 货币进入现金池。
+	//	 其中一半用于支付 10,000 原每单位黄金给金矿。剩余部分进入中央银行现金池。
+	//	 当黄金有剩余时，中央银行自动扩建。"
+	//
+	// 它**只用黄金作投入**、不雇人、不可建造（`BuildCost = 0`：它的级数由
+	// "黄金有剩余"驱动自动扩建，不由建造力产生——与金融区/庄园同理）。
+	specs = append(specs, Building{
+		Name: "中央银行", Category: CatTown, AllowSubsidy: false,
+		BuildCost:     0,
+		Recipe:        Recipe{Output: -1, Qty: 0},
+		LaborPerLevel: centralBankLabor, Cap: 0,
+		AllowPrivatize: false, IsCentralBank: true,
+	})
 	return specs
 }
 

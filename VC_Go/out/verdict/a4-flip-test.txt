@@ -1,0 +1,22 @@
+# A4 judgement stability test
+# command (repeated 10x, identical): out/bin/market-sim.exe -ticks 10000   (pop 10m, t=0.10)
+# A4 predicate (gosim/internal/report/report.go:191): allPos && slope >= 0
+# measured quantity: linear slope of GDP over the last 500 ticks (grep anchor 'GDP=')
+
+  run  1 : GDP tail-500 slope = 3.750e-08   -> A4 PASS
+  run  2 : GDP tail-500 slope = -3.000e-08   -> A4 FAIL
+  run  3 : GDP tail-500 slope = -5.400e-08   -> A4 FAIL
+  run  4 : GDP tail-500 slope = 4.425e-08   -> A4 PASS
+  run  5 : GDP tail-500 slope = -2.250e-08   -> A4 FAIL
+  run  6 : GDP tail-500 slope = 3.750e-08   -> A4 PASS
+  run  7 : GDP tail-500 slope = -4.425e-08   -> A4 FAIL
+  run  8 : GDP tail-500 slope = -2.925e-08   -> A4 FAIL
+  run  9 : GDP tail-500 slope = 5.400e-08   -> A4 PASS
+  run 10 : GDP tail-500 slope = 3.525e-08   -> A4 PASS
+
+  summary: A4 PASS 5 / 10, FAIL 5 / 10 on the SAME command and SAME binary.
+  cause: in the frozen dead state GDP is a constant plateau (min GDP = 5,093,468) and the
+         fitted slope is O(1e-8) numerical noise whose sign is not reproducible.
+  => A4 has no discriminative power; its verdict is decided by float noise, not by the economy.
+  => ACTIVE.md fact 4 ('A4 passes at pop 10m, fails at pop 5m') reproduces only as a weaker
+     statement; the stronger, reproducible statement is the run-to-run flip shown above.

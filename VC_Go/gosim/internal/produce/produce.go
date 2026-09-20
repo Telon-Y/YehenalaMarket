@@ -54,8 +54,20 @@ func Settle(buildings []model.Building, levels, hire []float64, subsistence map[
 	}
 
 	// ① 潜在产出与投入申报
+	//
+	// 【判据是 `Produces()` 而不是 `IsNonMarket()`】本循环会把
+	// `b.Recipe.Output` 直接当**商品下标**用 ⇒ 任何"没有真实商品配方"的建筑都必须跳过，
+	// 否则它的零值/越界配方会污染产出表或**越界 panic**。
+	//
+	// 历史上两者等价（非市场 ⇔ 非生产者）；但仓库/消费代理落地后，
+	// `Produces()` 才表达"是真正的商品生产者"，它排除了：
+	//   - 非市场建筑（金融区 / 宅邸庄园）；
+	//   - 贸易节点（仓库 / 消费代理，`Recipe` 为零值 ⇒ 会被误加进 0 号商品"谷物"）；
+	//   - **金矿与央行**（1.2 §1.2-5，2026-09-20 第 58 轮）：金矿的
+	//     `Recipe.Output = GoldGood = 11`，而产出表只有 `Goods = 11` 项
+	//     ⇒ 用 `IsNonMarket()` 判会直接 `index out of range [11] with length 11`。
 	for i, b := range buildings {
-		if b.IsNonMarket() {
+		if !b.Produces() {
 			continue
 		}
 		eff := levels[i] * hire[i]
@@ -86,8 +98,10 @@ func Settle(buildings []model.Building, levels, hire []float64, subsistence map[
 
 	// ③ 实际产出：对每种投入取配给比例的最小值作为短缺惩罚，
 	//    并按 §3.3 定案设下限 model.ShortageFloor（惩罚最高 75%，即至少保留 25% 产出）。
+	//
+	// 【判据同 ①：必须用 `Produces()`】本循环同样把 `b.Recipe.Output` 当商品下标。
 	for i, b := range buildings {
-		if b.IsNonMarket() {
+		if !b.Produces() {
 			continue
 		}
 		sf := 1.0
@@ -109,7 +123,7 @@ func Settle(buildings []model.Building, levels, hire []float64, subsistence map[
 
 	// ④ 中间投入的实际取用与净供给
 	for i, b := range buildings {
-		if b.IsNonMarket() {
+		if !b.Produces() {
 			continue
 		}
 		eff := levels[i] * hire[i]
@@ -133,7 +147,14 @@ func Settle(buildings []model.Building, levels, hire []float64, subsistence map[
 func InputValue(buildings []model.Building, levels, hire, prices []float64, allocRatio []float64) []float64 {
 	out := make([]float64, len(buildings))
 	for i, b := range buildings {
-		if b.IsNonMarket() {
+		// 【判据统一为 `Produces()`】与 ①②③④ 一致：金矿/央行没有可计价商品配方，
+		// 贸易节点（仓库/代理）的配方是零值。用 `IsNonMarket()` 会让金矿的
+		// 投入项被照常计价（其实它的煤/工具**应当**计价）——这一点需要注意：
+		// 金矿**确实**消耗煤与工具，故它的投入价值**必须**计入，
+		// 否则 §3.4 的成本基会漏掉金矿的总需求。
+		// 而 `ProducesGold` 的建筑**有**真实的 `Recipe.Inputs`，
+		// 故这里不能把金矿排除掉——只有"完全没有配方"的才跳过。
+		if b.IsNonMarket() || b.IsTradeNode() || b.IsCentralBank {
 			continue
 		}
 		eff := levels[i] * hire[i]

@@ -1,4 +1,4 @@
-package sim
+﻿package sim
 
 // audit_r30_test.go —— §七 R30：**"工资为什么花不完"的口径诊断**。
 //
@@ -96,7 +96,7 @@ func TestAuditR30TierBasketVsWage(t *testing.T) {
 		// "某档工资 vs 该档篮子"，分母必须是**挣这份工资的人**。
 		// 第 20 轮把耕地上限降到 500 后失业率 71.7%，若把零工资的失业池计入分母，
 		// 人均工资会被稀释到 0.327 元，与"档 10 工资 10 元"不是同一个量。
-		if st.Houses.Pools[i].Worksite == model.UnemployedSite {
+		if st.Houses.Pools[i].Worksite == st.UnemployedSite {
 			continue
 		}
 		poolPop += st.Houses.Pools[i].Population

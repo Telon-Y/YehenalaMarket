@@ -1,4 +1,4 @@
-package sim
+﻿package sim
 
 // audit_r39_test.go —— 2026-09-19 第 15 轮裁决（§0.4 的九项）的验收测试。
 //
@@ -175,7 +175,7 @@ func TestAuditR39WelfareTiersFormula(t *testing.T) {
 				continue
 			}
 			w := model.CohortWages[p.Class]
-			if p.Worksite == model.UnemployedSite {
+			if p.Worksite == st.UnemployedSite {
 				w = 0
 			} else if p.Worksite >= 0 && p.Worksite < len(st.Buildings) {
 				// 【§5 第 20 轮】本人工资取**该场地的劳动结构**：
@@ -288,7 +288,7 @@ func TestAuditR39WelfareReachesUnemployedPool(t *testing.T) {
 	if st.Unemployed <= 0 {
 		t.Skipf("600 tick 时失业 = %.0f，无法检验失业池", st.Unemployed)
 	}
-	idx := cohortIndex(st, model.UnemployedSite, 0)
+	idx := cohortIndex(st, st.UnemployedSite, 0)
 	if p := &st.Houses.Pools[idx]; math.Abs(p.Population-st.Unemployed) > 1e-6 {
 		t.Errorf("失业池人口 = %.2f，应为失业人数 %.2f", p.Population, st.Unemployed)
 	}

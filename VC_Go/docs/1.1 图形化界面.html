@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>1.1 市场、建筑列表、建造图形化界面</title>
+<style>
+:root{--ink:#1f2328;--ink-2:#57606a;--line:#d8dee4;--bg:#fff;--accent:#0969da;--panel:#f6f8fa}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-size:16px;line-height:1.85;
+  font-family:"Segoe UI","PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,sans-serif}
+.wrap{display:flex;max-width:1400px;margin:0 auto;align-items:flex-start}
+.sidebar{position:sticky;top:0;width:270px;flex:0 0 270px;max-height:100vh;overflow:auto;
+  padding:32px 18px 48px 24px;border-right:1px solid var(--line);font-size:13.5px}
+.sidebar h4{margin:0 0 10px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
+.sidebar ol{list-style:none;margin:0;padding:0}
+.sidebar a{color:var(--ink-2);text-decoration:none;display:block;padding:3px 8px;border-radius:5px;line-height:1.5}
+.sidebar a:hover{background:var(--panel);color:var(--accent)}
+.sidebar .sub{padding-left:14px;font-size:13px}
+main{flex:1 1 auto;min-width:0;padding:40px 48px 90px}
+h1{font-size:30px;line-height:1.3;margin:0 0 6px}
+.doc-meta{color:var(--ink-2);font-size:14px;margin:0 0 34px;padding-bottom:18px;border-bottom:2px solid var(--ink)}
+h2{font-size:22px;margin:44px 0 14px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:30px 0 10px}
+h4{font-size:16px;margin:24px 0 8px}
+/* h5：契约 §4.5.3 用 ##### 写三级子标题（如"交易税的记账口径"）。
+   2026-09-19 修复：此前未定义 h5 样式，浏览器默认会把 h5 渲染成小号粗体，
+   与全文排版不一致；侧栏目录按 h2→h3/h4 两层构建，h5 不进目录（有意）。 */
+h5{font-size:14.5px;margin:20px 0 6px;color:#3a4149;letter-spacing:.01em}
+h5::before{content:"";display:inline-block;width:3px;height:.95em;margin-right:8px;
+  vertical-align:-.08em;background:#c6ccd4;border-radius:2px}
+p{margin:.7em 0}
+ul,ol{margin:.6em 0;padding-left:1.7em}
+li{margin:.3em 0}
+/* 引用块：文档头的"修订记录"与正文注释都用 > 书写，数量多且常整段出现，
+   故采用低调的浅灰底 + 深灰左边框；若用高饱和蓝色会整页发蓝、喧宾夺主。 */
+blockquote{margin:1.1em 0;padding:.7em 1.05em;background:#f7f8fa;
+  border-left:3px solid #c6ccd4;border-radius:0 6px 6px 0;color:#3a4149}
+blockquote p{margin:.3em 0}
+blockquote ul,blockquote ol{margin:.4em 0}
+blockquote strong{color:var(--ink)}
+blockquote ul,blockquote ol{margin:.4em 0}
+code{background:rgba(175,184,193,.2);padding:.15em .38em;border-radius:4px;
+  font-family:Consolas,"Cascadia Mono",Menlo,monospace;font-size:.9em}
+pre.code-block{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+  padding:12px 14px;overflow-x:auto}
+pre.code-block code{background:none;padding:0;font-size:13.5px;line-height:1.6}
+.equation{margin:1.25em 0;padding:.9em 1em;text-align:center;overflow-x:auto;
+  background:linear-gradient(180deg,#fbfcfd,#f6f8fa);border:1px solid var(--line);border-radius:8px}
+.table-wrap{overflow-x:auto;margin:1.2em 0}
+table{border-collapse:collapse;width:100%;font-size:14.5px;line-height:1.65}
+th,td{border-bottom:1px solid var(--line);padding:7px 12px;vertical-align:top}
+thead th{border-bottom:2px solid var(--ink);background:var(--panel);font-weight:600;white-space:nowrap}
+tbody tr:hover{background:#fafbfc}
+.left{text-align:left}.right{text-align:right}.center{text-align:center}
+tbody td.right{font-variant-numeric:tabular-nums}
+/* 数学公式：行内公式必须能在容器内换行，否则 nowrap 会把整段文字撑出视口、
+   右侧内容被硬截断（这是"公式显示异常"的主因，截图可见大批行尾被切掉）。
+   方案：inline-block 让公式整体可换行 + max-width 允许超长公式在其内部横向滚动。 */
+/* ===== 数学排版（配合 VC_Go/tools/mathrender.js 的输出）=====
+   设计要点：
+     · 上下标用标准 <sub>/<sup>，由浏览器原生渲染，不再平铺；
+     · 分式用纵向 flex + 上边框作分数线，可嵌套；
+     · 行内公式允许在容器内换行，避免 nowrap 把整段文字撑出视口。 */
+.math{font-family:"Cambria Math","Latin Modern Math","STIX Two Math",Cambria,"Times New Roman",Georgia,serif;
+  font-size:1.06em;color:#111;line-height:1.5}
+.math-inline{display:inline;white-space:normal}
+.mi{font-style:italic}
+.mn{font-style:normal}
+.mbf{font-weight:700}
+.mbb{font-family:"Cambria Math",Cambria,serif;font-weight:600}
+.mtext{font-family:inherit;font-style:normal}
+.mopname{font-style:normal;font-family:inherit;padding-right:.12em}
+.mo{padding:0 .04em}
+.mscript{white-space:nowrap}
+.msub{font-size:.72em;vertical-align:-.25em;line-height:0}
+.msup{font-size:.72em;vertical-align:.45em;line-height:0}
+/* 分式：纵向堆叠，分子下边框作分数线 */
+.mfrac{display:inline-flex;flex-direction:column;vertical-align:-.45em;text-align:center;
+  margin:0 .18em;line-height:1.15;font-size:.97em}
+.mfrac-d{font-size:1em}
+.mfrac-num{border-bottom:1.1px solid currentColor;padding:0 .3em .06em}
+.mfrac-den{padding:.06em .3em 0}
+/* 根号 */
+.msqrt{white-space:nowrap}
+.msqrt-sym{padding-right:.04em}
+.msqrt-body{border-top:1.1px solid currentColor;padding:.08em .18em 0 .06em}
+.msqrt-deg{font-size:.62em;vertical-align:.7em;margin-right:-.35em}
+/* 自适应括号 */
+.mdelim{font-size:1.15em;line-height:1}
+.mdelim-sm{font-size:1.02em}
+/* cases 环境：左侧表达式、右侧条件。
+   必须 width:auto + 仅按内容占宽，否则 inline-table 会撑满可用宽度，
+   把条件列推到很远、中间留出大片空白（目视即"公式错位"）。 */
+.mcases{display:inline-table;width:auto;vertical-align:middle;border-collapse:collapse;margin:0 .2em}
+.mcases td{border:none;padding:.05em 0 .05em 0;text-align:left;white-space:nowrap}
+.mcases td + td{padding-left:1.6em}
+.mcases tr:first-child td{padding-top:0}
+.mcases tr:last-child td{padding-bottom:0}
+.munknown{background:#fff1f0;border:1px solid #ffa39e;border-radius:3px;padding:0 .2em;color:#a8071a}
+.math-error{background:#fff1f0;border:1px solid #ffa39e;border-radius:4px;padding:0 .3em;color:#a8071a}
+hr{border:none;border-top:1px solid var(--line);margin:2.2em 0}
+a{color:var(--accent)}
+.doc-note{background:#fffbe6;border:1px solid #ffe58f;border-radius:8px;padding:.7em 1em;margin:1.1em 0}
+@media(max-width:1000px){.wrap{flex-direction:column}.sidebar{position:static;width:auto;flex:none;border-right:none;border-bottom:1px solid var(--line)}main{padding:24px 18px 60px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="sidebar"><h4>目录</h4>
+<ol>
+<li><a href="#h1-0-1-口径速查-1-1-现行">0.1 口径速查（1.1 现行）</a>
+</li>
+<li><a href="#h2-0-2-修改意向登记处-已裁决-10-项-待裁决-6-项">0.2 修改意向登记处（已裁决 10 项 · 待裁决 6 项）</a>
+</li>
+<li><a href="#h3-0-3-对-1-0-的实质影响-登记">0.3 对 1.0 的实质影响（登记）</a>
+</li>
+<li><a href="#h4-0-4-与-1-0-1-2-2-0-的边界">0.4 与 1.0 / 1.2 / 2.0 的边界</a>
+</li>
+<li><a href="#h5-一-版本目标">一、版本目标</a>
+</li>
+<li><a href="#h6-二-数据接口-UI-引擎">二、数据接口（UI ↔ 引擎）</a>
+<ol class="sub">
+<li><a href="#h7-2-1-视图结构-待定名-建议-sim-UiView-或新包-internal-view">2.1 视图结构（⬜ 待定名，建议 sim.UiView 或新包 internal/view）</a></li>
+<li><a href="#h8-2-2-数据来源表-每个界面格子-唯一字段">2.2 数据来源表（每个界面格子 → 唯一字段）</a></li>
+</ol>
+</li>
+<li><a href="#h9-三-玩家动作">三、玩家动作</a>
+</li>
+<li><a href="#h10-四-界面规格">四、界面规格</a>
+<ol class="sub">
+<li><a href="#h11-4-1-市场页">4.1 市场页</a></li>
+<li><a href="#h12-4-2-建筑页">4.2 建筑页</a></li>
+<li><a href="#h13-4-3-建造队列页">4.3 建造队列页</a></li>
+<li><a href="#h14-4-4-其他页-杂类总表">4.4 其他页（杂类总表）</a></li>
+</ol>
+</li>
+<li><a href="#h15-五-时间与确定性">五、时间与确定性</a>
+</li>
+<li><a href="#h16-六-验收判据">六、验收判据</a>
+<ol class="sub">
+<li><a href="#h17-6-1-A8-拆除核销之后">6.1 A8′（拆除核销之后）</a></li>
+</ol>
+</li>
+<li><a href="#h18-七-与-1-0-2-0-的关系">七、与 1.0 / 2.0 的关系</a>
+</li>
+</ol></nav>
+<main>
+<h1>1.1 市场、建筑列表、建造图形化界面</h1>
+<p class="doc-meta">叶赫那拉市场 · 由 <code>1.1 图形化界面.md</code> 经 <code>VC_Go/tools/md2html.js</code> 离线编译生成 · 完全自包含，无需联网</p>
+<blockquote>
+<p>## ⚠️ 本文件的状态（v0.1 骨架 · 不是契约）</p>
+<ul><li><strong>性质</strong>：这是<strong>讨论阶段的结构模板</strong>。已裁决项已写死，未定项以 <code>⬜ 待补</code> 标出， 并集中登记在 <strong>§0.2</strong>。<strong>在 §0.2 清空之前，本文件不具备契约效力。</strong></li><li><strong>不推翻 1.0</strong>：<strong>1.0 的实现与数值不可被本文件推翻。</strong> 两者冲突时一律以 1.0 为准 （<code>docs/1.0 生产与市场模拟.md</code>）。</li><li><strong>本文与 1.2 的关系</strong>：<code>docs/1.2 货币与金融.md</code> 是并列的开发日志（未完成）； 1.1 只负责<strong>图形界面 + 玩家作为政府</strong>，不实现 1.2 的货币与金融特性。</li><li><strong>来源</strong>：用户提供的 <code>1.1 市场、建筑列表、建造图形化界面.docx</code>（18,466 字节）。 原文是<strong>同名 C++ 程序的开发日志</strong>，仅作参考；机械转换件见 <code>out/review/1.1-docx-converted.md</code>（只读，未改原件）。</li><li><strong>章节号约定</strong>：本文沿用 1.0 的 <code>§0.1 / §0.2 / §0.3 / §0.4 / §0.5</code> 体例 （口径 / 已裁决 / 待裁决登记 / 实现状态），与 <code>docs/ACTIVE.md</code> 的登记方式一致。</li></ul>
+</blockquote>
+<hr>
+<h2 id="h1-0-1-口径速查-1-1-现行">0.1 口径速查（1.1 现行）</h2>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>维度</th><th>现行口径</th><th>依据 / 实现锚点</th></tr>
+</thead>
+<tbody>
+<tr><td>前端技术栈</td><td><strong>HTML</strong>（自包含：无 CDN、无 npm、无网络请求）</td><td>裁决 §0.2-1</td></tr>
+<tr><td>中文字体</td><td><code>MingChinese.ttf</code>（项目根，24.4 MB），CSS <code>@font-face</code> 加载，字号 <strong>20</strong></td><td>裁决 §0.2-2</td></tr>
+<tr><td>raylib</td><td><strong>不采用</strong>。<code>docs/ACTIVE.md:360</code> 已定案&quot;早期 C++17 + Raylib 路线已废弃&quot;</td><td>1.0 定案</td></tr>
+<tr><td>玩家身份</td><td><strong>玩家 = 一个本地市场的政府</strong>；无玩家操控的本地市场由政府 AI 运行</td><td>裁决 §0.2-3</td></tr>
+<tr><td>层级</td><td><code>Nation → LocalMarket(×N) → 国家市场</code></td><td>裁决 §0.2-4</td></tr>
+<tr><td>国家市场</td><td><strong>纯派生聚合视图</strong>（总量 / 数量加权均价 / 份额）；<strong>无状态、不写账、不参与后续计算</strong></td><td>裁决 §0.2-4</td></tr>
+<tr><td>1.1 市场数</td><td><strong>1</strong>（<code>maxMarketCount = 1</code>）；国家层<strong>本版不实现</strong>，仅占位语义</td><td>裁决 §0.2-4</td></tr>
+<tr><td>时间推进</td><td>渲染 60 FPS；逻辑按 <strong>&quot;每秒推进 tick 数&quot;</strong> 参数化；<strong>帧与 tick 解耦</strong></td><td>裁决 §0.2-5</td></tr>
+<tr><td>置顶优先级</td><td><strong>玩家 &gt; §4.2 预警插队 &gt; FIFO</strong></td><td>裁决 §0.2-6</td></tr>
+<tr><td>入队约束</td><td>除<strong>上限</strong>外无条件入队（等级上限：煤/铁 500、建造 1000；耕地总量：谷物+棉花 ≤ 1000）；上限在<strong>完工时</strong>裁剪</td><td>裁决 §0.2-6；<code>build.ApplyCompletion</code></td></tr>
+<tr><td>资金闸门</td><td><strong>仍走 <code>fiscal.AvailableCash</code></strong>（不绕过）；玩家可超额 ⇒ 政府债务上升 ⇒ A7 承压</td><td>裁决 §0.2-6；<code>fiscal.go:230</code></td></tr>
+<tr><td>拆除</td><td>玩家可拆<strong>显式建筑</strong>（11 生产建筑 + 仓库）；<strong>资产与货币一并核销</strong></td><td>裁决 §0.2-7</td></tr>
+<tr><td>拆除前置</td><td>在途订单<strong>取消且不退款</strong></td><td>裁决 §0.2-7</td></tr>
+<tr><td>玩家动作生效</td><td><strong>立即</strong>（注入点 = §8 主循环第 9 步立项之前）</td><td>裁决 §0.2-8</td></tr>
+<tr><td>决策来源</td><td>落地<strong>决策来源接口</strong>：<code>AIGovernment</code> 与 <code>PlayerCommands</code> 两个实现</td><td>裁决 §0.2-9</td></tr>
+<tr><td>AI 扩张参数</td><td>利润率阈值等由<strong>契约常量升为参数</strong></td><td>裁决 §0.2-9</td></tr>
+<tr><td>逐条建造</td><td>等级数 = 队列条目数；<strong>一级一条订单</strong>；x1/x5/x10 = 1/5/10 条</td><td>裁决 §0.2-10</td></tr>
+<tr><td>删减</td><td>建筑自动缩编<strong>保持冻结</strong>（<code>DecayFrozen=true</code>）；拆除由玩家手动触发</td><td>1.0 §4.4 + 裁决 §0.2-7</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>四类一级菜单</strong>：市场 / 建筑 / 建筑队列 / 其他。</p>
+</blockquote>
+<h2 id="h2-0-2-修改意向登记处-已裁决-10-项-待裁决-6-项">0.2 修改意向登记处（已裁决 10 项 · 待裁决 6 项）</h2>
+<blockquote>
+<p>编号 <strong>1–10 为本轮讨论的裁决</strong>（✅ 已生效），<strong>11–16 为待裁决</strong>（⬜）。 与 1.0 §0.4 的用法一致：后续裁决直接往本表补写。</p>
+</blockquote>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>#</th><th>项</th><th>裁决 / 候选</th><th>影响面</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>1</strong></td><td>前端技术栈</td><td>✅ <strong>HTML</strong>（自包含，无 CDN/npm）</td><td>§一</td></tr>
+<tr><td><strong>2</strong></td><td>中文字体</td><td>✅ 根目录 <code>MingChinese.ttf</code>，字号 20，<code>@font-face</code> 加载</td><td>§四</td></tr>
+<tr><td><strong>3</strong></td><td>玩家身份</td><td>✅ <strong>玩家 = 政府</strong>（&quot;没有玩家操控的就是 AI 政府&quot;）</td><td>§三</td></tr>
+<tr><td><strong>4</strong></td><td>复数化对象与层级</td><td>✅ 复数化的是<strong>市场</strong>（不是政府）；层级 <code>Nation → LocalMarket → 国家市场</code>；国家市场取 <strong>(甲) 汇总视图</strong></td><td>§二 / §七</td></tr>
+<tr><td><strong>5</strong></td><td>时间推进</td><td>✅ 参数化为<strong>&quot;每秒推进 tick 数&quot;</strong>；帧与 tick <strong>解耦</strong></td><td>§五</td></tr>
+<tr><td><strong>6</strong></td><td>置顶 / 入队 / 资金</td><td>✅ 置顶 = 玩家特权插队；除上限外无条件入队；<strong>仍走 <code>AvailableCash</code></strong></td><td>§三 / §四-2</td></tr>
+<tr><td><strong>7</strong></td><td>拆除</td><td>✅ 可拆<strong>显式建筑</strong>；<strong>资产与货币一并核销</strong>；在途订单取消<strong>不退款</strong></td><td>§三-3 / §六-1</td></tr>
+<tr><td><strong>8</strong></td><td>动作生效时机</td><td>✅ <strong>立即</strong>（注入点 = §8 主循环第 9 步立项之前）</td><td>§三</td></tr>
+<tr><td><strong>9</strong></td><td>决策来源</td><td>✅ 落地<strong>决策来源接口</strong>（AI 实现 + 玩家实现）；AI 扩张参数<strong>参数化</strong></td><td>§一 / §七</td></tr>
+<tr><td><strong>10</strong></td><td>逐级建造</td><td>✅ 等级数 = 条目数，<strong>一级一条订单</strong>（x1/x5/x10 = 1/5/10 条）</td><td>§四-3</td></tr>
+<tr><td><strong>11</strong></td><td>⬜ <strong>&quot;每秒推进 tick 数&quot;的默认值与倍速档位</strong></td><td>(a) 默认 1 tick/s，档位 ×0/×1/×2/×5；(b) 其他</td><td>§五</td></tr>
+<tr><td><strong>12</strong></td><td>⬜ <strong>&quot;每 N 帧推进一次 tick&quot;的 N</strong></td><td>由第 11 项反算：N = 60 ÷ (tick/秒)</td><td>§五</td></tr>
+<tr><td><strong>13</strong></td><td>⬜ <strong>国家市场聚合函数的位置与只读性护栏</strong></td><td>(a) 新建只读包（无 <code>ledger</code>/<code>book</code> 依赖、只接收值快照）⇒ <strong>编译期</strong>保证不写账；(b) 放进 <code>report</code> 包</td><td>§二 / §七</td></tr>
+<tr><td><strong>14</strong></td><td>⬜ <strong>国家市场占位语义的深度</strong></td><td>(a) 只在契约里声明层级与聚合口径，<strong>不写代码</strong>；(b) 1.1 就落地&quot;单市场聚合视图&quot;（读数与单市场一致）</td><td>§七</td></tr>
+<tr><td><strong>15</strong></td><td>⬜ <strong>&quot;其他&quot;页的完整栏目清单</strong></td><td>已给四类（GDP / 人口 / 阶级比例饼图 / 等等）；候选清单见 §四-4，需<strong>逐项冻结</strong></td><td>§四-4</td></tr>
+<tr><td><strong>16</strong></td><td>⬜ <strong>拆除核销的栏位名与符号口径</strong></td><td>建筑池<strong>允许透支</strong>（<code>step.go:1496</code>）⇒ 负余额核销 = 货币增加。建议统一称&quot;<strong>核销</strong>&quot;并采用<strong>带符号额</strong></td><td>§三-3 / §六-1</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="h3-0-3-对-1-0-的实质影响-登记">0.3 对 1.0 的实质影响（登记）</h2>
+<blockquote>
+<p>§0.2 的裁决不是纯 UI 改动：下列两项<strong>改动了 1.0 的数值路径或判据口径</strong>，须单独登记。</p>
+</blockquote>
+<ol><li><strong>A8 必须开显式例外（拆除核销所致）</strong>。契约 §8.4 :1854 现为 <code>|ΔM − (NewCapital + 诊断注入)| ≤ max(1e-3, 1e-8×货币存量)</code>； 拆除会<strong>销毁货币</strong>，故须改为 <code>ΔM == NewCapital + Infusion − Δ(累计核销)</code>， 并保留&quot;<strong>未申报的货币减少仍然违规</strong>&quot;这一更强的形式（详见 §六-1）。 <strong>收益</strong>：1.0 的 A8 是&quot;构造性恒真&quot;（两侧同源 <code>TotalMoney</code>，判别力 ≈ 0）； 加上申报口径后它能区分&quot;<strong>申报核销</strong>&quot;与&quot;<strong>漏记一条腿</strong>&quot; ⇒ <strong>判别力比 1.0 更强</strong> （该结论的实测依据见 <code>out/review/REVIEW-FINAL.md</code> §3）。</li><li><strong>§4.4 建筑自动缩编保持冻结</strong>（<code>DecayFrozen=true</code>），拆除由<strong>玩家手动</strong>触发。 两者互补；<strong>不得</strong>为了拆除而把 <code>DecayFrozen</code> 翻回 <code>false</code>（那会同时改变 AI 侧行为）。 唯一例外：在<strong>对照审计</strong>中显式注入 <code>DecayFrozen=false</code>（沿用 <code>audit_tasks_test.go:259</code> 的写法）。</li></ol>
+<h2 id="h4-0-4-与-1-0-1-2-2-0-的边界">0.4 与 1.0 / 1.2 / 2.0 的边界</h2>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>关系</th><th>口径</th></tr>
+</thead>
+<tbody>
+<tr><td>与 1.0</td><td><strong>不推翻</strong>。1.1 关闭 UI 后，<code>-ticks 1000</code> 的五个锚点值必须逐位不变（见 §六-1）</td></tr>
+<tr><td>与 1.2</td><td>并列，互不包含。1.1 不实现 1.2 的货币与金融特性；9 个开关保持 1.2 的默认（全关）</td></tr>
+<tr><td>与 2.0</td><td>2.0 的门槛 = ① 进程内并存<strong>多个 <code>State</code> 实例</strong>；② <code>Params</code> 按<strong>作用域拆分</strong>；③ <code>Nation</code> 聚合视图从 1 个市场扩到 N 个</td></tr>
+<tr><td>本版<strong>不做</strong></td><td>多本地市场、库存、地块、国家市场实现、跨市场贸易、关税、货币政策</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="h5-一-版本目标">一、版本目标</h2>
+<p>把&quot;单政府 + 无 UI + 批处理&quot;变成&quot;<strong>玩家作为政府 + HTML 界面 + 逐帧推进</strong>&quot;， <strong>保持 1.0 数值路径逐位不变</strong>。</p>
+<ol><li>现有&quot;控制台 + 批处理&quot;的模拟迁移到<strong>图形窗口</strong>内运行；</li><li>绘制三个主面板（市场 / 建筑列表 / 建造队列）与一个杂类总表页（其他）；</li><li>提供基本可玩操作：调速与暂停、手动建造与拆除、调节 AI 扩张参数；</li><li><strong>落地决策来源接口</strong>，使&quot;玩家接管&quot;与&quot;AI 托管&quot;是同一接口的两个实现——这是 2.0 复市场的结构前提（§0.2-9）。</li></ol>
+<blockquote>
+<p><strong>⚠️ &quot;保持核心模拟逻辑完全不变&quot;须读作</strong>：UI 不改变 §8 主循环的<strong>顺序与算式</strong>。 玩家动作本身<strong>会改变经济结果</strong>（这是玩法），但它必须经由 <code>book</code> 的既有记账腿进入， 不得新增未经声明的货币腿（唯一例外：§三-3 的拆除核销）。</p>
+</blockquote>
+<hr>
+<h2 id="h6-二-数据接口-UI-引擎">二、数据接口（UI ↔ 引擎）</h2>
+<blockquote>
+<p><strong>取数纪律</strong>：UI <strong>不得直接持有 <code>sim</code> 的内部切片</strong>；一律经由一个<strong>只读视图结构</strong>取值。 该结构定义 2.0 的扩展边界（2.0 换的是这个视图，不是每个面板）。</p>
+</blockquote>
+<h3 id="h7-2-1-视图结构-待定名-建议-sim-UiView-或新包-internal-view">2.1 视图结构（⬜ 待定名，建议 <code>sim.UiView</code> 或新包 <code>internal/view</code>）</h3>
+<pre class="code-block"><code>UiView
+  ├─ 标量：Tick / Population / GovCash / GovDebt / GovDebtCap / InvestmentPool /
+  │         Tax / VAT / ConsumeTax / Welfare / PublicWorks / TotalMoney / TotalLevels …
+  ├─ 逐商品：Goods[n]{ Name, Price, Pzero, PriceRatio, Supply, Demand, Margin, Level }
+  ├─ 逐建筑：Buildings[m]{ Name, Level, GovLevel, HireRate, Cash, MarginEMA,
+  │                       ProfitEMA, Category, IsExplicit }
+  ├─ 队列：Orders[k]{ BuildingIndex, Units, Progress, Remaining, Stack, PublicWorks, Acquire }
+  ├─ 人群：Classes[3]{ Population, Cash, Happiness, Wage }
+  └─ 国别：NationView（§0.2-13 定位置）</code></pre>
+<h3 id="h8-2-2-数据来源表-每个界面格子-唯一字段">2.2 数据来源表（<strong>每个界面格子 → 唯一字段</strong>）</h3>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>界面</th><th>显示项</th><th>数据来源</th><th>锚点</th></tr>
+</thead>
+<tbody>
+<tr><td>市场</td><td>商品名 / 现价</td><td><code>Goods[i].Name</code> / 快照 <code>Prices[i]</code></td><td><code>state.go:3208</code></td></tr>
+<tr><td>市场</td><td>相对价（两口径，<strong>必须分开命名</strong>）</td><td><code>PriceRatio[i]</code> = <strong>P/P⁰（当期零利润价）</strong>；相对初始价需另取 <code>Goods[i].Pinit</code></td><td><code>state.go:3209-3211</code></td></tr>
+<tr><td>市场</td><td>生产量</td><td>快照 <code>Supply[i]</code></td><td><code>state.go:3214</code></td></tr>
+<tr><td>市场</td><td>消费（期望消费）量</td><td>快照 <code>Demand[i]</code></td><td><code>state.go:3215</code></td></tr>
+<tr><td>市场</td><td>图例开关状态</td><td>UI 本地状态（不入引擎）</td><td>—</td></tr>
+<tr><td>建筑</td><td>名字 / 类别</td><td><code>Buildings[i].Spec.Name</code> / <code>.Category</code></td><td><code>domain.go:1399+</code></td></tr>
+<tr><td>建筑</td><td>数量（等级）</td><td>快照 <code>Levels[i]</code></td><td><code>state.go:3217</code></td></tr>
+<tr><td>建筑</td><td>扩建中级数</td><td>由 <code>Orders</code> 聚合（<code>Σ Units</code> 未完工部分）</td><td><code>state.go:1195</code></td></tr>
+<tr><td>建筑</td><td>雇佣率</td><td><code>st.Buildings[i].HireRate</code></td><td><code>state.go</code></td></tr>
+<tr><td>建筑</td><td>现金池</td><td><code>st.BuildingCash(i).Balance()</code></td><td><code>state.go:123</code></td></tr>
+<tr><td>建筑</td><td>利润率</td><td>快照 <code>Margins[i]</code>（含补贴）/ <code>ProfitMargins[i]</code>（不含）</td><td><code>state.go:3216</code></td></tr>
+<tr><td>建筑</td><td>原材料不足红字</td><td>短缺状态（由 <code>produce</code> 的配给比或 <code>MarginEMA &lt; 0</code> 推断；⬜ 需指定口径）</td><td><code>produce.go:100-114</code></td></tr>
+<tr><td>队列</td><td>建筑类型</td><td><code>Order.BuildingIndex</code></td><td><code>state.go:149</code></td></tr>
+<tr><td>队列</td><td>已建部分 ÷ 总建造力</td><td><code>Order.Progress</code> ÷ <code>Order.Units × 单级成本</code></td><td><code>state.go:152</code></td></tr>
+<tr><td>队列</td><td>剩余时间</td><td><code>Order.Remaining(buildings)</code> ÷ 当期建造力吞吐</td><td><code>state.go:1140</code></td></tr>
+<tr><td>队列</td><td>页数 / 翻页</td><td>每页 <strong>20</strong> 条（UI 本地分页）</td><td>原件第 21 行</td></tr>
+<tr><td>其他</td><td>人口</td><td><code>cohort.Ledger.TotalPopulation()</code></td><td><code>cohort.go:124</code></td></tr>
+<tr><td>其他</td><td>阶级比例饼图</td><td><code>Σ_{worksite} Pools[w×3+c].Population</code>，按 <code>c</code> 汇总</td><td><code>cohort.go:45-51</code></td></tr>
+<tr><td>其他</td><td>阶级现金</td><td><code>Houses.Account/pool</code> 余额</td><td><code>cohort.go:107-115</code></td></tr>
+<tr><td>其他</td><td>阶级幸福度</td><td>快照 <code>HappinessByClass[3]</code></td><td><code>state.go:3369</code></td></tr>
+<tr><td>其他</td><td>名义 GDP</td><td>快照 <code>SpendNet + CashTotal</code></td><td>§7.1；<code>state.go:3226/3233</code></td></tr>
+<tr><td>其他</td><td>实际增加值 / 指数 / 人均</td><td>快照 <code>ProductAdded</code> / <code>ProductIndex</code> / <code>ProductPerCapita</code></td><td>§7.2；<code>state.go:3324-3332</code></td></tr>
+<tr><td>其他</td><td>债务 / 上限</td><td>快照 <code>GovDebt</code> / <code>GovDebtCap</code></td><td><code>state.go:3245-3247</code></td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>⚠️ 两处必须写明的口径差异</strong>（否则界面一定被误读）：</p>
+<ol><li><strong>&quot;商品相对价格&quot;有两个</strong>：<code>PriceRatio</code> 是 <strong>P/P⁰</strong>（相对<strong>当期</strong>零利润价，会随成本漂移）， 不是&quot;相对初始价格&quot;。原件第 17 行写的是&quot;相对<strong>初始</strong>价格百分比&quot;。两者必须分别命名并标注。</li><li><strong>&quot;市场消费（期望消费）数量&quot;</strong>：1.0 已<strong>删除</strong>&quot;全部工资用于消费&quot;（§0.4 第 15 项）， 且 §5.3 的储蓄渠道默认 <strong>σ_save = 1</strong>（工资结余全额转入投资池）。 所以&quot;消费支出&quot;与&quot;工资总额&quot;差距很大——总表里必须并列显示<strong>工资总额 / 消费支出 / 结余入池</strong>三项。</li></ol>
+</blockquote>
+<hr>
+<h2 id="h9-三-玩家动作">三、玩家动作</h2>
+<blockquote>
+<p>每个动作一行：<strong>前置条件 / 记账腿 / 收敛性 / 生效时机</strong>。 <strong>记账腿一栏必须逐条写死</strong>——这是&quot;玩家 = 政府&quot;能保住 A8 的关键。</p>
+</blockquote>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>#</th><th>动作</th><th>前置条件</th><th>记账腿</th><th>生效时机</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td><strong>建造</strong>（x1/x5/x10）</td><td>显式建筑；不超上限（完工时裁剪）；不绕过 <code>AvailableCash</code></td><td>复用既有 G2 路径：<code>book.PurchasePower</code> + 完工归属</td><td>立即</td></tr>
+<tr><td>2</td><td><strong>置顶</strong></td><td>该订单存在且未被置顶</td><td>无（仅改顺序）</td><td>立即</td></tr>
+<tr><td>3</td><td><strong>拆除</strong></td><td>显式建筑（<code>Produces() &amp;&amp; !IsNonMarket() &amp;&amp; !IsAgent</code>）；仅<strong>政府级</strong></td><td><strong>新增</strong> <code>book.DemolishBurn</code>：借 建筑池余额 / 贷 销毁账户；在途订单取消不退款</td><td>立即</td></tr>
+<tr><td>4</td><td><strong>调速 / 暂停</strong></td><td>—</td><td>无（不改状态）</td><td>立即</td></tr>
+<tr><td>5</td><td><strong>调参</strong></td><td>参数在 §0.2-11 与 §0.2-9 的白名单内</td><td>无</td><td>立即</td></tr>
+<tr><td>6</td><td><strong>查看</strong></td><td>—</td><td>无（只读）</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>§三-1 与 §三-2 的关系</strong>：玩家建造<strong>不绕过现金约束</strong>，仍受 <code>AvailableCash</code> 限制（<code>fiscal.go:230</code>）； &quot;置顶&quot;只改<strong>队列顺序</strong>（优先级：玩家 &gt; §4.2 预警插队 &gt; FIFO）。 <strong>§三-3 的核销</strong>：建筑池允许透支（<code>step.go:1496</code>），故余额可能为负； <strong>负余额核销 = 销毁一笔负债 = 货币总量增加</strong>。建议统一称&quot;<strong>核销</strong>&quot;并采用<strong>带符号额</strong>（§0.2-16）。</p>
+</blockquote>
+<hr>
+<h2 id="h10-四-界面规格">四、界面规格</h2>
+<h3 id="h11-4-1-市场页">4.1 市场页</h3>
+<ul><li>左侧：商品<strong>二级菜单</strong>（含图例开关勾选框）；</li><li>右侧：商品详情 = 名字 / 现价 / 相对价（两口径，见 §二 注）/ 生产量 / 消费量；</li><li>下方两张图：<strong>近期价格变化</strong> 与 <strong>全期价格变化</strong>；</li><li>页面最底：<strong>全商品总价格图</strong>（不同颜色折线），可经二级菜单取消显示。</li></ul>
+<h3 id="h12-4-2-建筑页">4.2 建筑页</h3>
+<ul><li>全部生产建筑（<strong>含自给农场</strong>）+ 详情：名字 / 数量（<strong>含扩建中数量</strong>）/ 雇佣率 / 现金池 / 利润率；</li><li>一旁<strong>建造与拆除</strong>按钮，数量档 <strong>x1 / x5 / x10</strong>；</li><li><strong>原材料不足时</strong>：红色字体 + 字样提示；</li><li>玩家建造的行为规则：<strong>置顶</strong>、除上限外无条件入队（见 §0.1 与 §三）。</li></ul>
+<h3 id="h13-4-3-建造队列页">4.3 建造队列页</h3>
+<ul><li>每页 <strong>20</strong> 条建造请求；左右键翻页并<strong>标注页数</strong>；</li><li>每条：建筑类型 / <strong>已建部分 ÷ 总建造力</strong> / 剩余时间。</li></ul>
+<h3 id="h14-4-4-其他页-杂类总表">4.4 其他页（杂类总表）</h3>
+<blockquote>
+<p>原件只给了四个例子（GDP、人口、阶级比例饼图、等等），⬜ <strong>需要逐项冻结</strong>（§0.2-15）。 下表是<strong>可渲染性已核实的候选清单</strong>（括号内为取数锚点）：</p>
+</blockquote>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>栏目</th><th>形态</th><th>取数</th></tr>
+</thead>
+<tbody>
+<tr><td>名义 GDP（含分项）</td><td>折线 + 表</td><td><code>SpendNet</code>、<code>CashTotal</code>（§7.1）</td></tr>
+<tr><td>实际工农增加值 / 指数 / 人均</td><td>折线</td><td><code>ProductAdded</code>、<code>ProductIndex</code>、<code>ProductPerCapita</code>（§7.2）</td></tr>
+<tr><td>实际增加值分部门（农业 / 工业 / 自给农场）</td><td>堆叠图</td><td><code>ProductAddedAgri</code>、<code>ProductAddedIndustry</code>、<code>ProductSubsistence</code></td></tr>
+<tr><td>人口</td><td>折线</td><td><code>TotalPopulation()</code> / 快照 <code>Population</code></td></tr>
+<tr><td>阶级比例</td><td><strong>饼图</strong></td><td>按 <code>Class</code> 汇总 <code>Pools[].Population</code></td></tr>
+<tr><td>阶级现金池</td><td><strong>饼图 / 堆叠</strong></td><td>各池余额</td></tr>
+<tr><td>阶级幸福度</td><td>折线（3 线）</td><td><code>HappinessByClass[3]</code></td></tr>
+<tr><td>四组满足度</td><td>折线（4 线）</td><td>快照 <code>Sat[4]</code></td></tr>
+<tr><td>政府现金池 vs 债务上限</td><td>双线 + 越界标注</td><td><code>GovCash</code>、<code>GovDebt</code>、<code>GovDebtCap</code></td></tr>
+<tr><td>货币存量与核销累计</td><td>折线</td><td><code>TotalMoney</code>、累计核销（§三-3 新增）</td></tr>
+<tr><td>价格贴边率 / 亏损等级占比</td><td>折线</td><td>A1 / A2 的输入量</td></tr>
+<tr><td>判据看板（A1–A9）</td><td>表</td><td><code>report.Assess</code> 的逐条结果</td></tr>
+<tr><td>储蓄两步 / 投资池</td><td>折线</td><td><code>Saving</code>、<code>SavingInvest</code>、<code>InvestmentPool</code></td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>⚠️ 阶级比例饼图的口径警告</strong>：<code>Ledger.WealthTier</code> 用的是<strong>固定阶级工资带</strong> <code>model.CohortWages{5,10,20}</code> （<code>cohort.go:141</code>），而农业与庄园有<strong>自己的阶级结构</strong>（农民 7 元 / 工程师 10 元）。 故&quot;阶级比例&quot;若按财富档划分，会与工资表口径<strong>不一致</strong>。契约需指定饼图按<strong>哪个维度</strong>切： (a) 固定阶级（<code>Pools[].Class</code>）；(b) 财富档；——⬜ 建议 (a) 并注明其与工资表的差异。</p>
+</blockquote>
+<hr>
+<h2 id="h15-五-时间与确定性">五、时间与确定性</h2>
+<ul><li>渲染 <strong>60 FPS</strong>；逻辑按 <strong>&quot;每秒推进 tick 数&quot;</strong> 驱动（§0.2-11 / §0.2-12）；</li><li><strong>帧与 tick 解耦</strong>：同一参数下，<strong>tick 序列必须与帧率、倍速无关</strong>。 这不是洁癖——本项目刚在 <code>ledger.sortedAccounts()</code> 修好&quot;同二进制逐位一致&quot;， 若让帧直接驱动 tick 就会重新打破该保证（<code>ledger.go:381-394</code>）。</li><li>实现建议：逻辑侧维护<strong>累计时间</strong>（或帧计数）来决定本帧是否 <code>Step()</code>，<strong>不把倍速写进引擎参数</strong>。</li></ul>
+<hr>
+<h2 id="h16-六-验收判据">六、验收判据</h2>
+<p>1.0 有 A1–A9；<strong>1.1 目前一条都没有</strong>。至少需要三类：</p>
+<ol><li><strong>回归</strong>（最高优先级）：关闭 UI 后 <code>-ticks 1000</code> 的五个锚点值逐位不变 —— 人口 <strong>5745609</strong> / 政府 <strong>−67827546</strong> / 资本 <strong>−2771479061</strong> / 投资池 <strong>3033986118</strong> / 税收 <strong>310855</strong> （此五项已由本轮独立复跑验证为 1.0 现状）。</li><li><strong>动作生效</strong>：每个玩家动作有可观测效果。<strong>必须带防空真守卫</strong>——参照现有写法 （如 <code>state_test.go:161</code>、<code>audit_r26_test.go:280</code> 的&quot;若 N tick 内未发生 X ⇒ 断言被空真通过&quot;）。</li><li><strong>不变量</strong>：玩家动作全程 <code>借贷违规 = 0</code>、逐建筑对账残差 = 0； <strong>A8 需按 §三-3 改写为带申报口径的 A8′</strong>（见下）。</li></ol>
+<h3 id="h17-6-1-A8-拆除核销之后">6.1 A8′（拆除核销之后）</h3>
+<p>契约 §8.4 :1854 现为：</p>
+<pre class="code-block"><code>|ΔM − (NewCapital + 诊断注入)| ≤ max(1e-3, 1e-8 × 货币存量)</code></pre>
+<p>1.1 起必须改为：</p>
+<pre class="code-block"><code>ΔM == NewCapital + Infusion − Δ(累计核销)
+并且：未申报的货币减少（残差 &lt; 0 且不属于申报核销）仍然判为违规</code></pre>
+<blockquote>
+<p><strong>这一条同时是收益</strong>：1.0 的 A8 是&quot;构造性恒真&quot;（两侧同源 <code>TotalMoney</code>，判别力≈0）； 加上申报口径后，它能区分&quot;<strong>申报核销</strong>&quot;与&quot;<strong>漏记一条腿</strong>&quot;，<strong>判别力比 1.0 更强</strong>。</p>
+</blockquote>
+<hr>
+<h2 id="h18-七-与-1-0-2-0-的关系">七、与 1.0 / 2.0 的关系</h2>
+<ul><li><strong>不推翻 1.0</strong>：冲突时以 1.0 为准；</li><li><strong>2.0 的门槛</strong>（1.1 只需不阻断）：<ol><li>进程内并存<strong>多个 <code>State</code> 实例</strong>（已核实：<code>sim</code> 无可变包级状态，<code>BuildingSpecs()</code>/<code>DefaultParams()</code> 每次返回新值）；</li><li><code>Params</code> 按<strong>作用域拆分</strong>（市场级：<code>ArableCap</code>/<code>TaxRate</code>/<code>GovInitialShare</code>/… ； 国家或全局级：<code>TicksPerYear</code>/<code>HireAnnual</code>/数值约定）；</li><li><code>Nation</code> 聚合视图从 1 个市场扩到 N 个（§0.2-13 / §0.2-14）；</li></ol></li><li><strong>本版明确不做</strong>：多本地市场、库存、地块、国家市场实现、跨市场贸易、关税、货币政策。</li></ul>
+</main>
+</div>
+</body>
+</html>

@@ -36,14 +36,35 @@ $env:ELECTRON_RUN_AS_NODE = '1'
 # Everything else was merged into them; the originals live in docs/archive/ (not rendered).
 # Source paths are discovered from the filesystem instead of being written as literals:
 # the contract filename contains non-ASCII characters, and this script must stay ASCII-only.
+#
+# R77: the 1.2 development log is now rendered here too. It used to be rendered only by
+# hand, so its HTML silently went stale (it was ~6 KB behind the Markdown and missed the
+# R74/R76/R77 status markers). It is discovered by the '1.2 *' prefix for the same
+# ASCII-only reason as the contract. It is NOT audited against the contract: 1.2 is a
+# development log, not a contract, so only the math-error check applies to it.
+#
+# R99: the 1.1 skeleton (docs/1.1 *) is rendered the same way. It is discovered by the
+# '1.1 *' prefix and, like 1.2, is NOT audited against the contract: it is a discussion
+# skeleton whose pending-item tables are deliberately incomplete, so html_audit would
+# flag placeholders that are expected to be there.
 $docsDir = Join-Path $root 'docs'
 $contractMd = (Get-ChildItem -LiteralPath $docsDir -Filter '*.md' |
                Where-Object { $_.Name -like '1.0 *' } | Select-Object -First 1).FullName
+$devLogMd = (Get-ChildItem -LiteralPath $docsDir -Filter '*.md' |
+             Where-Object { $_.Name -like '1.2 *' } | Select-Object -First 1).FullName
+$skeletonMd = (Get-ChildItem -LiteralPath $docsDir -Filter '*.md' |
+               Where-Object { $_.Name -like '1.1 *' } | Select-Object -First 1).FullName
 $map = @(
     @($contractMd,                        [System.IO.Path]::ChangeExtension($contractMd, '.html')),
     @((Join-Path $docsDir 'ACTIVE.md'),   (Join-Path $docsDir 'ACTIVE.html')),
     @((Join-Path $root 'README.md'),      (Join-Path $root 'README.html'))
 )
+if ($devLogMd) {
+    $map += ,@($devLogMd, [System.IO.Path]::ChangeExtension($devLogMd, '.html'))
+}
+if ($skeletonMd) {
+    $map += ,@($skeletonMd, [System.IO.Path]::ChangeExtension($skeletonMd, '.html'))
+}
 
 $failed = @()
 foreach ($m in $map) {

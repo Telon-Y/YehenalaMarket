@@ -88,7 +88,7 @@ func InvestmentPayGov(amount float64) *Txn {
 // 用户裁决（第 28 轮）："允许收购用投资池余额出资"。
 //
 // 【所有权口径（必须写明）】出资方是投资池，但**新增的私有股权仍记在资本建筑
-//（金融区 / 宅邸庄园）名下**——因为投资池不是所有权主体，它只是"可动用于投资的
+// （金融区 / 宅邸庄园）名下**——因为投资池不是所有权主体，它只是"可动用于投资的
 // 资金"（§4.5.1b）。于是本交易只搬钱，不动股权；股权腿（GovLevel → PrivLevel）
 // 由调用方在同一处同步执行。这与 §4.5.1b 的"谁出资谁拥有"是**有意的例外**：
 // 那里的"出资方"是资本建筑本身，而这里资本建筑没有钱、钱来自居民储蓄。
@@ -110,6 +110,105 @@ func InvestmentInflow(source Account, amount float64) *Txn {
 	return (&Txn{Name: "资本建筑净额入投资池"}).
 		Debit(source, amount).
 		Credit(Investment(), amount)
+}
+
+// ===== 1.2 M8：借贷台账的两条资金腿（2026-09-20 第 40 轮）=====
+
+// SavingsBankLend 是"储蓄银行 → 投资池"的**放贷腿**（1.2 M8.3 的 ①）。
+//
+//	借 储蓄银行   amount
+//	贷 投资池     amount
+//
+// 【为什么钱直接进投资池、而不是先过金融区的现金池】
+// 1.0 实测金融区营运净额**长期为负**；若贷款先进它的池，会被**先拿去补亏损**，
+// 到不了投资池。故 1.2 裁决把资金腿与负债腿**分开**：
+//   - **资金**：储蓄银行 → 投资池（本函数）；
+//   - **负债**：记在金融区头上，但它是**非现金科目**（`fiscal.Capital.Debt` 字段，
+//     见 M8.7 的裁决），**不进账本、不参与借贷相等**。
+//
+// 【货币守恒】本交易借贷相等，故货币总量不变；它只是把储蓄银行手里的钱
+// 搬到投资池（可动用于扩建的资金）。
+func SavingsBankLend(amount float64) *Txn {
+	return (&Txn{Name: "储蓄银行放贷（→ 投资池）"}).
+		Debit(SavingsBank(), amount).
+		Credit(Investment(), amount)
+}
+
+// DebtService 是"金融区 → 储蓄银行"的**还本息腿**（1.2 M8.3 的 ③）。
+//
+//	借 金融区（资本池）   amount
+//	贷 储蓄银行           amount
+//
+// 【资金来源】按 M8.4 裁决："金融区在**入池之前先扣下**本期还款额"——
+// 即调用方从"金融区净额"里先扣掉 amount，再把余额转入投资池。
+// 于是还款**不来自投资池、也不来自政府**（谁借谁还）。
+//
+// 【违约（M8.4.1）】本期付不出的部分**不核销、不加速、不没收**，
+// 而是滚入 `Loan.Outstanding` 并按同一利率继续计息 ⇒ **只过账实付额**。
+func DebtService(amount float64) *Txn {
+	return (&Txn{Name: "金融区还本息（→ 储蓄银行）"}).
+		Debit(Capital(), amount).
+		Credit(SavingsBank(), amount)
+}
+
+// GovDebtInterest 是"**政府债务利息 → 中央银行**"腿（1.2 M5 ①，2026-09-20 第 67 轮裁决）。
+//
+//	借 政府            amount
+//	贷 中央银行         amount
+//
+// 【裁决】M5（第 67 轮）："政府债务计息，**利息付给央行**"。
+// 与 M8.5"四条腿同一利率曲线（年化 5%）"一致——央行是货币当局，
+// 它同时是**造币方**与**政府债务的债权人**。
+//
+// 【政府侧的记账含义】政府的"现金池"允许为负，而"债务"就定义为
+// `max(0, −现金池)`（1.0 §4.5.4）。故**借记政府** = 现金池更负 = **债务增加**；
+// 同时贷记央行 = 央行的现金池实增。即
+//
+//	"政府以举债方式付息，债权人拿到现金"
+//
+// ——借贷两侧都真实变化，**货币总量不变**（它不是创造，只是转移）。
+func GovDebtInterest(amount float64) *Txn {
+	return (&Txn{Name: "政府债务利息（→ 中央银行）"}).
+		Debit(Gov(), amount).
+		Credit(CentralBank(), amount)
+}
+
+// SavingsBankToLabor 是"储蓄银行 → 劳动力"的**利息当期分配腿**（1.2 M8.6 ③）。
+//
+//	借 储蓄银行   amount
+//	贷 人群池[p]  各池按人头分摊
+//
+// 【口径】储蓄银行是劳动力储蓄的代理，故它收的利息按裁决"**当期分配**"给劳动力。
+// 分摊方式与 §5.1 的人群池一致（按池人口），由调用方算好金额传入。
+func SavingsBankToLabor(total float64, credits []Entry) *Txn {
+	t := &Txn{Name: "储蓄银行利息分配（→ 劳动力）"}
+	t.Debit(SavingsBank(), total)
+	for _, c := range credits {
+		t.Credit(c.Account, c.Amount)
+	}
+	return t
+}
+
+// LaborDividendToLabor 是"**劳动力分红池 → 劳动力**"的派发腿（1.2 M4.2）。
+//
+//	借 劳动力分红池   total（各池之和）
+//	贷 人群池[p]       各池按人头分摊额
+//
+// 【与 SavingsBankToLabor 的关系】两者结构相同、只差借方账户——
+// 因为它们表达的是**同一个机制**："统一入口 → 按人头分摊到人群池"
+// （2026-09-20 第 51 轮裁决："统一：在职人口，失业者不参与"）。
+// 分红来自所有权（M4.2），利息来自储蓄银行放贷（M8.6 ③）。
+//
+// 【记账意义】这**不是**转移支付的重新分配，而是把已经贷记给劳动力的钱
+// 从"统一入口"发到各池——货币总量不变，只是持有位置从"劳动力（合计）"
+// 变为"各人群池"。没有它，钱会永久停在分红池里（R75 实测 30.13 亿）。
+func LaborDividendToLabor(total float64, credits []Entry) *Txn {
+	t := &Txn{Name: "劳动力分红派发"}
+	t.Debit(LaborDividend(), total)
+	for _, c := range credits {
+		t.Credit(c.Account, c.Amount)
+	}
+	return t
 }
 
 // Welfare ⑩：政府福利金（**转移支付**，§4.5.8，2026-09-19 第 15 轮裁决）。
@@ -252,6 +351,38 @@ func ProfitAllocate(site int, retain float64, govAmt float64, owner Account, own
 		Credit(Building(site), retain).
 		Credit(Gov(), govAmt).
 		Credit(owner, ownerAmt)
+}
+
+// ProfitAllocateSplit ⑥：利润归属的**两腿所有者**版本（1.2 M4.2）。
+//
+//	借 建筑[site]      retain + govAmt + ownerAmt
+//	贷 建筑[site]      retain
+//	贷 政府            govAmt
+//	贷 owner            ownerAmt − laborAmt
+//	贷 劳动力分红池      laborAmt
+//
+// 【为什么要它】M4.2 的所有权重构把"资本现行的 70% 所有权"转给劳动力，
+// 于是同一笔私人份额纯利要在**资本**与**劳动力**两个主体之间拆开。
+// 三条腿的总和必须**逐位**等于纯利，所以这里**不重新乘比例**，
+// 而是让 owner 腿取 `ownerAmt − laborAmt`（减法而非乘法，与
+// `book.ProfitAllocate` 里"残差归所有者"的理由相同：浮点乘法不满足结合律）。
+//
+// 【默认不生效】调用方仅在 `Params.OwnershipRestructure` 开启时走本函数；
+// 关闭时仍走 `ProfitAllocate`（单腿），故 1.0 逐位不变。
+func ProfitAllocateSplit(
+	site int, retain, govAmt float64,
+	owner Account, ownerAmt float64,
+	laborAmt float64,
+) *Txn {
+	if laborAmt <= 0 {
+		return ProfitAllocate(site, retain, govAmt, owner, ownerAmt)
+	}
+	return (&Txn{Name: "利润归属（资本/劳动力两腿）"}).
+		Debit(Building(site), retain+govAmt+ownerAmt).
+		Credit(Building(site), retain).
+		Credit(Gov(), govAmt).
+		Credit(owner, ownerAmt-laborAmt).
+		Credit(LaborDividend(), laborAmt)
 }
 
 // EquityTransfer ⑨：股权转让（私有化）。

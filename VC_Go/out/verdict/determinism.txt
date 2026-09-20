@@ -1,0 +1,14 @@
+# bit-reproducibility: same command executed 5 times (-ticks 52, defaults, pop 10m, t=0.10)
+  run 1 : tick 52  levels = 84  pop = 10000000  gov_cash = -61065760
+  run 2 : tick 52  levels = 84  pop = 10000000  gov_cash = -61040389
+  run 3 : tick 52  levels = 84  pop = 10000000  gov_cash = -61078528
+  run 4 : tick 52  levels = 84  pop = 10000000  gov_cash = -61039359
+  run 5 : tick 52  levels = 84  pop = 10000000  gov_cash = -61069093
+
+  gov_cash min    = -61078528
+  gov_cash max    = -61039359
+  spread          = 39169
+  relative spread = 0.0642 %
+
+  discrete quantities (levels/pop) across runs: -61065760, -61040389, -61078528, -61039359, -61069093
+  (ACTIVE.md fact 5 claims ~0.01%~0.04% jitter on money with identical discrete quantities)

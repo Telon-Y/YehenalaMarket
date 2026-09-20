@@ -71,10 +71,87 @@ func main() {
 		"§4.1 第 23 轮：建造部门豁免\"利润率 > 10% 就扩建\"，产能改由\"队列深度 ÷ 目标周期\"驱动）。=false 回退旧口径（对照臂）")
 	powerAnchorByQueue := flag.Bool("power-anchor-queue", true,
 		"§3.4 第 23 轮：建造力需求锚 = 在手订单 ÷ 队列目标周期（而不是订单绝对量）。=false 回退旧锚（对照臂）")
+	// ===== 1.2 借贷台账（M8）：默认全关，保证 1.0 基线逐位不变 =====
+	bankEnabled := flag.Bool("bank", false,
+		"1.2 M8 借贷台账总开关（默认 false）：开启后劳动力结余转入**储蓄银行**、储蓄银行放贷给金融区（借 储蓄银行/贷 投资池）、每 tick 在入池前先扣还本息、不足则延期")
+	loanPrincipal := flag.Float64("loan-principal", 500_000, "1.2 M8.1 单笔贷款本金（元，默认 500k）")
+	loanRate := flag.Float64("loan-rate", 0.05, "1.2 M8.1/M5 贷款**年化**利率（默认 5%，无息例外已取消）")
+	loanTerm := flag.Float64("loan-term", 5, "1.2 M8.1 贷款期限（年，默认 5）")
+	loanInterval := flag.Int("loan-interval", 52, "1.2 M8 放贷节奏：每多少 tick 发放一笔新贷款（默认 52 = 每年一笔）")
+	loanFromBalance := flag.Bool("loan-from-balance", false,
+		"1.2 R71 收口(a)：把每期可贷额锚到**储蓄银行余额**（min(余额×比例, 单笔上限)），消除 R70 的 190 倍存贷失衡（默认关闭）")
+	loanBalanceFraction := flag.Float64("loan-balance-fraction", 0.5,
+		"1.2 R71：每期可贷额 ≤ 银行余额 × 本值（默认 0.5，仅在 -loan-from-balance 时生效）")
+	// ===== 1.2 M4.2 所有权重构：默认关闭，保证 1.0 基线逐位不变 =====
+	ownership := flag.Bool("ownership-restructure", false,
+		"1.2 M4.2 所有权重构（默认 false）：私人份额纯利按 资本/劳动力 拆分——政府→资本 30%、资本→劳动力 70%")
+	ownershipCapShare := flag.Float64("ownership-capital-share", 0.30,
+		"1.2 M4.2 重构后资本在私人份额中的占比（默认 0.30 ⇒ 劳动力 0.70）")
+	// ===== 1.2 M7 工资竞标：默认关闭，保证 1.0 基线逐位不变 =====
+	wageBid := flag.Bool("wage-bid", false,
+		"1.2 M7 工资竞标总开关（默认 false）：开启后各场地按**实际人均工资（基准+溢价）降序**配给劳动力，溢价由缺员与利润驱动、按年化速率衰减")
+	wageBidCap := flag.Float64("wage-bid-cap", 0.5, "1.2 M7.2 第 2 步：可竞标资金占剩余利润的比例上限（默认 0.5 = 最高 50%）")
+	wageBidDecay := flag.Float64("wage-bid-decay", 0.05, "1.2 M7.2 裁决②：溢价的**年化**衰减率（默认 5%/年）")
+	wageBidBase := flag.String("wage-bid-base", "profit",
+		"1.2 M7.2 第 2 步 A_i 的计费基数：profit（默认，裁决原文=纯利的 cap 倍）｜wagebill（R68/R92 对照口径=工资总额×利润率）")
+	wageBidMarginCap := flag.Float64("wage-bid-margin-cap", 0,
+		"R92 对照口径：参与抬价的**利润率因子上限**（0=不封顶）。注意 R92 已实测它对峰值溢价**无效**（峰值场地利润率仅 0.0238），保留作已证伪方案的证据")
 	// ===== 2026-09-19 第 24 轮：§6.3 需求篮子的整体缩放 =====
 	basketScale := flag.Float64("basket-scale", 1.0,
 		"§6.3 需求篮子整体系数（默认 1.0 = 契约原表）。调大 ⇒ 每档目标消费量按比例提高、篮子价值向该档工资靠拢，用于检验\"篮子太小导致消费/工资只有 0.2\"这一假设；不改动商品门类")
+	// ===== 1.2 配置档（R80）：一次打开全部 1.2 行为 =====
+	profile12 := flag.Bool("profile12", false,
+		"1.2 配置档：一次性打开全部 1.2 行为（= -bank -loan-from-balance -ownership-restructure -wage-bid）。显式给出的单个开关**优先于**本档。注意：Go 的 flag 不允许点名里带「.」，故名为 profile12 而非 profile-1.2")
+	savingsStock := flag.Bool("savings-stock", false,
+		"1.2 M1 第 3 条：打开储蓄**存量**口径（区分「储蓄账户余额」与「已分配投资」）。默认关闭 ⇒ 1.0 逐位不变")
+	centralBank := flag.Bool("central-bank", false,
+		"1.2 §1.2-5：开启**中央银行 + 金矿**（追加两类建筑）。默认关闭 ⇒ 1.0 逐位不变（场地数会由 15 变 17）")
+	goldPrice := flag.Float64("gold-price", 10_000, "1.2 §1.2-5：黄金的**外生价格**（元/单位，默认 10,000）")
+	moneyPerMint := flag.Float64("money-per-mint", 400_000, "1.2 §1.2-5：每次造币创造的货币量（默认 400,000）")
+	goldPerMint := flag.Float64("gold-per-mint", 20, "1.2 §1.2-5：每多少单位黄金触发一次造币（默认 20）")
+	goldMineLabor := flag.Float64("gold-mine-labor", 5000, "1.2 §1.2-5：金矿每级雇佣人数（默认 5000）")
+	// ===== 1.2 M3/M6 玩家投资接口（默认关闭 = AI 托管）=====
+	investAIOff := flag.Bool("invest-ai-off", false,
+		"1.2 M3/M6：**关闭政府投资 AI**（玩家接管投资方向）。需配合 -invest-manor-share 指定方向；默认不关 = 1.0 的自动口径")
+	investManorShare := flag.Float64("invest-manor-share", -1,
+		"1.2 M3/M6：玩家指定的**庄园栈预算占比** ∈ [0,1]；-1（默认）= 未设定、交回 AI")
+	// ===== 1.2 M5 ① 政府债务计息（默认关闭）=====
+	govDebtInterest := flag.Bool("gov-debt-interest", false,
+		"1.2 M5 ①：给**政府债务**计息（利息付给**中央银行**，第 67 轮裁决）。默认关闭 ⇒ 1.0 的『不计息』")
+	govDebtRate := flag.Float64("gov-debt-rate", 0.05,
+		"1.2 M5 ①：政府债务的**年化**利率（默认 0.05 = M8.5 的统一 5%）")
+	inflationDeflation := flag.Bool("inflation-deflation", false,
+		"1.2 工资平减（第 72 轮裁决）：把消费预算除以**通胀比例**，使通胀不通过预算反馈成需求。默认关闭 ⇒ 1.0 逐位不变")
 	flag.Parse()
+
+	// 【R80】区分"显式设置"与"默认值"：只有 flag.Visit 会报告**命令行上真正出现**的开关。
+	//
+	// 为什么必须这么做：`Profile12` 要打开四个开关，但用户可能想"1.2 但关掉竞标"
+	// 这类单因子对照。若无法区分，`-wage-bid=false` 与"没写"就完全一样，
+	// 于是 profile 会把它覆盖回 true ⇒ 对照做不到。
+	//
+	// 做法：把**命令行上出现过的**那四个开关收进 `*bool` 覆盖指针。
+	// 未出现的保持 nil ⇒ 交给 profile 决定。
+	explicit := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	overrideIfSet := func(name string, v *bool) *bool {
+		if explicit[name] {
+			return v
+		}
+		return nil
+	}
+	optBankOverride := overrideIfSet("bank", bankEnabled)
+	optOwnershipOverride := overrideIfSet("ownership-restructure", ownership)
+	optWageBidOverride := overrideIfSet("wage-bid", wageBid)
+	optLoanOverride := overrideIfSet("loan-from-balance", loanFromBalance)
+	// 【R89】玩家投资方向：只有命令行上**真正出现** `-invest-manor-share` 时才传指针，
+	// 否则传 nil = "未设定、交回 AI"。这与上面四个开关用 `flag.Visit` 的理由相同：
+	// `-invest-manor-share 0`（全给金融）与"没写"是**两个不同的意思**，
+	// 而 flag 的默认值无法区分它们。
+	var optInvestShare *float64
+	if explicit["invest-manor-share"] {
+		optInvestShare = investManorShare
+	}
 
 	out := &strings.Builder{}
 	defer func() { fmt.Print(out.String()) }()
@@ -133,12 +210,42 @@ func main() {
 		ConsumeTaxRate:  consumeTax,
 		WarehouseMarkup: warehouseMarkup,
 		// §5.2 第 22 轮：增雇改按"期望扩招后利润率"
-		NoExpandDilution:    *noExpandDilution,
-		ExpectedMarginFloor: *expandFloor,
-		ExpandPlanHorizon:   *expandHorizon,
-		PowerByQueue:        powerByQueue,
-		PowerAnchorByQueue:  powerAnchorByQueue,
-		BasketScale:         *basketScale,
+		NoExpandDilution:        *noExpandDilution,
+		ExpectedMarginFloor:     *expandFloor,
+		ExpandPlanHorizon:       *expandHorizon,
+		PowerByQueue:            powerByQueue,
+		PowerAnchorByQueue:      powerAnchorByQueue,
+		BankEnabled:             *bankEnabled,
+		LoanPrincipal:           *loanPrincipal,
+		LoanAnnualRate:          *loanRate,
+		LoanTermYears:           *loanTerm,
+		LoanIssueInterval:       *loanInterval,
+		LoanFromBalance:         *loanFromBalance,
+		LoanBalanceFraction:     *loanBalanceFraction,
+		OwnershipRestructure:    *ownership,
+		OwnershipCapitalShare:   *ownershipCapShare,
+		Profile12:               *profile12,
+		SavingsStockTrack:       *savingsStock,
+		CentralBankEnabled:      *centralBank,
+		GoldPrice:               *goldPrice,
+		MoneyPerMint:            *moneyPerMint,
+		GoldPerMint:             *goldPerMint,
+		GoldMineLaborPerLevel:   *goldMineLabor,
+		InvestAIOff:             *investAIOff,
+		InvestManorShare:        optInvestShare,
+		GovDebtInterestEnabled:  *govDebtInterest,
+		GovDebtInterestRate:     *govDebtRate,
+		InflationDeflation:      *inflationDeflation,
+		BankEnabledOverride:     optBankOverride,
+		OwnershipOverride:       optOwnershipOverride,
+		WageBidOverride:         optWageBidOverride,
+		LoanFromBalanceOverride: optLoanOverride,
+		WageBidEnabled:          *wageBid,
+		WageBidCap:              *wageBidCap,
+		WageBidDecay:            *wageBidDecay,
+		WageBidBase:             *wageBidBase,
+		WageBidMarginCap:        *wageBidMarginCap,
+		BasketScale:             *basketScale,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "初始化失败: %v\n", err)
@@ -152,8 +259,8 @@ func main() {
 	// §4.5.1 修订：私有化机制（默认关闭，可用 -privatize 开启）
 	st.Params.PrivatizeEnabled = *privatize
 	// ===== 2026-09-19 第 15 轮裁决的三个政策旋钮 =====
-	st.Params.SavingsRate = *saveRate       // §5.3 工资结余 → 储蓄 → 投资
-	st.Params.WelfareTier = *welfare        // §4.5.8 福利金档位 0–6
+	st.Params.SavingsRate = *saveRate         // §5.3 工资结余 → 储蓄 → 投资
+	st.Params.WelfareTier = *welfare          // §4.5.8 福利金档位 0–6
 	st.Params.PublicWorksShare = *publicWorks // §4.5.8 公共工程支出占税收比例
 
 	fmt.Fprintf(out, "\n--- 开局状态 ---\n")
