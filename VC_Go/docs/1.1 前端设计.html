@@ -148,6 +148,10 @@ a{color:var(--accent)}
 <li><a href="#h21-九-验收补充-在契约-六-之外的界面自检">九、验收补充（在契约 §六 之外的界面自检）</a>
 </li>
 <li><a href="#h22-十-视觉稿-web-mockup-html-与它回报给设计的三个问题">十、视觉稿（web/mockup.html）与它回报给设计的三个问题</a>
+<ol class="sub">
+<li><a href="#h23-10-1-由-V4-定下的两条硬规则-写实现时必须遵守">10.1 由 V4 定下的两条硬规则（写实现时必须遵守）</a></li>
+<li><a href="#h24-10-2-这条-bug-的验证方法-已固化为脚本">10.2 这条 bug 的验证方法（已固化为脚本）</a></li>
+</ol>
 </li>
 </ol></nav>
 <main>
@@ -322,12 +326,37 @@ web/                          ← 纯静态，可直接 file:// 打开
 <tr><td>V1</td><td><strong>flex 子项被压缩</strong></td><td>一级菜单 <code>&lt;nav&gt;</code> 在 flex 行里宽度被压缩，<code>市场</code> 竖排成&quot;市/场&quot;</td><td>侧栏必须写 <code>flex:0 0 200px</code> + <code>white-space:nowrap</code>。<strong>这类问题读规格发现不了</strong></td></tr>
 <tr><td>V2</td><td><strong>视口高度耦合</strong></td><td>容器用 <code>height:100vh</code> 时，内容只占视口高度，页面下方留大片空白</td><td>主区应 <code>flex:1 1 auto; min-height:0</code>，<code>.page.on{min-height:100%}</code> —— 对任何嵌入/截图视口都正确</td></tr>
 <tr><td>V3</td><td><strong>假数据会自带&quot;台阶&quot;</strong></td><td>价格序列用硬阈值分段（<code>i &gt; 0.45N</code> 起加通胀）⇒ 图上出现不自然的折角</td><td>假数据也必须用<strong>平滑过渡</strong>（smoothstep）；否则会被误读成模型特征</td></tr>
+<tr><td><strong>V4</strong></td><td><strong>比例尺随隐藏变化（严重）</strong></td><td>图表 y 轴范围按<strong>当前可见</strong>序列计算 ⇒ 取消/开启序列会改变比例尺，同样的数据被映射成不同斜率；表现为&quot;<strong>反复切换后图越来越陡</strong>&quot;。数据一个字节都没变</td><td><strong>轴范围只由全量数据算一次，隐藏序列时冻结</strong>（Grafana 的既定做法）。见下方规则</td></tr>
 </tbody>
 </table>
 </div>
 <blockquote>
 <p><strong>V3 尤其值得记住</strong>：视觉稿的假数据如果&quot;看起来像机制&quot;，评审时就会把演示瑕疵当成模型行为。 故契约 §四 的&quot;不显示仓库纯利&quot;之外，建议再加一条：<strong>假数据不得制造模型不存在的形态</strong>。</p>
 </blockquote>
+<h3 id="h23-10-1-由-V4-定下的两条硬规则-写实现时必须遵守">10.1 由 V4 定下的两条硬规则（写实现时必须遵守）</h3>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>规则</th><th>内容</th><th>为什么</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>R-scale</strong></td><td><strong>轴范围不得依赖可见性</strong>。范围由<strong>全量数据</strong>算一次；隐藏某条序列<strong>只移除该条线的像素</strong>，不动网格、不动刻度、不动坐标映射</td><td>否则&quot;隐藏一条线&quot;会被读成&quot;剩下的线变陡了&quot;——<strong>这是误导，不是缩放</strong>。若将来要提供&quot;聚焦模式&quot;，必须做成<strong>显式开关</strong>并提示轴已变，不能因隐藏而隐式发生</td></tr>
+<tr><td><strong>R-zero</strong></td><td>防零除必须用<strong>相对量</strong>：`mx = mn + (</td><td>mn</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="h24-10-2-这条-bug-的验证方法-已固化为脚本">10.2 这条 bug 的验证方法（已固化为脚本）</h3>
+<p>因为轴刻度是<strong>画在 canvas 上的文字</strong>、无法从 DOM 读出，所以实现里把本次比例尺同时写进 <code>canvas.dataset</code>（<code>data-ymin</code> / <code>data-ymax</code> / <code>data-ticks</code>），自检脚本即可从 <code>--dump-dom</code> 读取：</p>
+<pre class="code-block"><code data-lang="powershell">powershell -ExecutionPolicy Bypass -File tools\verify_scale_freeze.ps1</code></pre>
+<p>它的做法是：对 <code>?hide=</code> 取 0/1/5/9/13 五种隐藏数各 dump 一次 DOM， 比较三个 <code>data-*</code>。<strong>冻结成立当且仅当不同隐藏数下比例尺只有 1 种</strong>。实测输出：</p>
+<pre class="code-block"><code>case       legend-on   ymin   ymax   ticks
+hide-0     14          相同    相同   0.91|30.73|1,039|35,108|1.19e6
+hide-1     13          相同    相同   同上
+hide-5     9           相同    相同   同上
+hide-9     5           相同    相同   同上
+hide-13    1           相同    相同   同上
+distinct scales = 1   RESULT: PASS</code></pre>
+<p>界面结构与截图的常规自检由 <code>tools/mockup_check.ps1</code> 负责（9 条结构断言 + 四页截图）。</p>
 </main>
 </div>
 </body>

@@ -451,10 +451,15 @@ function drawLines(cv, opts){
   const {x,w,h} = setup(cv);
   const padL=54,padR=10,padT=10,padB=22;
   const iw=w-padL-padR, ih=h-padT-padB;
-  const all = opts.lines.flatMap(l=>l.data);
-  let mn=Math.min(...all), mx=Math.max(...all);
+
+  // ① 范围来源：优先用调用方给定的 yRange（由**全量**数据算好）
+  let mn, mx;
+  if(opts.yRange){ mn=opts.yRange[0]; mx=opts.yRange[1]; }
+  else { const all = opts.lines.flatMap(l=>l.data); mn=Math.min(...all); mx=Math.max(...all); }
   if(opts.log){ mn=Math.max(mn,1e-9); }
-  if(mn===mx){ mx=mn+1; }
+  // ② 防零除必须用相对量：绝对值 +1 在天文量级上等于没变（3.13e6 与 3.13e6+1 同像素）
+  if(!(mx>mn)){ mx = mn + (Math.abs(mn)*0.01 + 1); }
+
   const Y = v => {
     if(opts.log){
       const l0=Math.log10(mn), l1=Math.log10(mx);
@@ -467,13 +472,19 @@ function drawLines(cv, opts){
   // 网格 + y 轴刻度
   x.strokeStyle=css('--grid'); x.lineWidth=1;
   x.fillStyle=css('--ink-2'); x.font='12px '+css('--mono');
+  const axisTicks=[];
   for(let k=0;k<=4;k++){
     const v = opts.log ? Math.pow(10, Math.log10(mn)+(Math.log10(mx)-Math.log10(mn))*k/4)
                        : mn+(mx-mn)*k/4;
     const y=Math.round(Y(v))+.5;
     x.beginPath(); x.moveTo(padL,y); x.lineTo(w-padR,y); x.stroke();
     x.textAlign='right'; x.fillText(fmt(v), padL-6, y+4);
+    axisTicks.push(fmt(v));
   }
+  // 本次比例尺写进 data-*：canvas 上的文字无法从 DOM 读出，自检需要它
+  cv.dataset.ymin  = String(mn);
+  cv.dataset.ymax  = String(mx);
+  cv.dataset.ticks = axisTicks.join('|');
   // 基准线
   if(opts.base!==undefined){
     const y=Math.round(Y(opts.base))+.5;
@@ -557,9 +568,20 @@ function selectGood(i){
   me.className = g.m<0?'down':'up';
   document.querySelectorAll('#goodlist .row').forEach((r,k)=>r.classList.toggle('on',k===i));
 }
+// 「全商品总价格图」的比例尺由**全量数据**算一次并冻结。
+// 若按可见序列重算，取消/开启一次就会改变比例尺 ⇒ 同样的数据被映射成不同斜率
+//（表现为「反复切换后图越来越陡」）。数据没变，轴就不该变。
+const ALL_RANGE = (() => {
+  let mn=Infinity, mx=-Infinity;
+  for(const g of GOODS) for(const v of series[g.n]){ if(v<mn)mn=v; if(v>mx)mx=v; }
+  return [mn,mx];
+})();
 function renderAllChart(){
-  drawLines($('#c-all'), {n:N, log:true, lines:GOODS.map(g=>({
-    data:series[g.n], color:g.color, off:hidden.has(g.n), width:1.4 }))});
+  const opts = { n:N, log:true, lines:GOODS.map(g=>({
+    data:series[g.n], color:g.color, off:hidden.has(g.n), width:1.4 })) };
+  // 还有可见序列 ⇒ 冻结在 ALL_RANGE；全部隐藏 ⇒ 不传 range（此时无曲线，轴无所谓）
+  if(GOODS.some(g=>!hidden.has(g.n))) opts.yRange = ALL_RANGE;
+  drawLines($('#c-all'), opts);
 }
 function renderLegend(){
   $('#legend').innerHTML = GOODS.map(g=>{
@@ -639,20 +661,28 @@ function renderOther(){
 
 // ===================== 交互 =====================
 document.querySelectorAll('.nav button').forEach(b=>{
-  b.addEventListener('click',()=>{
-    document.querySelectorAll('.nav button').forEach(x=>x.setAttribute('aria-selected','false'));
-    b.setAttribute('aria-selected','true');
-    document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
-    $('#p-'+b.dataset.page).classList.add('on');
-    redraw();
-  });
+  b.addEventListener('click',()=>{ showPage(b.dataset.page); redraw(); });
 });
-// 深链：web/mockup.html#build / #queue / #other（也便于截图与自检）
+// 切换页面（不触发任何重绘，纯切换；避免与 hidden 状态互相踩）
+function showPage(name){
+  const btn=document.querySelector(`.nav button[data-page="${name}"]`);
+  if(!btn) return false;
+  document.querySelectorAll('.nav button').forEach(x=>x.setAttribute('aria-selected','false'));
+  btn.setAttribute('aria-selected','true');
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
+  const pg=$('#p-'+name); if(pg) pg.classList.add('on');
+  return true;
+}
+// 深链与自检：web/mockup.html#build / #queue / #other；?hide=谷物,织物 预置隐藏项。
+// 顺序很重要：先置隐藏状态，再 showPage，最后统一重绘一次。
 function applyHash(){
+  try{
+    const q=new URLSearchParams(location.search).get('hide');
+    if(q) q.split(',').forEach(n=>{ if(GOODS.some(g=>g.n===n)) hidden.add(n); });
+  }catch(e){}
   const h=(location.hash||'').replace('#','');
-  if(!h) return;
-  const btn=document.querySelector(`.nav button[data-page="${h}"]`);
-  if(btn) btn.click();
+  if(h) showPage(h);
+  redraw();
 }
 window.addEventListener('hashchange',applyHash);
 document.querySelectorAll('.speeds button').forEach(b=>{

@@ -1,0 +1,18 @@
+﻿== 1) rendered structure (from --dump-dom) ==
+PASS  four top-level menus (=4)
+PASS  four pages (=4)
+PASS  14 goods rows (=14)
+PASS  15 building rows (=15)
+PASS  queue rows <= 20 (paged) (=20)
+PASS  9 status-bar chips (=9)
+PASS  7 canvases (=7)
+PASS  queue page label present (=-)
+PASS  negative cash shows arrow (=-)
+
+== 2) screenshots ==
+OK   A-market  203999 bytes
+OK   B-build  128562 bytes
+OK   C-queue  128372 bytes
+OK   D-other  174711 bytes
+
+RESULT: PASS
