@@ -315,10 +315,15 @@ web/                          ← 纯静态，可直接 file:// 或由 -serve �
   mockup.html                 ← 假数据视觉稿（保留：设计评审用）</code></pre>
 <p><strong>约束核对</strong>：无 CDN、无 npm、无网络请求、无构建 —— 由 <code>-serve</code> 提供时双击 <code>index.html</code> 亦可（<code>file://</code> 下读同目录 JSON）。</p>
 <h3 id="h21-8-1-怎么跑起来-已可用">8.1 怎么跑起来（<strong>已可用</strong>）</h3>
+<p><strong>一键启动（推荐）</strong>：</p>
+<pre class="code-block"><code data-lang="powershell">powershell -ExecutionPolicy Bypass -File tools\start.ps1
+# 可选：-Ticks 10000  -Port 8790  -NoBrowser  -ForceExport</code></pre>
+<p>脚本会自动：<strong>① 校验工作区 ② 定位 Go（PATH 或 <code>D:\Code\Go</code>）③ 若数据缺失或 tick 数不符则先导出 ④ 用 <code>-serve-only</code> 秒起只读服务（不重跑仿真）⑤ 轮询到服务就绪后打开浏览器 ⑥ Ctrl+C 时一并停止服务</strong>。 端口被占用时会自动停掉占用进程。</p>
+<p><strong>手动方式</strong>：</p>
 <pre class="code-block"><code data-lang="powershell">Set-Location D:\Code\YehenalaMarket\gosim
 go run ./cmd/market-sim -ticks 1000 -export-dir ..\out\webdata -serve :8787
 # 然后浏览器打开 http://localhost:8787/</code></pre>
-<ul><li><code>-export-dir</code> ⇒ 写 <code>snapshots.jsonl</code>（逐 tick）+ <code>meta.json</code>（商品/建筑名单、参数、判据）。 自动采样：&gt;2000 tick 时按 <code>every</code> 抽样，把行数压到 ~2000（10,000 tick ≈ 5 MB 而非 40 MB）。</li><li><code>-serve</code> ⇒ 只读 HTTP：<code>/data/*</code> 是导出数据，<code>/</code> 是 <code>web/</code>。<strong>不提供任何写接口</strong> （与契约 §0.2-13&quot;国家层不写账&quot;同一纪律）。</li><li><strong>导出与伺服都不写回引擎</strong>，故 1.0 的数值路径与回归锚点不受影响。</li></ul>
+<ul><li><code>-export-dir</code> ⇒ 写 <code>snapshots.jsonl</code>（逐 tick）+ <code>meta.json</code>（商品/建筑名单、参数、判据）。 自动采样：&gt;2000 tick 时按 <code>every</code> 抽样，把行数压到 ~2000（10,000 tick ≈ 5 MB 而非 40 MB）。</li><li><code>-serve</code> ⇒ 只读 HTTP：<code>/data/*</code> 是导出数据，<code>/</code> 是 <code>web/</code>。<strong>不提供任何写接口</strong> （与契约 §0.2-13&quot;国家层不写账&quot;同一纪律）。</li><li><code>-serve-only</code> ⇒ 跳过标定与仿真，直接提供已有数据（启动脚本用它做到秒开）。</li><li><strong>导出与伺服都不写回引擎</strong>，故 1.0 的数值路径与回归锚点不受影响。</li></ul>
 <h3 id="h22-8-2-已实现的看板-真数据">8.2 已实现的看板（真数据）</h3>
 <div class="table-wrap">
 <table>

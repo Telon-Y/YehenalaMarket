@@ -129,6 +129,8 @@ func main() {
 		"1.1：每 N 个 tick 导出一行（0 = 自动：≤2000 tick 全导，否则约为 2000 行）")
 	serveAddr := flag.String("serve", "",
 		"1.1：把这些数据与 web/ 一起用**只读 HTTP** 提供（如 :8787）；空 = 不启服务")
+	serveOnly := flag.Bool("serve-only", false,
+		"1.1：跳过仿真与标定，直接把已存在的 -export-dir 数据用 -serve 提供（用于启动脚本的秒开）")
 	// ===== 1.2 M5 ① 政府债务计息（默认关闭）=====
 	govDebtInterest := flag.Bool("gov-debt-interest", false,
 		"1.2 M5 ①：给**政府债务**计息（利息付给**中央银行**，第 67 轮裁决）。默认关闭 ⇒ 1.0 的『不计息』")
@@ -137,6 +139,25 @@ func main() {
 	inflationDeflation := flag.Bool("inflation-deflation", false,
 		"1.2 工资平减（第 72 轮裁决）：把消费预算除以**通胀比例**，使通胀不通过预算反馈成需求。默认关闭 ⇒ 1.0 逐位不变")
 	flag.Parse()
+
+	// 【1.1 启动脚本用】-serve-only：数据已经导出好了，跳过标定与仿真，直接把
+	// 现成的 JSONL 用只读 HTTP 提供出去。这样启动是**秒级**的（用户不必等仿真）。
+	if *serveOnly {
+		if *serveAddr == "" || *exportDir == "" {
+			fmt.Fprintln(os.Stderr, "-serve-only 需要同时给出 -serve 与 -export-dir")
+			os.Exit(1)
+		}
+		if _, err := os.Stat(filepath.Join(*exportDir, "snapshots.jsonl")); err != nil {
+			fmt.Fprintf(os.Stderr, "-serve-only 找不到 %s（请先不加 -serve-only 跑一次以导出）\n",
+				filepath.Join(*exportDir, "snapshots.jsonl"))
+			os.Exit(1)
+		}
+		if err := serveData(*serveAddr, *exportDir); err != nil {
+			fmt.Fprintf(os.Stderr, "服务失败: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	// 【R80】区分"显式设置"与"默认值"：只有 flag.Visit 会报告**命令行上真正出现**的开关。
 	//
