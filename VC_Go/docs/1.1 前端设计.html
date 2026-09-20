@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>1.1 前端设计（契约的下游产物）</title>
+<style>
+:root{--ink:#1f2328;--ink-2:#57606a;--line:#d8dee4;--bg:#fff;--accent:#0969da;--panel:#f6f8fa}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-size:16px;line-height:1.85;
+  font-family:"Segoe UI","PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,sans-serif}
+.wrap{display:flex;max-width:1400px;margin:0 auto;align-items:flex-start}
+.sidebar{position:sticky;top:0;width:270px;flex:0 0 270px;max-height:100vh;overflow:auto;
+  padding:32px 18px 48px 24px;border-right:1px solid var(--line);font-size:13.5px}
+.sidebar h4{margin:0 0 10px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
+.sidebar ol{list-style:none;margin:0;padding:0}
+.sidebar a{color:var(--ink-2);text-decoration:none;display:block;padding:3px 8px;border-radius:5px;line-height:1.5}
+.sidebar a:hover{background:var(--panel);color:var(--accent)}
+.sidebar .sub{padding-left:14px;font-size:13px}
+main{flex:1 1 auto;min-width:0;padding:40px 48px 90px}
+h1{font-size:30px;line-height:1.3;margin:0 0 6px}
+.doc-meta{color:var(--ink-2);font-size:14px;margin:0 0 34px;padding-bottom:18px;border-bottom:2px solid var(--ink)}
+h2{font-size:22px;margin:44px 0 14px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:30px 0 10px}
+h4{font-size:16px;margin:24px 0 8px}
+/* h5：契约 §4.5.3 用 ##### 写三级子标题（如"交易税的记账口径"）。
+   2026-09-19 修复：此前未定义 h5 样式，浏览器默认会把 h5 渲染成小号粗体，
+   与全文排版不一致；侧栏目录按 h2→h3/h4 两层构建，h5 不进目录（有意）。 */
+h5{font-size:14.5px;margin:20px 0 6px;color:#3a4149;letter-spacing:.01em}
+h5::before{content:"";display:inline-block;width:3px;height:.95em;margin-right:8px;
+  vertical-align:-.08em;background:#c6ccd4;border-radius:2px}
+p{margin:.7em 0}
+ul,ol{margin:.6em 0;padding-left:1.7em}
+li{margin:.3em 0}
+/* 引用块：文档头的"修订记录"与正文注释都用 > 书写，数量多且常整段出现，
+   故采用低调的浅灰底 + 深灰左边框；若用高饱和蓝色会整页发蓝、喧宾夺主。 */
+blockquote{margin:1.1em 0;padding:.7em 1.05em;background:#f7f8fa;
+  border-left:3px solid #c6ccd4;border-radius:0 6px 6px 0;color:#3a4149}
+blockquote p{margin:.3em 0}
+blockquote ul,blockquote ol{margin:.4em 0}
+blockquote strong{color:var(--ink)}
+blockquote ul,blockquote ol{margin:.4em 0}
+code{background:rgba(175,184,193,.2);padding:.15em .38em;border-radius:4px;
+  font-family:Consolas,"Cascadia Mono",Menlo,monospace;font-size:.9em}
+pre.code-block{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+  padding:12px 14px;overflow-x:auto}
+pre.code-block code{background:none;padding:0;font-size:13.5px;line-height:1.6}
+.equation{margin:1.25em 0;padding:.9em 1em;text-align:center;overflow-x:auto;
+  background:linear-gradient(180deg,#fbfcfd,#f6f8fa);border:1px solid var(--line);border-radius:8px}
+.table-wrap{overflow-x:auto;margin:1.2em 0}
+table{border-collapse:collapse;width:100%;font-size:14.5px;line-height:1.65}
+th,td{border-bottom:1px solid var(--line);padding:7px 12px;vertical-align:top}
+thead th{border-bottom:2px solid var(--ink);background:var(--panel);font-weight:600;white-space:nowrap}
+tbody tr:hover{background:#fafbfc}
+.left{text-align:left}.right{text-align:right}.center{text-align:center}
+tbody td.right{font-variant-numeric:tabular-nums}
+/* 数学公式：行内公式必须能在容器内换行，否则 nowrap 会把整段文字撑出视口、
+   右侧内容被硬截断（这是"公式显示异常"的主因，截图可见大批行尾被切掉）。
+   方案：inline-block 让公式整体可换行 + max-width 允许超长公式在其内部横向滚动。 */
+/* ===== 数学排版（配合 VC_Go/tools/mathrender.js 的输出）=====
+   设计要点：
+     · 上下标用标准 <sub>/<sup>，由浏览器原生渲染，不再平铺；
+     · 分式用纵向 flex + 上边框作分数线，可嵌套；
+     · 行内公式允许在容器内换行，避免 nowrap 把整段文字撑出视口。 */
+.math{font-family:"Cambria Math","Latin Modern Math","STIX Two Math",Cambria,"Times New Roman",Georgia,serif;
+  font-size:1.06em;color:#111;line-height:1.5}
+.math-inline{display:inline;white-space:normal}
+.mi{font-style:italic}
+.mn{font-style:normal}
+.mbf{font-weight:700}
+.mbb{font-family:"Cambria Math",Cambria,serif;font-weight:600}
+.mtext{font-family:inherit;font-style:normal}
+.mopname{font-style:normal;font-family:inherit;padding-right:.12em}
+.mo{padding:0 .04em}
+.mscript{white-space:nowrap}
+.msub{font-size:.72em;vertical-align:-.25em;line-height:0}
+.msup{font-size:.72em;vertical-align:.45em;line-height:0}
+/* 分式：纵向堆叠，分子下边框作分数线 */
+.mfrac{display:inline-flex;flex-direction:column;vertical-align:-.45em;text-align:center;
+  margin:0 .18em;line-height:1.15;font-size:.97em}
+.mfrac-d{font-size:1em}
+.mfrac-num{border-bottom:1.1px solid currentColor;padding:0 .3em .06em}
+.mfrac-den{padding:.06em .3em 0}
+/* 根号 */
+.msqrt{white-space:nowrap}
+.msqrt-sym{padding-right:.04em}
+.msqrt-body{border-top:1.1px solid currentColor;padding:.08em .18em 0 .06em}
+.msqrt-deg{font-size:.62em;vertical-align:.7em;margin-right:-.35em}
+/* 自适应括号 */
+.mdelim{font-size:1.15em;line-height:1}
+.mdelim-sm{font-size:1.02em}
+/* cases 环境：左侧表达式、右侧条件。
+   必须 width:auto + 仅按内容占宽，否则 inline-table 会撑满可用宽度，
+   把条件列推到很远、中间留出大片空白（目视即"公式错位"）。 */
+.mcases{display:inline-table;width:auto;vertical-align:middle;border-collapse:collapse;margin:0 .2em}
+.mcases td{border:none;padding:.05em 0 .05em 0;text-align:left;white-space:nowrap}
+.mcases td + td{padding-left:1.6em}
+.mcases tr:first-child td{padding-top:0}
+.mcases tr:last-child td{padding-bottom:0}
+.munknown{background:#fff1f0;border:1px solid #ffa39e;border-radius:3px;padding:0 .2em;color:#a8071a}
+.math-error{background:#fff1f0;border:1px solid #ffa39e;border-radius:4px;padding:0 .3em;color:#a8071a}
+hr{border:none;border-top:1px solid var(--line);margin:2.2em 0}
+a{color:var(--accent)}
+.doc-note{background:#fffbe6;border:1px solid #ffe58f;border-radius:8px;padding:.7em 1em;margin:1.1em 0}
+@media(max-width:1000px){.wrap{flex-direction:column}.sidebar{position:static;width:auto;flex:none;border-right:none;border-bottom:1px solid var(--line)}main{padding:24px 18px 60px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="sidebar"><h4>目录</h4>
+<ol>
+<li><a href="#h1-一-设计目标与三条原则">一、设计目标与三条原则</a>
+</li>
+<li><a href="#h2-二-设计令牌-Design-Tokens">二、设计令牌（Design Tokens）</a>
+<ol class="sub">
+<li><a href="#h3-2-1-颜色-与项目现有渲染器同一套-仅扩展数据色">2.1 颜色 —— 与项目现有渲染器同一套，仅扩展数据色</a></li>
+<li><a href="#h4-2-2-排版">2.2 排版</a></li>
+<li><a href="#h5-2-3-间距与圆角">2.3 间距与圆角</a></li>
+</ol>
+</li>
+<li><a href="#h6-三-布局">三、布局</a>
+<ol class="sub">
+<li><a href="#h7-3-1-应用骨架-固定-不滚动整页">3.1 应用骨架（固定，不滚动整页）</a></li>
+<li><a href="#h8-3-2-响应式">3.2 响应式</a></li>
+</ol>
+</li>
+<li><a href="#h9-四-组件规格">四、组件规格</a>
+<ol class="sub">
+<li><a href="#h10-4-1-指标卡-Metric-Card">4.1 指标卡（Metric Card）</a></li>
+<li><a href="#h11-4-2-数据表">4.2 数据表</a></li>
+<li><a href="#h12-4-3-图表-三类-够用即可">4.3 图表（三类，够用即可）</a></li>
+</ol>
+</li>
+<li><a href="#h13-五-四个页面的落地">五、四个页面的落地</a>
+<ol class="sub">
+<li><a href="#h14-5-1-市场页-契约-4-1">5.1 市场页（契约 §4.1）</a></li>
+<li><a href="#h15-5-2-建筑页-契约-4-2">5.2 建筑页（契约 §4.2）</a></li>
+<li><a href="#h16-5-3-建筑队列页-契约-4-3">5.3 建筑队列页（契约 §4.3）</a></li>
+<li><a href="#h17-5-4-其他页-契约-四-4-栏目已冻结">5.4 其他页（契约 §四-4，栏目已冻结）</a></li>
+</ol>
+</li>
+<li><a href="#h18-六-60-FPS-的三条实现义务">六、60 FPS 的三条实现义务</a>
+</li>
+<li><a href="#h19-七-交互与可达性">七、交互与可达性</a>
+</li>
+<li><a href="#h20-八-交付物与文件结构-无构建步骤">八、交付物与文件结构（无构建步骤）</a>
+</li>
+<li><a href="#h21-九-验收补充-在契约-六-之外的界面自检">九、验收补充（在契约 §六 之外的界面自检）</a>
+</li>
+</ol></nav>
+<main>
+<h1>1.1 前端设计（契约的下游产物）</h1>
+<p class="doc-meta">叶赫那拉市场 · 由 <code>1.1 前端设计.md</code> 经 <code>VC_Go/tools/md2html.js</code> 离线编译生成 · 完全自包含，无需联网</p>
+<blockquote>
+<p><strong>性质</strong>：本文件是 <code>docs/1.1 图形化界面.md</code>（<strong>1.1 契约 v1.0</strong>）的<strong>设计规格</strong>， 不是契约本身。<strong>与契约冲突时以契约为准</strong>；本文件只负责把契约的条款落成可实现的界面决策。 <strong>约束（全部来自契约，不得违反）</strong>： ① 技术栈 = <strong>HTML，自包含</strong>（无 CDN、无 npm、无网络请求、无构建步骤）； ② 字体 = 根目录 <code>MingChinese.ttf</code>，字号 <strong>20</strong>（经 <code>@font-face</code> 加载）； ③ 渲染 <strong>60 FPS</strong>，逻辑<strong>默认 1 tick/s</strong>、档位 ×0/×1/×2/×5，<code>N = 60 ÷ (tick/秒)</code>； ④ 四个一级菜单：<strong>市场 / 建筑 / 建筑队列 / 其他</strong>； ⑤ 队列页<strong>每页 20 条</strong>；拆除核销<strong>带符号额</strong>；玩家动作<strong>立即生效</strong>。</p>
+</blockquote>
+<hr>
+<h2 id="h1-一-设计目标与三条原则">一、设计目标与三条原则</h2>
+<p><strong>目标</strong>：兼顾<strong>好看</strong>（一眼看出系统在往哪走）与<strong>实用</strong>（每个格子都能追到唯一字段）。</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>#</th><th>原则</th><th>为什么（来自本项目的实测教训）</th></tr>
+</thead>
+<tbody>
+<tr><td>P1</td><td><strong>同一屏内必须有&quot;名义 vs 实际&quot;对照</strong></td><td>1.0 长跑实测：价格指数 ×9.9e4、名义货币 3.2e7、名义 GDP 2.6e13，而居民实际货币余额从 6.7e6 掉到 319。<strong>只看名义会把恶性通胀读成高速增长</strong></td></tr>
+<tr><td>P2</td><td><strong>状态色必须区分&quot;健康/告警/越界&quot;，且不能只靠颜色</strong></td><td>A2 的 ±450% 上限恒真、A6 靠增长豁免短路——<strong>判据本身会撒谎，界面必须把原始量摆在前面</strong>（贴边率、亏损占比、债务÷上限、实际增加值斜率）</td></tr>
+<tr><td>P3</td><td><strong>不做假数据、不做占位图表</strong></td><td>契约 §0.2d 已载明&quot;不得显示仓库纯利&quot;（份额按设计固定为 0）。空数据要<strong>显式写&quot;无数据&quot;</strong>，不能用平线假装</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="h2-二-设计令牌-Design-Tokens">二、设计令牌（Design Tokens）</h2>
+<h3 id="h3-2-1-颜色-与项目现有渲染器同一套-仅扩展数据色">2.1 颜色 —— 与项目现有渲染器<strong>同一套</strong>，仅扩展数据色</h3>
+<p>现有 <code>tools/md2html.js</code> 已定义：<code>--ink:#1f2328</code> / <code>--ink-2:#57606a</code> / <code>--line:#d8dee4</code> / <code>--bg:#fff</code> / <code>--accent:#0969da</code> / <code>--panel:#f6f8fa</code>。<strong>新前端沿用这六个</strong>，保证&quot;文档与界面是同一个产品&quot;。</p>
+<p>扩展的<strong>数据色</strong>（仅用于图表，不用于文字正文）：</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>令牌</th><th>亮色</th><th>用途</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--up</code></td><td><code>#1a7f37</code></td><td>增长/正利润（与 <code>--accent</code> 区分，避免&quot;链接色=数据色&quot;）</td></tr>
+<tr><td><code>--down</code></td><td><code>#cf222e</code></td><td>收缩/负利润/越界</td></tr>
+<tr><td><code>--warn</code></td><td><code>#9a6700</code></td><td>接近阈值（如债务÷上限 ∈ [0.8, 1.0)）</td></tr>
+<tr><td><code>--neutral</code></td><td><code>#8250df</code></td><td>中性基准线（如 <code>P/P⁰ = 1</code>、指数基期 = 1）</td></tr>
+<tr><td><code>--grid</code></td><td><code>#eaeef2</code></td><td>网格线</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>图表分类色（14 商品固定顺序，不随排序变化）</strong>：使用一组<strong>色相分散且明度接近</strong>的 8 色循环， <strong>同一商品在所有图表中恒为同一色</strong>——这是 P0 要求，否则跨图对照会失效。</p>
+<h3 id="h4-2-2-排版">2.2 排版</h3>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>项</th><th>值</th><th>依据</th></tr>
+</thead>
+<tbody>
+<tr><td>正文字体</td><td><code>@font-face</code> 加载 <code>MingChinese.ttf</code> → 回退 <code>&quot;Segoe UI&quot;,&quot;Microsoft YaHei&quot;,sans-serif</code></td><td>契约 §0.2-2</td></tr>
+<tr><td>正文/表格字号</td><td><strong>20px</strong>（契约指定）；<strong>紧凑表格可降至 16px</strong>并标注为&quot;网格用小号&quot;</td><td>契约要求 20；但 14 商品 × 8 列的表在 1080p 下必须允许小号</td></tr>
+<tr><td>等宽数字</td><td><code>font-variant-numeric: tabular-nums</code></td><td>数值列必须能上下对齐，否则 60 FPS 下会抖动</td></tr>
+<tr><td>字重</td><td>400 正文 / 600 标题</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p>⚠ <strong>字体体积</strong>：<code>MingChinese.ttf</code> <strong>24.4 MB</strong>，全量 CJK。首次加载会有可感延迟。 处理方式（二选一，<strong>不违反&quot;自包含&quot;</strong>）：① 直接加载并在页面上显示加载进度； ② 用字体子集化工具裁到本项目用得到的字符集（界面文案 + 商品名 + 建筑名，估计 &lt; 200 KB）。 <strong>建议②</strong>，但<strong>子集化后的文件必须一并入库</strong>，否则不满足&quot;自包含&quot;。</p>
+</blockquote>
+<h3 id="h5-2-3-间距与圆角">2.3 间距与圆角</h3>
+<p><code>--gap: 12px</code> · <code>--gap-lg: 20px</code> · <code>--radius: 8px</code>（与渲染器的 8px 圆角一致）。 <strong>情报密度优先</strong>：本界面是仪表盘而非营销页，区块间距取 12/20 两档，不做大留白。</p>
+<hr>
+<h2 id="h6-三-布局">三、布局</h2>
+<h3 id="h7-3-1-应用骨架-固定-不滚动整页">3.1 应用骨架（固定，不滚动整页）</h3>
+<pre class="code-block"><code>┌──────────────────────────────────────────────────────────────┐
+│ 顶栏：市场名 │ tick │ 速度 ×0 ×1 ×2 ×5 │ ⏸/▶ │ 货币存量 │ 告警灯 │  ← 48px 固定
+├────────────┬─────────────────────────────────────────────────┤
+│            │                                                  │
+│ 一级菜单   │   内容区（各页自己滚，整页不滚）                  │
+│ 市场       │                                                  │
+│ 建筑       │                                                  │
+│ 建筑队列   │                                                  │
+│ 其他       │                                                  │
+│            │                                                  │
+│ ← 200px    │   ← 自适应                                     │
+├────────────┴─────────────────────────────────────────────────┤
+│ 状态栏：借贷违规 │ 逐建筑对账残差 │ 核销累计 │ 判据 A1–A9 摘要   │  ← 32px 固定
+└──────────────────────────────────────────────────────────────┘</code></pre>
+<p><strong>为什么顶栏与状态栏固定</strong>：判据与记账不变量是<strong>每 tick 都在变</strong>的观测量（A8 残差、借贷违规、核销累计）， 藏进子页面就会变成&quot;出问题才去看&quot;。它们必须<strong>常驻可见</strong>。</p>
+<h3 id="h8-3-2-响应式">3.2 响应式</h3>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>宽度</th><th>变化</th></tr>
+</thead>
+<tbody>
+<tr><td>≥ 1600px</td><td>市场页：左侧商品二级菜单 + 右侧详情，底部总图通栏</td></tr>
+<tr><td>1200–1600px</td><td>同上，图表高度由 260 降为 220</td></tr>
+<tr><td>&lt; 1200px</td><td>一级菜单收为<strong>顶部横向标签</strong>；详情与总图<strong>上下堆叠</strong></td></tr>
+<tr><td>&lt; 900px</td><td>表格改为<strong>卡片流</strong>；不追求移动端完整功能</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="h9-四-组件规格">四、组件规格</h2>
+<h3 id="h10-4-1-指标卡-Metric-Card">4.1 指标卡（Metric Card）</h3>
+<p>用于&quot;其他&quot;页的 4 张卡与顶栏。结构：<strong>标签（--ink-2, 16px） / 数值（20px, tabular-nums, 按状态着色） / 副行（环比或占基期比例）</strong>。</p>
+<ul><li><strong>负值必须着色 + 加方向符号</strong>（<code>▼</code>），不能只靠颜色（P2）；</li><li>数值超长时<strong>缩位</strong>（万/亿/万亿），<strong>但悬停显示精确值</strong>。</li></ul>
+<h3 id="h11-4-2-数据表">4.2 数据表</h3>
+<ul><li>表头<strong>吸顶</strong>；数值列<strong>右对齐</strong>；状态列用<strong>色块 + 文字</strong>双重编码；</li><li><strong>排序</strong>：点表头切换升/降；<strong>排序列不改变分类色</strong>（§2.1）；</li><li><strong>行内迷你条</strong>（bar-in-cell）：用于贴边率、亏损占比这类 [0,1] 量，<strong>长度即数值</strong>，比数字更快读出。</li></ul>
+<h3 id="h12-4-3-图表-三类-够用即可">4.3 图表（三类，够用即可）</h3>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>类型</th><th>用在哪</th><th>规格</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>多序列折线</strong></td><td>价格史、GDP 史、人口、幸福度、货币存量</td><td>最多 8 条；<strong>图例可点选隐藏</strong>（契约 §4.1 要求）；基准线（<code>=1</code>、<code>=0</code>）用 <code>--neutral</code> 虚线</td></tr>
+<tr><td><strong>堆叠面积</strong></td><td>实际增加值分部门（农业/工业/自给农场）</td><td>用于看&quot;结构变化&quot;，比三条独立折线清楚</td></tr>
+<tr><td><strong>饼图</strong></td><td>阶级比例、阶级现金池</td><td><strong>仅 2 个</strong>（契约 §四-4 冻结）；&gt; 6 片时改用横向条形</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>坐标轴规则</strong>：价格类<strong>用对数轴</strong>（1.0 实测价格跨 6 个数量级，线性轴会把早期全压成 0）； 金额类<strong>用线性轴但标注缩位单位</strong>；时间轴固定按 tick，<strong>不按帧</strong>（契约 §五）。</p>
+<hr>
+<h2 id="h13-五-四个页面的落地">五、四个页面的落地</h2>
+<h3 id="h14-5-1-市场页-契约-4-1">5.1 市场页（契约 §4.1）</h3>
+<p>左：商品二级菜单（14 项 + <strong>图例开关勾选框</strong>）。右：详情 = 名字 / 现价 / <strong>两个相对价分行</strong> （<code>P/P⁰</code> 与 <code>P/Pinit</code>——契约 §二 明确要求分开命名，不可混为一谈）/ 生产量 / 消费量。 下：<strong>近期图</strong>（末 60 tick）与<strong>全期图</strong>（全程）。 最底：<strong>全商品总价格图</strong>（通栏，各商品固定色，经二级菜单可取消显示）。</p>
+<p><strong>必须加的一格</strong>：详情里要并列 <strong>工资总额 / 消费支出 / 结余入池</strong>。 原因：1.0 已删除&quot;全部工资用于消费&quot;，且 σ_save 默认 1 —— 只看&quot;消费量&quot;会把<strong>储蓄渠道</strong>误读成&quot;没人买东西&quot;。</p>
+<h3 id="h15-5-2-建筑页-契约-4-2">5.2 建筑页（契约 §4.2）</h3>
+<p>全部生产建筑（含自给农场）+ 逐行：名字 / 数量（<strong>含扩建中</strong>）/ 雇佣率 / 现金池 / 利润率， 右侧 x1/x5/x10 的<strong>建造</strong>与<strong>拆除</strong>按钮。</p>
+<ul><li><strong>原材料不足红字</strong>：判据 = <code>produce</code> 的配给比 &lt; 1（契约 §0.5-U2），<strong>不用</strong> <code>MarginEMA &lt; 0</code>；</li><li>现金池<strong>允许为负</strong>（1.0 实测政府池可到 −1.85e12），负值用 <code>--down</code> 且<strong>不得显示为 0</strong>；</li><li>拆除按钮需<strong>二次确认</strong>并显式提示&quot;<strong>资产与货币一并核销、在途订单不退款</strong>&quot;（契约 §0.2-7）。</li></ul>
+<h3 id="h16-5-3-建筑队列页-契约-4-3">5.3 建筑队列页（契约 §4.3）</h3>
+<p>每页 <strong>20</strong> 条，左右键翻页，<strong>标注页数</strong>。每条：建筑类型 / <strong>已建部分 ÷ 总建造力</strong>（进度条）/ 剩余时间。<strong>置顶</strong>按钮仅对玩家可置顶的条目可用（契约 §0.2-6 的优先级：玩家 &gt; 预警插队 &gt; FIFO）。</p>
+<h3 id="h17-5-4-其他页-契约-四-4-栏目已冻结">5.4 其他页（契约 §四-4，<strong>栏目已冻结</strong>）</h3>
+<p>① <strong>4 张指标卡</strong> → ② <strong>8 列市场对照表</strong> → ③ <strong>历史曲线组</strong>。 （参照侧的&quot;物流两栏&quot;<strong>明确不做</strong>——1.1 无库存/运输，归 2.0。）</p>
+<ul><li>硬约束：<strong>不得显示仓库纯利</strong>；</li><li>阶级比例饼图<strong>按固定阶级切</strong>，并在图注注明&quot;与工资表口径的差异&quot;（契约 §四-4）。</li></ul>
+<hr>
+<h2 id="h18-六-60-FPS-的三条实现义务">六、60 FPS 的三条实现义务</h2>
+<ol><li><strong>永不整表重建 DOM</strong>：数据每 tick 变化，但<strong>节点复用</strong>（keyed update）。14 商品 × 8 列 ≈ 112 格， 每 tick 全量 <code>innerHTML</code> 重建会在 ×5 档（12 帧/周期）掉帧。</li><li><strong>图表用一次绘制的 <code>&lt;canvas&gt;</code></strong>，不用 112 个 SVG 节点；仅在数据变化时重绘。 （契约要求&quot;无网络请求&quot;，<code>canvas</code> 是原生能力，不引入依赖。）</li><li><strong>帧与 tick 解耦</strong>：渲染循环 <code>requestAnimationFrame</code> 恒定 60 FPS； <strong>tick 由累计帧数触发</strong>（<code>N = 60 ÷ (tick/秒)</code>）。<strong>绝不让帧率或倍速改变 tick 序列</strong>—— 1.0 刚在 <code>ledger.sortedAccounts()</code> 修好&quot;同二进制逐位一致&quot;，帧驱动 tick 会重新打破它。</li></ol>
+<hr>
+<h2 id="h19-七-交互与可达性">七、交互与可达性</h2>
+<div class="table-wrap">
+<table>
+<thead>
+<tr><th>项</th><th>规格</th></tr>
+</thead>
+<tbody>
+<tr><td>键盘</td><td><code>空格</code> 暂停/继续 · <code>1/2/5</code> 切档 · <code>Tab</code> 一级菜单 · <code>←/→</code> 队列翻页</td></tr>
+<tr><td>悬停</td><td>所有数据点/色块/表格单元格带 <code>title</code> 精确值（沿用渲染器既有做法）</td></tr>
+<tr><td>对比度</td><td>正文与背景 ≥ 4.5:1；<code>--warn</code>/<code>--down</code> <strong>不单独表示状态</strong>（必带图标或文字）</td></tr>
+<tr><td>偏好</td><td>尊重 <code>prefers-reduced-motion</code>：关闭过渡动画</td></tr>
+<tr><td>深色模式</td><td><strong>1.1 不做</strong>（契约未要求；现有渲染器也未做 <code>prefers-color-scheme</code>）。<strong>留待 1.1.x</strong></td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="h20-八-交付物与文件结构-无构建步骤">八、交付物与文件结构（<strong>无构建步骤</strong>）</h2>
+<pre class="code-block"><code>gosim/cmd/market-ui/          ← 可选：Go 侧起本地 HTTP 只读服务（若需实时）
+web/                          ← 纯静态，可直接 file:// 打开
+  index.html                  ← 唯一入口，内嵌 CSS/JS 或引同目录文件
+  app.css                     ← 设计令牌 + 布局 + 组件
+  app.js                      ← 视图绑定 + 渲染循环
+  charts.js                   ← canvas 绘图（折线/堆叠/饼）
+  fonts/                      ← 字体子集（若取 §2.2 方案②）
+  data/                       ← 契约 §二 的只读视图快照（JSON）</code></pre>
+<p><strong>约束核对</strong>：无 CDN、无 npm、无网络请求、无构建 —— 双击 <code>web/index.html</code> 即可打开。 若需要&quot;实时&quot;，由 Go 侧提供<strong>只读</strong>接口（契约 §0.2-13 已定聚合入 <code>report</code> 包）， 前端仍不引入任何第三方库。</p>
+<hr>
+<h2 id="h21-九-验收补充-在契约-六-之外的界面自检">九、验收补充（在契约 §六 之外的界面自检）</h2>
+<ol><li><strong>可溯源性</strong>：随机抽 10 个界面格子，逐个能追到 <code>docs/1.1 图形化界面.md</code> §2.2 的字段锚点；</li><li><strong>不撒谎</strong>：无数据处显示&quot;无数据&quot;；仓库纯利<strong>全局搜索不到</strong>；</li><li><strong>帧率</strong>：×5 档（12 帧/周期）连续 600 周期，帧间隔 p95 ≤ 20ms；</li><li><strong>解耦</strong>：同一参数下<strong>换档位重跑</strong>，tick 序列与 1.0 回归锚点一致（契约 §六-1 的五个值）。</li></ol>
+</main>
+</div>
+</body>
+</html>

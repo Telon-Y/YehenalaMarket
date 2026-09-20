@@ -128,13 +128,13 @@ a{color:var(--accent)}
 </li>
 <li><a href="#h10-0-4-与-1-0-1-2-2-0-的边界">0.4 与 1.0 / 1.2 / 2.0 的边界</a>
 </li>
-<li><a href="#h11-0-5-实现层未定项-不在-0-2-登记表内-实现前需定">0.5 实现层未定项（不在 §0.2 登记表内，实现前需定）</a>
+<li><a href="#h11-0-5-实现层口径-已定-2026-09-20">0.5 实现层口径（已定，2026-09-20）</a>
 </li>
 <li><a href="#h12-一-版本目标">一、版本目标</a>
 </li>
 <li><a href="#h13-二-数据接口-UI-引擎">二、数据接口（UI ↔ 引擎）</a>
 <ol class="sub">
-<li><a href="#h14-2-1-视图结构-待定名-建议-sim-UiView-或新包-internal-view">2.1 视图结构（⬜ 待定名，建议 sim.UiView 或新包 internal/view）</a></li>
+<li><a href="#h14-2-1-视图结构-internal-view-0-5-U1">2.1 视图结构（internal/view，§0.5-U1）</a></li>
 <li><a href="#h15-2-2-数据来源表-每个界面格子-唯一字段">2.2 数据来源表（每个界面格子 → 唯一字段）</a></li>
 </ol>
 </li>
@@ -162,8 +162,8 @@ a{color:var(--accent)}
 <h1>1.1 市场、建筑列表、建造图形化界面</h1>
 <p class="doc-meta">叶赫那拉市场 · 由 <code>1.1 图形化界面.md</code> 经 <code>VC_Go/tools/md2html.js</code> 离线编译生成 · 完全自包含，无需联网</p>
 <blockquote>
-<p>## ⚠️ 本文件的状态（v0.1 骨架 · 不是契约）</p>
-<ul><li><strong>性质</strong>：这是<strong>讨论阶段的结构模板</strong>。已裁决项已写死，未定项以 <code>⬜ 待补</code> 标出， 并集中登记在 <strong>§0.2</strong>。<strong>在 §0.2 清空之前，本文件不具备契约效力。</strong></li><li><strong>不推翻 1.0</strong>：<strong>1.0 的实现与数值不可被本文件推翻。</strong> 两者冲突时一律以 1.0 为准 （<code>docs/1.0 生产与市场模拟.md</code>）。</li><li><strong>本文与 1.2 的关系</strong>：<code>docs/1.2 货币与金融.md</code> 是并列的开发日志（未完成）； 1.1 只负责<strong>图形界面 + 玩家作为政府</strong>，不实现 1.2 的货币与金融特性。</li><li><strong>来源</strong>：用户提供的 <code>1.1 市场、建筑列表、建造图形化界面.docx</code>（18,466 字节）。 原文是<strong>同名 C++ 程序的开发日志</strong>，仅作参考；机械转换件见 <code>out/review/1.1-docx-converted.md</code>（只读，未改原件）。</li><li><strong>章节号约定</strong>：本文沿用 1.0 的 <code>§0.1 / §0.2 / §0.3 / §0.4 / §0.5</code> 体例 （口径 / 已裁决 / 待裁决登记 / 实现状态），与 <code>docs/ACTIVE.md</code> 的登记方式一致。</li></ul>
+<p>## ✅ 本文件的状态（<strong>契约 · v1.0</strong>，2026-09-20 转正）</p>
+<ul><li><strong>性质</strong>：<strong>1.1 的契约</strong>。<strong>§0.2 的 16 项登记已全部裁决</strong>、§0.5 的 4 项实现层口径已定案、 §四 的界面栏目已冻结 ⇒ <strong>本文件已具备契约效力</strong>。</li><li><strong>不推翻 1.0</strong>：<strong>1.0 的实现与数值不可被本文件推翻。</strong> 两者冲突时一律以 1.0 为准 （<code>docs/1.0 生产与市场模拟.md</code>）。<strong>1.1 唯一改动 1.0 判据之处是 A8′</strong>（见 §0.3 与 §六-1）。</li><li><strong>本文与 1.2 的关系</strong>：<code>docs/1.2 货币与金融.md</code> 是并列的开发日志（未完成）； 1.1 只负责<strong>图形界面 + 玩家作为政府</strong>，不实现 1.2 的货币与金融特性。</li><li><strong>来源</strong>：用户提供的 <code>1.1 市场、建筑列表、建造图形化界面.docx</code>（18,466 字节）。 机械转换件见 <code>out/review/1.1-docx-converted.md</code>（只读，未改原件）。 <strong>与原件的有意偏离</strong>（时间档位、栏目构成、命名）已逐条登记在 §0.2b / §0.2d。</li><li><strong>章节号约定</strong>：沿用 1.0 的 <code>§0.x</code> 体例（口径 / 登记处 / 边界 / 实现层），与 <code>docs/ACTIVE.md</code> 一致。</li><li><strong>转正依据</strong>：待裁决项清零（§0.2 十六项 + §0.5 四项）；界面栏目冻结（§四）； 验收判据就位（§六，含回归锚点与 A8′）。</li><li><strong>下游产物</strong>：界面设计与实现规格见 <strong><code>docs/1.1 前端设计.md</code></strong>（设计令牌 / 布局 / 组件 / 图表 / 60 FPS 义务）。<strong>它不是契约</strong>；与本文冲突时以本文为准。</li></ul>
 </blockquote>
 <hr>
 <h2 id="h1-0-1-口径速查-1-1-现行">0.1 口径速查（1.1 现行）</h2>
@@ -231,7 +231,7 @@ a{color:var(--accent)}
 <p>原 <strong>§0.2</strong> 的第 <strong>11 / 12 / 13 / 16</strong> 项已裁决并生效。<strong>§0.2 表保留原文备查</strong>（不改写，便于追溯）。</p>
 <p>| 项 | 原编号 | 裁决 | |----|--------|------| | 时间推进速率 | 11 | <strong>默认 1 tick/s；档位 ×0（暂停）/ ×1 / ×2 / ×5</strong> | | 每周期帧数 | 12 | <strong>由第 11 项反算：<code>N = 60 ÷ (tick/秒)</code></strong> ⇒ ×1 = <strong>60 帧/周期</strong>、×2 = <strong>30</strong>、×5 = <strong>12</strong>；×0 = 不推进 | | 国家市场聚合的位置 | 13 | <strong>(b) 放进 <code>report</code> 包</strong>（该包已依赖 <code>sim</code> + <code>model</code>，且同为&quot;只读取值 / 报告&quot;职责） | | 拆除核销的栏位名与符号 | 16 | <strong>统一称&quot;核销&quot;，采用带符号额</strong>（负余额核销 = 减少负债；见 §三-3 与 §六-1） |</p>
 <p><strong>⚠️ 与原件的一处有意偏离（必须登记）</strong>：原件第 23 行写&quot;x1/x2/x5 对应 <strong>20/10/4 帧</strong> 每周期&quot;。 按 ×1 = 1 tick/s 反算应为 <strong>60/30/12</strong>。即 <strong>×1 由 3 周期/秒降为 1 周期/秒</strong>， 倍速上限由 15 周期/秒降为 <strong>5 周期/秒</strong>。这是本次裁决的<strong>显式结果，不是笔误</strong>； 若你本意是保留原件的节奏（×1 即 3 周期/秒），则第 11 项应改为&quot;默认 3 tick/s&quot;。</p>
-<p><strong>仍待裁决（原 §0.2 第 14 / 15 项）</strong>：国家市场占位语义的深度、&quot;其他&quot;页的完整栏目清单。 二者你均记为&quot;参照 C++ 版本&quot;，<strong>待澄清&quot;参照&quot;的口径后再落地</strong>（见下）。</p>
+<p><strong>原 §0.2 第 14 / 15 项已裁决</strong>（国家市场占位语义的深度、&quot;其他&quot;页的完整栏目清单）， 参照结论与落成的 Go 条款见 <strong>§0.2d</strong>；界面栏目冻结见 <strong>§四-4</strong>。</p>
 </blockquote>
 <h2 id="h4-0-2c-关于-参照-的口径-已裁决-取乙">0.2c 关于&quot;参照&quot;的口径（<strong>已裁决：取乙</strong>）</h2>
 <p>第 14 / 15 项的裁决写的是&quot;参照 C++ 版本&quot;。<strong>已裁决取「乙」</strong>：先做<strong>一次性提取</strong>， 把结论落成 Go 条款；<strong>本文件不出现另一个仓库的路径</strong>，两个仓库不产生依赖。</p>
@@ -267,7 +267,7 @@ a{color:var(--accent)}
 <tbody>
 <tr><td>年化 GDP</td><td><code>SpendNet + CashTotal</code>，按 52 周折算</td></tr>
 <tr><td>本周 GDP</td><td>同上，不折算；<strong>负值时用告警色</strong></td></tr>
-<tr><td>总产出价值</td><td>§7.2 实际口径的 <code>GrossProduct</code>（或名义产出，⬜ 命名时二选一并注明）</td></tr>
+<tr><td>总产出价值</td><td>§7.2 实际口径的 <code>GrossProduct</code>，<strong>并列显示名义值</strong>（§0.5-U3）</td></tr>
 <tr><td>中间投入</td><td><code>ProductInput</code></td></tr>
 </tbody>
 </table>
@@ -322,18 +322,18 @@ a{color:var(--accent)}
 </table>
 </div>
 <hr>
-<h2 id="h11-0-5-实现层未定项-不在-0-2-登记表内-实现前需定">0.5 实现层未定项（<strong>不在 §0.2 登记表内</strong>，实现前需定）</h2>
-<p>§0.2 的 16 项已全部裁决，但<strong>写实现前仍有 4 处口径空缺</strong>。它们属&quot;实现细节&quot;， 故不占登记表编号，集中列此，<strong>发现即补</strong>：</p>
+<h2 id="h11-0-5-实现层口径-已定-2026-09-20">0.5 实现层口径（<strong>已定</strong>，2026-09-20）</h2>
+<p>§0.2 的 16 项已全部裁决；下列 4 处是实现前必须定的口径，现已定案：</p>
 <div class="table-wrap">
 <table>
 <thead>
-<tr><th>#</th><th>缺口</th><th>候选</th><th>建议</th></tr>
+<tr><th>#</th><th>口径</th><th><strong>已定</strong></th><th>理由</th></tr>
 </thead>
 <tbody>
-<tr><td>U1</td><td><strong>UI 只读视图结构的名字与位置</strong></td><td>(a) <code>sim.UiView</code>；(b) 新包 <code>internal/view</code></td><td><strong>(b)</strong>：视图结构会同时服务报告与 UI，放在 <code>sim</code> 内会让 UI 反向依赖引擎内部类型</td></tr>
-<tr><td>U2</td><td><strong>建筑页&quot;原材料不足红字&quot;的判据</strong></td><td>(a) <code>produce</code> 的配给比 &lt; 1；(b) <code>MarginEMA &lt; 0</code>（<code>produce.go:100-114</code>）</td><td><strong>(a)</strong>：语义精确（就是缺料），(b) 会把&quot;亏损&quot;误报成&quot;缺料&quot;</td></tr>
-<tr><td>U3</td><td><strong>&quot;其他&quot;页&quot;总产出价值&quot;卡片的口径</strong></td><td>(a) 实际口径 <code>GrossProduct</code>（固定 <span class="math math-inline"><i class="mi">P</i><sub class="msub"><i class="mi">r</i><i class="mi">e</i><i class="mi">f</i></sub></span>）；(b) 名义产出</td><td><strong>(a) 并并列显示名义值</strong>：1.0 §7.2 的教训是&quot;只看名义会把通胀读成增长&quot;</td></tr>
-<tr><td>U4</td><td><strong>1.1 的验收判据是否含&quot;数值路径逐位不变&quot;</strong></td><td>(a) 含（§六-1 的五个锚点）；(b) 只做功能判据</td><td><strong>(a)</strong>：这是&quot;1.1 不改数值路径&quot;唯一的机检手段</td></tr>
+<tr><td><strong>U1</strong></td><td>UI 只读视图结构的位置</td><td><strong>新包 <code>internal/view</code></strong></td><td>视图结构同时服务报告与 UI；放在 <code>sim</code> 内会让 UI 反向依赖引擎内部类型</td></tr>
+<tr><td><strong>U2</strong></td><td>建筑页&quot;原材料不足红字&quot;的判据</td><td><strong><code>produce</code> 的配给比 &lt; 1</strong>（<code>produce.go:100-114</code>）</td><td>语义精确（就是缺料）；用 <code>MarginEMA &lt; 0</code> 会把&quot;亏损&quot;误报成&quot;缺料&quot;</td></tr>
+<tr><td><strong>U3</strong></td><td>&quot;其他&quot;页&quot;总产出价值&quot;卡片的口径</td><td><strong>实际口径 <code>GrossProduct</code>，并并列显示名义值</strong></td><td>1.0 §7.2 的教训：只看名义会把通胀读成增长</td></tr>
+<tr><td><strong>U4</strong></td><td>1.1 验收是否含&quot;数值路径逐位不变&quot;</td><td><strong>含</strong>（§六-1 的五个锚点）</td><td>这是&quot;1.1 不改数值路径&quot;唯一的机检手段</td></tr>
 </tbody>
 </table>
 </div>
@@ -349,7 +349,7 @@ a{color:var(--accent)}
 <blockquote>
 <p><strong>取数纪律</strong>：UI <strong>不得直接持有 <code>sim</code> 的内部切片</strong>；一律经由一个<strong>只读视图结构</strong>取值。 该结构定义 2.0 的扩展边界（2.0 换的是这个视图，不是每个面板）。</p>
 </blockquote>
-<h3 id="h14-2-1-视图结构-待定名-建议-sim-UiView-或新包-internal-view">2.1 视图结构（⬜ 待定名，建议 <code>sim.UiView</code> 或新包 <code>internal/view</code>）</h3>
+<h3 id="h14-2-1-视图结构-internal-view-0-5-U1">2.1 视图结构（<code>internal/view</code>，§0.5-U1）</h3>
 <pre class="code-block"><code>UiView
   ├─ 标量：Tick / Population / GovCash / GovDebt / GovDebtCap / InvestmentPool /
   │         Tax / VAT / ConsumeTax / Welfare / PublicWorks / TotalMoney / TotalLevels …
@@ -377,7 +377,7 @@ a{color:var(--accent)}
 <tr><td>建筑</td><td>雇佣率</td><td><code>st.Buildings[i].HireRate</code></td><td><code>state.go</code></td></tr>
 <tr><td>建筑</td><td>现金池</td><td><code>st.BuildingCash(i).Balance()</code></td><td><code>state.go:123</code></td></tr>
 <tr><td>建筑</td><td>利润率</td><td>快照 <code>Margins[i]</code>（含补贴）/ <code>ProfitMargins[i]</code>（不含）</td><td><code>state.go:3216</code></td></tr>
-<tr><td>建筑</td><td>原材料不足红字</td><td>短缺状态（由 <code>produce</code> 的配给比或 <code>MarginEMA &lt; 0</code> 推断；⬜ 需指定口径）</td><td><code>produce.go:100-114</code></td></tr>
+<tr><td>建筑</td><td>原材料不足红字</td><td><code>produce</code> 的配给比 &lt; 1（§0.5-U2）</td><td><code>produce.go:100-114</code></td></tr>
 <tr><td>队列</td><td>建筑类型</td><td><code>Order.BuildingIndex</code></td><td><code>state.go:149</code></td></tr>
 <tr><td>队列</td><td>已建部分 ÷ 总建造力</td><td><code>Order.Progress</code> ÷ <code>Order.Units × 单级成本</code></td><td><code>state.go:152</code></td></tr>
 <tr><td>队列</td><td>剩余时间</td><td><code>Order.Remaining(buildings)</code> ÷ 当期建造力吞吐</td><td><code>state.go:1140</code></td></tr>

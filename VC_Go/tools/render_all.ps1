@@ -43,17 +43,17 @@ $env:ELECTRON_RUN_AS_NODE = '1'
 # ASCII-only reason as the contract. It is NOT audited against the contract: 1.2 is a
 # development log, not a contract, so only the math-error check applies to it.
 #
-# R99: the 1.1 skeleton (docs/1.1 *) is rendered the same way. It is discovered by the
-# '1.1 *' prefix and, like 1.2, is NOT audited against the contract: it is a discussion
-# skeleton whose pending-item tables are deliberately incomplete, so html_audit would
-# flag placeholders that are expected to be there.
+# R99: the 1.1 documents (docs/1.1 *) are rendered the same way: the CONTRACT
+# (1.1 图形化界面.md) and its design spec (1.1 前端设计.md). Both are discovered by the
+# '1.1 *' prefix and, like 1.2, are NOT audited against the 1.0 contract.
 $docsDir = Join-Path $root 'docs'
 $contractMd = (Get-ChildItem -LiteralPath $docsDir -Filter '*.md' |
                Where-Object { $_.Name -like '1.0 *' } | Select-Object -First 1).FullName
 $devLogMd = (Get-ChildItem -LiteralPath $docsDir -Filter '*.md' |
              Where-Object { $_.Name -like '1.2 *' } | Select-Object -First 1).FullName
-$skeletonMd = (Get-ChildItem -LiteralPath $docsDir -Filter '*.md' |
-               Where-Object { $_.Name -like '1.1 *' } | Select-Object -First 1).FullName
+$v11Md = @(Get-ChildItem -LiteralPath $docsDir -Filter '*.md' |
+           Where-Object { $_.Name -like '1.1 *' } | Sort-Object Name |
+           Select-Object -ExpandProperty FullName)
 $map = @(
     @($contractMd,                        [System.IO.Path]::ChangeExtension($contractMd, '.html')),
     @((Join-Path $docsDir 'ACTIVE.md'),   (Join-Path $docsDir 'ACTIVE.html')),
@@ -62,8 +62,8 @@ $map = @(
 if ($devLogMd) {
     $map += ,@($devLogMd, [System.IO.Path]::ChangeExtension($devLogMd, '.html'))
 }
-if ($skeletonMd) {
-    $map += ,@($skeletonMd, [System.IO.Path]::ChangeExtension($skeletonMd, '.html'))
+foreach ($s in $v11Md) {
+    $map += ,@($s, [System.IO.Path]::ChangeExtension($s, '.html'))
 }
 
 $failed = @()
