@@ -696,8 +696,8 @@ func serveData(addr, dataDir string) error {
 		return err
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/data/", http.StripPrefix("/data/", http.FileServer(http.Dir(dataDir))))
-	mux.Handle("/", http.FileServer(http.Dir(webDir)))
+	mux.Handle("/data/", http.StripPrefix("/data/", noCache(http.FileServer(http.Dir(dataDir)))))
+	mux.Handle("/", noCache(http.FileServer(http.Dir(webDir))))
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
@@ -705,6 +705,17 @@ func serveData(addr, dataDir string) error {
 	fmt.Printf("\n--- 1.1 只读服务已启动 ---\n  浏览器打开  http://localhost%s/   （Ctrl+C 结束）\n", addr)
 	fmt.Printf("  数据目录 = %s\n  前端目录 = %s\n", dataDir, webDir)
 	return http.Serve(ln, mux)
+}
+
+// noCache 关掉中间层缓存：界面迭代快，让浏览器每次拿最新的 css/js。
+// （否则会出现"部分更新"的怪状态：HTML 是新的、app.js 还是旧的缓存。）
+func noCache(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
+		h.ServeHTTP(w, r)
+	})
 }
 
 // findWebDir 从当前目录向上找 web/（源码树与发布包两种布局都能命中）。
