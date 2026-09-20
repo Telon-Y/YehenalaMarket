@@ -21,8 +21,7 @@ param(
     [int]$Port  = 8787,
     [int]$ExportEvery = 0,      # 0 = auto (the sim targets ~2000 rows)
     [switch]$NoBrowser,
-    [switch]$ForceExport,
-    [switch]$StartPaused        # open the page paused at tick 1 (for stepping)
+    [switch]$ForceExport
 )
 
 $ErrorActionPreference = 'Stop'
@@ -129,8 +128,6 @@ $srv = Start-Process -FilePath $go `
     -RedirectStandardOutput $log -RedirectStandardError $errLog
 
 $url = "http://localhost:$Port/"
-$pageUrl = $url
-if ($StartPaused) { $pageUrl = $url + '?play=0' }
 $ready = $false
 for ($i = 0; $i -lt 60; $i++) {
     Start-Sleep -Milliseconds 500
@@ -154,7 +151,7 @@ Write-Host ("server ready: {0}" -f $url) -ForegroundColor Green
 # ---- 5) open the browser --------------------------------------------------
 if (-not $NoBrowser) {
     Write-Host 'opening browser...' -ForegroundColor Cyan
-    Start-Process $pageUrl | Out-Null
+    Start-Process $url | Out-Null
 }
 
 # ---- 6) run until interrupted, then clean up ------------------------------

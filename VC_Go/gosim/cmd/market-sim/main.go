@@ -528,16 +528,27 @@ type widget struct {
 
 // meta 是界面需要的静态信息（只导一次）。
 type meta struct {
-	Goods         []string          `json:"goods"`
-	GoodPinit     []float64         `json:"goodPinit"`
-	GoodPcost     []float64         `json:"goodPcost"`
-	Buildings     []string          `json:"buildings"`
-	BuildExplicit []bool            `json:"buildExplicit"` // 可拆：Produces && !IsNonMarket && !IsAgent
+	Goods         []string           `json:"goods"`
+	GoodPinit     []float64          `json:"goodPinit"`
+	GoodPcost     []float64          `json:"goodPcost"`
+	Buildings     []string           `json:"buildings"`
+	BuildExplicit []bool             `json:"buildExplicit"` // 可拆：Produces && !IsNonMarket && !IsAgent
+	LaborPerLevel []float64          `json:"laborPerLevel"` // 每级雇佣人数
+	LaborStructures []laborStructRow `json:"laborStructures"` // 逐建筑的阶级结构（§5 第 20 轮）
 	Params        map[string]float64 `json:"params"`
-	Assess        []assessRow       `json:"assess"`
-	Ticks         int               `json:"ticks"`
-	Every         int               `json:"every"`
-	Note          string            `json:"note"`
+	Assess        []assessRow        `json:"assess"`
+	Ticks         int                `json:"ticks"`
+	Every         int                `json:"every"`
+	Note          string             `json:"note"`
+}
+
+// laborStructRow 是某个建筑的阶级结构。**界面必须用它算阶级占比**，
+// 不得写死 75/20/5 —— 农业与庄园的"工程师"档其实是农民（7 元），
+// 而各建筑的占比也可能随版本变化（§5 第 20 轮把农业单列）。
+type laborStructRow struct {
+	Name   string     `json:"name"`
+	Shares [3]float64 `json:"shares"`
+	Wages  [3]float64 `json:"wages"`
 }
 
 type assessRow struct {
@@ -635,11 +646,16 @@ func exportSnapshots(dir string, snaps []*sim.Snapshot, goods []model.Good, st *
 	}
 	bnames := make([]string, 0, nB)
 	bexp := make([]bool, 0, nB)
+	laborPer := make([]float64, 0, nB)
+	laborStr := make([]laborStructRow, 0, nB)
 	for i := 0; i < nB; i++ {
 		sp := st.Buildings[i].Spec
 		bnames = append(bnames, sp.Name)
 		// 可拆 = 显式建筑（产出商品、不是金融区/宅邸庄园、不是消费代理）
 		bexp = append(bexp, sp.Produces() && !sp.IsNonMarket() && !sp.IsAgent)
+		laborPer = append(laborPer, sp.LaborPerLevel)
+		s := sp.StructureOf()
+		laborStr = append(laborStr, laborStructRow{Name: s.Name, Shares: s.Shares, Wages: s.Wages})
 	}
 	rows := make([]assessRow, 0, len(sum.Verdicts))
 	for _, v := range sum.Verdicts {
@@ -648,6 +664,7 @@ func exportSnapshots(dir string, snaps []*sim.Snapshot, goods []model.Good, st *
 	m := meta{
 		Goods: names, GoodPinit: pinit, GoodPcost: pcost,
 		Buildings: bnames, BuildExplicit: bexp,
+		LaborPerLevel: laborPer, LaborStructures: laborStr,
 		Params: map[string]float64{
 			"taxRate": st.Params.TaxRate, "vat": st.Params.VATRate,
 			"consumeTax": st.Params.ConsumeTaxRate, "warehouseMarkup": st.Params.WarehouseMarkup,

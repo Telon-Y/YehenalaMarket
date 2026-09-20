@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>叶赫那拉市场 · 1.1</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <span class="brand">叶赫那拉市场 · 1.1</span>
+  <span class="tick">tick <b id="t-tick">0001</b></span>
+  <div class="speeds" role="group" aria-label="回放速度">
+    <button data-sp="0" aria-pressed="false">⏸</button>
+    <button data-sp="1/8" aria-pressed="false" title="慢速：每 8 个 tick 推进 1 个">×1/8</button>
+    <button data-sp="1" aria-pressed="true">×1</button>
+    <button data-sp="2" aria-pressed="false">×2</button>
+    <button data-sp="5" aria-pressed="false">×5</button>
+    <button id="step-b" title="后退一个 tick（, 键）">◀</button>
+    <button id="step-f" title="前进一个 tick（. 键）">▶</button>
+  </div>
+  <span class="tick" id="t-frames">—</span>
+  <span class="progress"><input id="scrub" type="range" min="0" max="99" value="0" aria-label="进度"></span>
+  <span class="pill"><span class="dot bad" id="t-dot"></span><span id="t-health">无数据</span></span>
+</header>
+
+<div class="body">
+  <nav class="nav" role="tablist">
+    <button role="tab" aria-selected="true" data-page="market">市场</button>
+    <button role="tab" aria-selected="false" data-page="build">建筑</button>
+    <button role="tab" aria-selected="false" data-page="queue">建筑队列</button>
+    <button role="tab" aria-selected="false" data-page="other">其他</button>
+  </nav>
+  <main>
+    <div id="err" class="err" style="display: block;"><b>无法载入数据</b>：getCSS is not defined<br><br>请先导出数据并启动只读服务（在 <code>gosim/</code> 目录下）：<br><code>go run ./cmd/market-sim -ticks 1000 -export-dir ../out/webdata -serve :8787</code><br>然后打开 <code>http://localhost:8787/</code>。</div>
+
+    <section class="page on" id="p-market">
+      <h2 class="pt">市场 <span class="ink2" id="m-sub" style="font-size:16px">（11 个商品）</span></h2>
+      <div class="market">
+        <div class="goodlist" id="goodlist">
+    <div class="row" data-g="0">
+      <input type="checkbox" checked="" data-hide="0">
+      <span class="swatch" style="background:#0969da"></span>
+      <span>谷物</span>
+      <span class="num ink2" style="margin-left:auto" data-px="0">677.99</span>
+    </div>
+    <div class="row" data-g="1">
+      <input type="checkbox" checked="" data-hide="1">
+      <span class="swatch" style="background:#1a7f37"></span>
+      <span>加工食品</span>
+      <span class="num ink2" style="margin-left:auto" data-px="1">1678.34</span>
+    </div>
+    <div class="row" data-g="2">
+      <input type="checkbox" checked="" data-hide="2">
+      <span class="swatch" style="background:#8250df"></span>
+      <span>织物</span>
+      <span class="num ink2" style="margin-left:auto" data-px="2">753.26</span>
+    </div>
+    <div class="row" data-g="3">
+      <input type="checkbox" checked="" data-hide="3">
+      <span class="swatch" style="background:#bf3989"></span>
+      <span>服装</span>
+      <span class="num ink2" style="margin-left:auto" data-px="3">988.76</span>
+    </div>
+    <div class="row" data-g="4">
+      <input type="checkbox" checked="" data-hide="4">
+      <span class="swatch" style="background:#9a6700"></span>
+      <span>高档服装</span>
+      <span class="num ink2" style="margin-left:auto" data-px="4">2160.78</span>
+    </div>
+    <div class="row" data-g="5">
+      <input type="checkbox" checked="" data-hide="5">
+      <span class="swatch" style="background:#57606a"></span>
+      <span>煤</span>
+      <span class="num ink2" style="margin-left:auto" data-px="5">1632.10</span>
+    </div>
+    <div class="row" data-g="6">
+      <input type="checkbox" checked="" data-hide="6">
+      <span class="swatch" style="background:#cf222e"></span>
+      <span>铁</span>
+      <span class="num ink2" style="margin-left:auto" data-px="6">1632.40</span>
+    </div>
+    <div class="row" data-g="7">
+      <input type="checkbox" checked="" data-hide="7">
+      <span class="swatch" style="background:#953800"></span>
+      <span>钢</span>
+      <span class="num ink2" style="margin-left:auto" data-px="7">2558.12</span>
+    </div>
+    <div class="row" data-g="8">
+      <input type="checkbox" checked="" data-hide="8">
+      <span class="swatch" style="background:#116329"></span>
+      <span>工具</span>
+      <span class="num ink2" style="margin-left:auto" data-px="8">1332.22</span>
+    </div>
+    <div class="row" data-g="9">
+      <input type="checkbox" checked="" data-hide="9">
+      <span class="swatch" style="background:#0550ae"></span>
+      <span>住房</span>
+      <span class="num ink2" style="margin-left:auto" data-px="9">1093.70</span>
+    </div>
+    <div class="row" data-g="10">
+      <input type="checkbox" checked="" data-hide="10">
+      <span class="swatch" style="background:#6e7781"></span>
+      <span>建造力</span>
+      <span class="num ink2" style="margin-left:auto" data-px="10">14,013</span>
+    </div></div>
+        <div>
+          <div class="card" style="margin-bottom:var(--gap)">
+            <div style="display:flex;align-items:baseline;gap:14px">
+              <b style="font-size:22px" id="g-name">谷物</b>
+              <span class="ink2" style="font-size:16px">当前价 <b class="num" id="g-price">677.99</b></span>
+              <span class="ink2" style="font-size:16px">利润率 <b id="g-margin" class="up">+20.00%</b></span>
+            </div>
+            <div class="grid2 tight" style="margin-top:12px">
+              <dl class="kv">
+                <dt>相对当期零利润价 P/P⁰</dt><dd id="g-r0">1.200</dd>
+                <dt>相对开局价 P/Pinit</dt><dd id="g-r1">1.000</dd>
+                <dt>市场生产量</dt><dd id="g-sup">2088.80</dd>
+                <dt>市场消费（期望）量</dt><dd id="g-dem">1888.83</dd>
+              </dl>
+              <dl class="kv">
+                <dt>工资总额</dt><dd id="g-wage">2.61e6</dd>
+                <dt>消费支出</dt><dd id="g-spend">757,439</dd>
+                <dt>结余入池</dt><dd id="g-save">1.83e6</dd>
+                <dt>当期零利润价 P⁰</dt><dd id="g-pz">565.00</dd>
+              </dl>
+            </div>
+            <div class="note">
+              <b>两处口径分开显示</b>：<code>P/P⁰</code> 相对<b>当期</b>零利润价（随成本漂移），
+              <code>P/Pinit</code> 才是相对开局价 —— 契约 §二 要求分行，不可混为一谈。<br>
+              并列<b>工资总额 / 消费支出 / 结余入池</b>：1.0 已删除「全部工资用于消费」，
+              且 σ_save 默认 1 ⇒ 只看「消费量」会把储蓄渠道误读成「没人买东西」。
+            </div>
+          </div>
+
+          <div class="grid2" style="margin-bottom:var(--gap)">
+            <div class="canvaswrap">
+              <div class="ct"><span>近期价格变化（以当前 tick 结尾的 60 期窗口）</span><span>对数轴</span></div>
+              <canvas id="c-recent" height="200" width="509" data-ymin="677.9881330744126" data-ymax="1678.344" data-ticks="677.99|850.43|1066.72|1338.03|1678.34"></canvas>
+            </div>
+            <div class="canvaswrap">
+              <div class="ct"><span>全期价格指数（相对开头归一）</span><span>对数轴 · 基期 = 1</span></div>
+              <canvas id="c-full" height="200" width="509" data-ymin="0.7351947116756857" data-ymax="1" data-ticks="0.735|0.794|0.857|0.926|1.00"></canvas>
+            </div>
+          </div>
+
+          <div class="canvaswrap">
+            <div class="ct">
+              <span>全商品总价格图（勾选框控制显示）</span>
+              <label class="freeze"><input type="checkbox" id="freeze" checked=""> 冻结比例尺（隐藏序列不改变轴）</label>
+            </div>
+            <canvas id="c-all" height="260" width="509" data-ymin="368.0821021902412" data-ymax="14013.098721763055" data-ticks="368.08|914.31|2271.12|5641.40|14,013"></canvas>
+            <div class="legend" id="legend"><span class="on" data-lg="0">
+       <i style="background:#0969da"></i>谷物</span><span class="on" data-lg="1">
+       <i style="background:#1a7f37"></i>加工食品</span><span class="on" data-lg="2">
+       <i style="background:#8250df"></i>织物</span><span class="on" data-lg="3">
+       <i style="background:#bf3989"></i>服装</span><span class="on" data-lg="4">
+       <i style="background:#9a6700"></i>高档服装</span><span class="on" data-lg="5">
+       <i style="background:#57606a"></i>煤</span><span class="on" data-lg="6">
+       <i style="background:#cf222e"></i>铁</span><span class="on" data-lg="7">
+       <i style="background:#953800"></i>钢</span><span class="on" data-lg="8">
+       <i style="background:#116329"></i>工具</span><span class="on" data-lg="9">
+       <i style="background:#0550ae"></i>住房</span><span class="on" data-lg="10">
+       <i style="background:#6e7781"></i>建造力</span></div>
+            <div class="note" id="freeze-note"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="page" id="p-build">
+      <h2 class="pt">建筑 <span class="ink2" id="b-sub" style="font-size:16px">（15 类）</span></h2>
+      <div class="card" style="padding:0">
+        <table>
+          <thead><tr><th>建筑</th><th class="r">数量</th><th class="r">雇佣率</th>
+            <th class="r">现金池</th><th class="r">利润率</th><th class="r">状态</th><th class="r">可拆</th></tr></thead>
+          <tbody id="buildbody"><tr>
+      <td>谷物农场</td>
+      <td class="r num">5.00</td>
+      <td class="r num ">—</td>
+      <td class="r num ">—</td>
+      <td class="r num up">+20.00%</td>
+      <td class="r"><span class="tag ok">—</span></td>
+      <td class="r"><span class="tag warn">可拆</span></td>
+    </tr><tr>
+      <td>加工食品厂</td>
+      <td class="r num">5.00</td>
+      <td class="r num ">—</td>
+      <td class="r num ">—</td>
+      <td class="r num up">+20.00%</td>
+      <td class="r"><span class="tag ok">—</span></td>
+      <td class="r"><span class="tag warn">可拆</span></td>
+    </tr><tr>
+      <td>棉花种植园</td>
+      <td class="r num">5.00</td>
+      <td class="r num ">—</td>
+      <td class="r num ">—</td>
+      <td class="r num up">+19.99%</td>
+      <td class="r"><span class="tag ok">—</span></td>
+      <td class="r"><span class="tag warn">可拆</span></td>
+    </tr><tr>
+      <td>服装厂</td>
+      <td class="r num">5.00</td>
+      <td class="r num ">—</td>
+      <td class="r num ">—</td>
+      <td class="r num up">+20.01%</td>
+      <td class="r"><span class="tag ok">—</span></td>
+      <td class="r"><span class="tag warn">可拆</span></td>
+    </tr><tr>
+      <td>高档服装厂</td>
+      <td class="r num">5.00</td>
+      <td class="r num ">—</td>
+      <td class="r num ">—</td>
+      <td class="r num up">+20.00%</td>
+      <td class="r"><span class="tag ok">—</span></td>
+      <td class="r"><span class="tag warn">可拆</span></td>
+    </tr><tr>
+      <td>煤矿</td>
+      <td class="r num">5.00</td>
+      <td class="r num ">—</td>
+      <td class="r num ">—</td>
+      <td class="r num up">+20.00%</td>
+      <td class="r"><span class="tag ok">—</span></td>
+      <td class="r"><span class="tag warn">可拆</span></td>
+    </tr><tr>
+      <td>铁矿</td>
+      <td class="r num">5.00</td>
+      <td class="r num ">—</td>
+      <td class="r num ">—</td>
+      <td class="r num up">+20.02%</td>
+      <td class="r"><span class="tag ok">—</span></td>
+      <td class="r"><span class="tag warn">可拆</span></td>
+    </tr><tr>
+      <td>炼钢厂</td>
+      <td class="r num">5.00</td>
+      <td class="r num ">—</td>
+      <td class="r num ">—</td>
+      <td class="r num up">+20.00%</td>
+      <td class="r"><span class="tag ok">—</span></td>
+      <td class="r"><span class="tag warn">可拆</span></td>
+    </tr><tr>
+      <td>工具厂</td>
+      <td class="r num">5.00</td>
+      <td class="r num ">—</td>
+      <td class="r num ">—</td>
+      <td class="r num up">+20.00%</td>
+      <td class="r"><span class="tag ok">—</span></td>
+      <td class="r"><span class="tag warn">可拆</span></td>
+    </tr><tr>
+      <td>住房</td>
+      <td class="r num">5.00</td>
+      <td class="r num ">—</td>
+      <td class="r num ">—</td>
+      <td class="r num up">+20.00%</td>
+      <td class="r"><span class="tag ok">—</span></td>
+      <td class="r"><span class="tag warn">可拆</span></td>
+    </tr><tr>
+      <td>建造部门</td>
+      <td class="r num">20.00</td>
+      <td class="r num ">—</td>
+      <td class="r num ">—</td>
+      <td class="r num up">+19.99%</td>
+      <td class="r"><span class="tag ok">—</span></td>
+      <td class="r"><span class="tag warn">可拆</span></td>
+    </tr><tr>
+      <td>金融区</td>
+      <td class="r num">3.00</td>
+      <td class="r num ">—</td>
+      <td class="r num ">—</td>
+      <td class="r num down">-10887.21%</td>
+      <td class="r"><span class="tag ok">—</span></td>
+      <td class="r"><span class="tag">不可拆</span></td>
+    </tr><tr>
+      <td>宅邸庄园</td>
+      <td class="r num">50.00</td>
+      <td class="r num ">—</td>
+      <td class="r num ">—</td>
+      <td class="r num ink2">0.00%</td>
+      <td class="r"><span class="tag ok">—</span></td>
+      <td class="r"><span class="tag">不可拆</span></td>
+    </tr><tr>
+      <td>仓库</td>
+      <td class="r num">0.00</td>
+      <td class="r num ">—</td>
+      <td class="r num ">—</td>
+      <td class="r num up">+2.44%</td>
+      <td class="r"><span class="tag ok">—</span></td>
+      <td class="r"><span class="tag">不可拆</span></td>
+    </tr><tr>
+      <td>消费代理</td>
+      <td class="r num">0.00</td>
+      <td class="r num ">—</td>
+      <td class="r num ">—</td>
+      <td class="r num ink2">0.00%</td>
+      <td class="r"><span class="tag ok">—</span></td>
+      <td class="r"><span class="tag">不可拆</span></td>
+    </tr></tbody>
+        </table>
+      </div>
+      <div class="note" id="build-note">数值来自本次运行的<b>末态</b>：<code>snapshots.jsonl</code> 里只有末行带逐建筑 <code>hire</code> 与 <code>cash</code>（1.0 的快照结构未包含这两个向量）；回放到末 tick 前显示「—」。<br><b>现金池允许为负</b>（1.0 实测政府池可到 −1.85e12），负值带 ▼ 且不得显示为 0。</div>
+    </section>
+
+    <section class="page" id="p-queue">
+      <h2 class="pt">建筑队列 <span class="ink2" style="font-size:16px">（每页 20 条，逐级建造）</span></h2>
+      <div class="card" style="padding:0">
+        <table>
+          <thead><tr><th class="r">#</th><th>建筑类型</th><th class="r">目标级数</th>
+            <th class="r">已投入</th><th class="r">剩余需投</th><th>来源</th><th class="r">类型</th></tr></thead>
+          <tbody id="queuebody"><tr><td colspan="7" class="ink2">本期没有等级增长的建筑（无在建订单）</td></tr></tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <button id="q-prev">←</button><span>第 <b id="q-page">1</b> / <b id="q-pages">1</b> 页</span><button id="q-next">→</button>
+        <span style="margin-left:auto">置顶优先级：<b>玩家 &gt; §4.2 预警插队 &gt; FIFO</b>（契约 §0.2-6）</span>
+      </div>
+      <div class="note" id="queue-note">⚠ <b>本表的来源是近似</b>：1.0 的快照结构里没有 <code>Orders</code> 向量，所以队列只能<b>由相邻两期的等级差重建</b>（等级增长 = 在建）。要做成契约 §4.3 要求的「已建部分 ÷ 总建造力 / 剩余时间 / 来源（扩建·收购·公共工程）」，需要在导出侧增加 Orders 向量 —— 这是 1.1 实现阶段的一项明确待办。</div>
+    </section>
+
+    <section class="page" id="p-other">
+      <h2 class="pt">其他 <span class="ink2" style="font-size:16px">（栏目已冻结 · 契约 §四-4）</span></h2>
+      <div class="cards" id="other-cards">
+    <div class="card metric"><div class="label">名义 GDP（52 周折算）</div>
+      <div class="value num">419.96e6</div><div class="sub">§7.1 口径（含各池存量）</div></div>
+    <div class="card metric"><div class="label">名义 GDP（本周）</div>
+      <div class="value num">8.08e6</div>
+      <div class="sub">消费者支出 816,219 + 池存量 7.26e6</div></div>
+    <div class="card metric"><div class="label">实际工农总产值</div>
+      <div class="value num">6.49e6</div>
+      <div class="sub ink2">固定 P_ref（§7.2）· 中间投入 2.13e6</div></div>
+    <div class="card metric"><div class="label">实际工农增加值</div>
+      <div class="value num up">4.36e6</div>
+      <div class="sub">首期 3.13e6 · 指数 1.39</div></div></div>
+      <div class="card" style="padding:0;margin-bottom:var(--gap-lg)">
+        <table>
+          <thead><tr><th>市场</th><th class="r">本周 GDP</th><th class="r">52 周折算</th><th class="r">实际总产值</th>
+            <th class="r">中间投入</th><th class="r">人口</th><th class="r">幸福度</th><th class="r">加权均价</th></tr></thead>
+          <tbody id="marketRow"><tr><td>本地市场 #1</td>
+    <td class="r num">8.08e6</td>
+    <td class="r num">419.96e6</td>
+    <td class="r num">6.49e6</td>
+    <td class="r num ">2.13e6</td>
+    <td class="r num">5.25e6</td>
+    <td class="r num">0.7980</td>
+    <td class="r num">1041.82</td></tr></tbody>
+        </table>
+      </div>
+      <div class="grid2" style="margin-bottom:var(--gap)">
+        <div class="canvaswrap">
+          <div class="ct"><span>名义 GDP vs 实际增加值（双口径必须并列）</span><span>对数轴</span></div>
+          <canvas id="c-gdp" height="220"></canvas>
+          <div class="note">1.0 长跑实测：价格指数 ×9.9e4、名义 GDP 2.6e13，而居民实际货币余额从 6.7e6 掉到 319。
+            <b>只看名义会把恶性通胀读成高速增长</b>。</div>
+        </div>
+        <div class="canvaswrap">
+          <div class="ct"><span>阶级比例（按固定阶级切）</span><span>饼图</span></div>
+          <canvas id="c-pie" height="220"></canvas>
+          <div class="note" id="pie-note">阶级占比取自本次导出的<b>逐建筑劳动结构</b>，不写死 75/20/5（见下方图注更新）。</div>
+        </div>
+      </div>
+      <div class="grid2" style="margin-bottom:var(--gap)">
+        <div class="canvaswrap">
+          <div class="ct"><span>政府现金池 vs 债务上限</span><span>越界即告警</span></div>
+          <canvas id="c-gov" height="200"></canvas>
+        </div>
+        <div class="canvaswrap">
+          <div class="ct"><span>实际增加值 / 指数</span><span>固定 P_ref（§7.2）</span></div>
+          <canvas id="c-real" height="200"></canvas>
+        </div>
+      </div>
+      <div class="canvaswrap">
+        <div class="ct"><span>契约 §8.4 判据（由 report.Assess 在本次运行的末态给出）</span><span id="assess-sum">通过 0 / 1</span></div>
+        <div class="card" style="padding:0;border:0">
+          <table><thead><tr><th>#</th><th>判据</th><th>结果</th><th>实测</th></tr></thead>
+            <tbody id="assessBody"><tr>
+      <td class="num">N/A</td><td>周期不足 200，无法判定</td>
+      <td><span class="tag bad">未通过</span></td>
+      <td class="ink2" style="white-space:normal"></td></tr></tbody></table>
+        </div>
+        <div class="note" id="assess-note">判据由 <code>report.Assess</code> 在本次运行的<b>末态窗口</b>给出，前端不重算。⚠ 依 1.0 的实测校准：A8 构造性恒真、A6 靠增长豁免短路、A4 在平态由浮点符号决定 ⇒ <b>“通过数”不是健康度读数</b>，真正的判别量是 A1 贴边率 / A2 亏损占比 / A7 债务÷上限 / A9 实际增加值斜率。</div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<footer class="statusbar">
+  <span class="chip"><span class="k">判据(末态)</span><span class="v warn" id="s-assess">0 / 1</span></span>
+  <span class="chip"><span class="k">货币守恒ΔM</span><span class="v" id="s-money">—</span></span>
+  <span class="chip"><span class="k">政府债务÷上限</span><span class="v up" id="s-debt">0.000</span></span>
+  <span class="chip"><span class="k">实际增加值指数</span><span class="v" id="s-index">1.00</span></span>
+  <span class="chip"><span class="k">数据</span><span class="v" id="s-src">100 行 / every=1</span></span>
+  <span class="chip" style="margin-left:auto"><span class="k">只读回放 · 不改动引擎</span></span>
+</footer>
+
+<script src="charts.js"></script>
+<script src="app.js"></script>
+
+
+</body></html>

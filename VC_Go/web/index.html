@@ -12,10 +12,13 @@
   <span class="brand">叶赫那拉市场 · 1.1</span>
   <span class="tick">tick <b id="t-tick">—</b></span>
   <div class="speeds" role="group" aria-label="回放速度">
-    <button data-sp="0" aria-pressed="false">⏸ 0</button>
-    <button data-sp="1" aria-pressed="true">×1</button>
-    <button data-sp="2" aria-pressed="false">×2</button>
-    <button data-sp="5" aria-pressed="false">×5</button>
+    <button data-sp="0"   aria-pressed="false">⏸</button>
+    <button data-sp="1/8" aria-pressed="false" title="慢速：每 8 个 tick 推进 1 个">×1/8</button>
+    <button data-sp="1"   aria-pressed="true">×1</button>
+    <button data-sp="2"   aria-pressed="false">×2</button>
+    <button data-sp="5"   aria-pressed="false">×5</button>
+    <button id="step-b" title="后退一个 tick（, 键）">◀</button>
+    <button id="step-f" title="前进一个 tick（. 键）">▶</button>
   </div>
   <span class="tick" id="t-frames">—</span>
   <span class="progress"><input id="scrub" type="range" min="0" max="0" value="0" aria-label="进度"></span>

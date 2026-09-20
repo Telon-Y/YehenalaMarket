@@ -16,10 +16,22 @@ const COLORS = ['#0969da','#1a7f37','#8250df','#bf3989','#9a6700','#57606a','#cf
 
 let META = null, ROWS = [], N = 0;
 let cur = 0;                 // 当前行下标（不是 tick）
-let speed = 1;               // 0 = 暂停
-let acc = 0, lastTs = 0;     // 帧与 tick 解耦用的累计器
+// 播放速度用"每 tick 多少帧"表达（契约 §五：N = 60 ÷ tick/秒）。
+// 新增 1/8×：为"慢速逐步模拟"准备——每 8 个 tick 才推进 1 个，肉眼可以逐步看。
+const SPEEDS = [
+  { key: '0',   label: '⏸', framesPerTick: 0,    rate: 0 },
+  { key: '1/8', label: '×1/8', framesPerTick: 480, rate: 60 / 480 },
+  { key: '1',   label: '×1',   framesPerTick: 60,  rate: 1 },
+  { key: '2',   label: '×2',   framesPerTick: 30,  rate: 2 },
+  { key: '5',   label: '×5',   framesPerTick: 12,  rate: 5 },
+];
+let speedKey = '1';
+let frameAcc = 0, lastTs = 0;   // 帧与 tick 解耦：帧数恒定，tick 按 framesPerTick 推进
 const hidden = new Set();    // 被取消显示的商品名
 let frozenOn = true;
+
+const speedOf = k => SPEEDS.find(s => s.key === k) || SPEEDS[2];
+const isPlaying = () => speedOf(speedKey).framesPerTick > 0;
 
 const fmt = CHART.fmt;
 const num = v => (typeof v === 'number' && isFinite(v)) ? fmt(v) : '—';
@@ -81,15 +93,20 @@ function frame(ts) {
   if (!lastTs) lastTs = ts;
   const dt = Math.min(0.25, (ts - lastTs) / 1000);   // 秒；夹住以避免切标签页后跳变
   lastTs = ts;
-  if (speed > 0 && N > 0) {
-    acc += dt * speed;                                // 契约 §五：1 tick/s × 档位
-    let steps = Math.floor(acc);
-    if (steps > 0) {
-      acc -= steps;
-      cur = Math.min(N - 1, cur + steps);
+  const sp = speedOf(speedKey);
+  if (sp.framesPerTick > 0 && N > 0) {
+    // 关键：tick 的推进量**与帧率无关**（1.0 要求"同二进制同参数逐位一致"；
+    // 让帧直接驱动 tick 会打破它）。这里按"每 tick 帧数"换算，而不是数帧。
+    frameAcc += dt * 60;                          // 本帧折算成 60FPS 的帧数
+    const ticks = Math.floor(frameAcc / sp.framesPerTick);
+    if (ticks > 0) {
+      frameAcc -= ticks * sp.framesPerTick;
+      cur = Math.min(N - 1, cur + ticks);
       renderTick();
-      if (cur >= N - 1) { speed = 0; syncSpeed(); }   // 到末尾自动暂停
+      if (cur >= N - 1) { speedKey = '0'; syncSpeed(); }   // 到末尾自动暂停
     }
+  } else {
+    frameAcc = 0;
   }
   requestAnimationFrame(frame);
 }
@@ -103,6 +120,7 @@ function renderTick() {
   renderBuild(r);
   renderQueue(r);
   renderStatus(r);
+  renderOtherTick(r);     // 逐 tick 变化的图（GDP/实际/债务/饼图）
 }
 
 // ---------------------------------------------------------------- 市场页
@@ -324,14 +342,14 @@ function renderOtherShell() {
     '<b>“通过数”不是健康度读数</b>，真正的判别量是 A1 贴边率 / A2 亏损占比 / A7 债务÷上限 / A9 实际增加值斜率。';
 
   $('#pie-note').innerHTML =
-    '按<b>固定阶级</b>切（本导出未含逐池人口，故按 1.0 §5 的<b>劳动结构</b>推算：' +
-    '城镇 75/20/5、农业 75/20/5（农民代工程师））。' +
-    '⚠ <code>WealthTier</code> 用的是固定工资带 {5,10,20}，与农业结构不一致，图注须注明。';
+    '阶级占比取自本次导出的<b>逐建筑劳动结构</b>，不写死 75/20/5（见下方图注更新）。';
 
   $('#s-assess').textContent = `${pass} / ${A.length}`;
   $('#s-assess').className = 'v ' + (pass >= A.length ? 'up' : 'warn');
-
-  drawGDP(); drawPie(); drawGov(); drawReal();
+}
+// 逐 tick 变化的部分（其他页里会随回放动的图 + 饼图）
+function renderOtherTick(r) {
+  drawGDP(); drawPie(r); drawGov(); drawReal();
 }
 function weightedPrice(r) {
   if (!r.price || !r.supply) return '—';
@@ -369,37 +387,92 @@ function drawGov() {
     ],
   });
 }
-function drawPie() {
-  // 阶级比例：由各期 population × 劳动结构权重推算（导出未含逐池人口）
-  const last = ROWS[N - 1];
-  CHART.pie($('#c-pie'), [
-    { n: '劳工（劳工档）', v: 0.75, color: getCSS('--accent') },
-    { n: '工程师/农民档', v: 0.20, color: getCSS('--up') },
-    { n: '资本家档', v: 0.05, color: getCSS('--neutral') },
-  ]);
-  void last;
+function drawPie(r) {
+  // 阶级比例：用**本次导出里的真实劳动结构**聚合（见 classShares），不写死 75/20/5
+  const cs = classShares(r || ROWS[cur]);
+  const lab = classLabels();
+  const parts = [
+    { n: lab[0], v: cs ? cs.p[0] : 0, color: getCSS('--accent') },
+    { n: lab[1], v: cs ? cs.p[1] : 0, color: getCSS('--up') },
+    { n: lab[2], v: cs ? cs.p[2] : 0, color: getCSS('--neutral') },
+  ];
+  CHART.pie($('#c-pie'), parts);
+  const head = cs ? num(cs.total) : '—';
+  const LS = META.laborStructures || [];
+  const structs = Array.from(new Set(LS.map(s => s.name))).filter(Boolean).join(' · ');
+  $('#pie-note').innerHTML =
+    `本期就业人口（等级 × 每级人数 × 阶级占比）≈ <b>${head}</b> 人。<br>` +
+    `占比取自本次导出的<b>逐建筑劳动结构</b>（${structs}）—— <b>不写死 75/20/5</b>：` +
+    `农业与庄园的中档是<b>农民 7 元</b>，不是工程师 10 元。<br>` +
+    `⚠ 这是"模型派生的就业结构"，与 <code>WealthTier</code> 的固定工资带 {5,10,20} 口径不同，` +
+    `不能与"财富档"混读。`;
 }
-function getCSS(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+// 阶级占比：**按各建筑自己的劳动结构**聚合（§5 第 20 轮），不得写死 75/20/5。
+// 口径：每建筑 headcount = 等级 × 每级雇佣人数；再按该建筑的 Shares 分到三档。
+// 三档是"共同池下标"：0 恒为最低档（劳工 5 元），1 为中档（农业是农民 7 元、
+// 城镇是工程师 10 元），2 为最高档（城镇资本家 20 元、农业/庄园为工程师 10 元）。
+function classShares(r) {
+  const out = [0, 0, 0];
+  const LS = META.laborStructures || [];
+  const per = META.laborPerLevel || [];
+  const lv = r.level || [];
+  for (let j = 0; j < lv.length; j++) {
+    const st = LS[j]; if (!st) continue;
+    const head = (lv[j] || 0) * (per[j] || 0);
+    if (!(head > 0)) continue;
+    for (let c = 0; c < 3; c++) out[c] += head * st.shares[c];
+  }
+  const tot = out[0] + out[1] + out[2];
+  if (!(tot > 0)) return null;
+  return { n: out, p: out.map(v => v / tot), total: tot };
+}
+// 标签由**工资**推断（同一档在不同结构里叫法不同）
+function classLabels() {
+  const LS = META.laborStructures || [];
+  const midName = LS.some(s => s.wages[1] === 7) ? '工程师/农民' : '工程师';
+  const topName = LS.some(s => s.wages[2] === 20) ? '资本家' : '工程师';
+  return ['劳工', midName, topName];
+}
 
 // ---------------------------------------------------------------- 交互
 function syncSpeed() {
-  $$('.speeds button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.sp === speed)));
-  $('#t-frames').textContent = speed === 0 ? '已暂停'
-    : `1 tick / ${(60 / speed).toFixed(0)} 帧`;
+  $$('.speeds button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.sp === speedKey)));
+  const sp = speedOf(speedKey);
+  $('#t-frames').textContent = sp.framesPerTick === 0
+    ? (cur >= N - 1 ? '已到末尾' : '已暂停')
+    : `1 tick / ${sp.framesPerTick} 帧`;
+}
+// 单步：±1 tick（慢速逐步模拟的核心操作）
+function step(d) {
+  speedKey = '0'; frameAcc = 0;
+  cur = Math.max(0, Math.min(N - 1, cur + d));
+  renderTick(); syncSpeed();
 }
 function showPage(name) {
   $$('.nav button').forEach(x => x.setAttribute('aria-selected', String(x.dataset.page === name)));
   $$('.page').forEach(p => p.classList.toggle('on', p.id === 'p-' + name));
 }
 // 深链：#build / #queue / #other（与 web/mockup.html 同一约定）
+// 启动参数：?play=0 打开即暂停在 tick 1（供"慢速逐步模拟"入口使用）
 function hashPage() {
   const h = (location.hash || '').replace('#', '');
   if (h && ['market', 'build', 'queue', 'other'].includes(h)) { showPage(h); redrawAll(); }
 }
+function queryStart() {
+  try {
+    const p = new URLSearchParams(location.search).get('play');
+    if (p === '0') { speedKey = '0'; }
+    const sp = new URLSearchParams(location.search).get('speed');
+    if (sp && SPEEDS.some(s => s.key === sp)) { speedKey = sp; }
+  } catch (e) { }
+}
 function wire() {
   $$('.nav button').forEach(b => b.addEventListener('click', () => { showPage(b.dataset.page); redrawAll(); }));
-  $$('.speeds button').forEach(b => b.addEventListener('click', () => { speed = +b.dataset.sp; acc = 0; syncSpeed(); }));
-  $('#scrub').addEventListener('input', e => { cur = +e.target.value; renderTick(); });
+  $$('.speeds button').forEach(b => b.addEventListener('click', () => { speedKey = b.dataset.sp; frameAcc = 0; syncSpeed(); }));
+  const stepF = $('#step-f'); const stepB = $('#step-b');
+  if (stepF) stepF.addEventListener('click', () => step(1));
+  if (stepB) stepB.addEventListener('click', () => step(-1));
+  $('#scrub').addEventListener('input', e => { speedKey = '0'; cur = +e.target.value; renderTick(); syncSpeed(); });
   $('#goodlist').addEventListener('click', e => {
     const row = e.target.closest('.row'); if (!row) return;
     const idx = +row.dataset.g;
@@ -427,9 +500,11 @@ function wire() {
   $('#q-next').addEventListener('click', () => { qpage++; renderQueue(ROWS[cur]); });
   document.addEventListener('keydown', e => {
     const q = $('#p-queue').classList.contains('on');
-    if (e.key === ' ') { e.preventDefault(); speed = speed === 0 ? 1 : 0; syncSpeed(); }
-    if (e.key === 'ArrowRight') { if (q) { qpage++; renderQueue(ROWS[cur]); } else { cur = Math.min(N - 1, cur + 1); renderTick(); } }
-    if (e.key === 'ArrowLeft')  { if (q) { qpage = Math.max(0, qpage - 1); renderQueue(ROWS[cur]); } else { cur = Math.max(0, cur - 1); renderTick(); } }
+    if (e.key === ' ') { e.preventDefault(); speedKey = speedOf(speedKey).framesPerTick > 0 ? '0' : '1'; syncSpeed(); }
+    if (e.key === '.') { e.preventDefault(); step(1); }      // 单步前进
+    if (e.key === ',') { e.preventDefault(); step(-1); }     // 单步后退
+    if (e.key === 'ArrowRight') { if (q) { qpage++; renderQueue(ROWS[cur]); } else step(1); }
+    if (e.key === 'ArrowLeft')  { if (q) { qpage = Math.max(0, qpage - 1); renderQueue(ROWS[cur]); } else step(-1); }
   });
   window.addEventListener('resize', () => { clearTimeout(window.__rz); window.__rz = setTimeout(redrawAll, 140); });
   window.addEventListener('hashchange', hashPage);
@@ -448,7 +523,7 @@ function updateFreezeNote() {
 function redrawAll() {
   if (!N) return;
   renderMarketTick(ROWS[cur]);
-  renderOtherShell();
+  renderOtherTick(ROWS[cur]);   // 只重画会动的图；静态表不重建（契约 §六：节点复用）
   renderStatus(ROWS[cur]);
 }
 
@@ -464,10 +539,11 @@ function redrawAll() {
     $('#scrub').max = String(N - 1);
     $('#s-src').textContent = `${N} 行 / every=${META.every}`;
     wire();
-    renderOtherShell();
+    renderOtherShell();      // 静态部分（指标卡/对照表/判据表）只在启动时建一次
     cur = 0;
-    renderTick();
+    renderTick();            // 逐 tick 部分（含 renderOtherTick）
     updateFreezeNote();
+    queryStart();            // ?play=0 / ?speed=1/8
     syncSpeed();
     hashPage();          // 深链：最后执行，确保数据已就绪
     requestAnimationFrame(frame);
