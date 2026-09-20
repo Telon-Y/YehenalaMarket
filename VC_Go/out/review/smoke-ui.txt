@@ -1,0 +1,18 @@
+﻿== 1) page did not fall into the error state ==
+PASS  error banner NOT shown (=False)
+
+== 2) data actually bound ==
+PASS  tick is a number (=0001)
+PASS  market price is a number (=677.99)
+PASS  data source line filled (=300 行 / every=1)
+PASS  speed indicator filled (=1 tick / 60 帧)
+PASS  all goods show a numeric price (11/11) (=677.99|1678.34|753.26|988.76|2160.78|1632.10|1632.40|2558.12|1332.22|1093.70|14,013)
+PASS  criteria table filled (9) (=9)
+
+== 3) canvas scale attributes present (charts really drew) ==
+PASS  every canvas wrote its scale (=6)
+
+== 4) browser console / page errors ==
+PASS  no JS errors in console (=)
+
+RESULT: PASS

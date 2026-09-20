@@ -53,12 +53,20 @@ const CHART = (() => {
     return [mn, mx];
   }
 
+  // 按**可见窗口**取数据：窗口从 0 起，长度 len。
+  // 为什么这么做：以前用全量数据算范围，而图只画到光标处 ⇒ 早期数据被压在底部、
+  // 拖动进度条时"图看着变了"。改成窗口口径后，x 轴与 y 轴都只覆盖看得见的部分。
+  function windowed(data, len) { return data.slice(0, Math.max(1, Math.min(data.length, len))); }
+
   /**
    * 画多序列折线。
-   * opts: { n, lines:[{data,color,width,label,off}], log, base, yRange, freeze:true|false, xLabel }
-   * R-scale 规则：
-   *   freeze=true（默认） ⇒ 首次用**全量**数据定范围并缓存；隐藏序列只少画线，轴不动。
-   *   freeze=false        ⇒ 'auto' 模式：按可见序列拟合（旧行为，仅作对照）。
+   * opts: { n, lines:[{data,color,width,label,off}], log, base, yRange, freeze, xLabel }
+   *
+   * R-scale（两条规则，都要守住）：
+   *   ① **轴范围不得依赖可见性**：范围由**未隐藏的全体序列**算出（不是只算画出来的那些），
+   *      故"隐藏某条线"只移除它的像素，不动网格与刻度。
+   *   ② **范围跟随可见窗口**：同一窗口下范围**冻结**（WeakMap 缓存），拖动进度条时保持一致；
+   *      窗口长度变化（回放推进）时才重算一次。用 opts.windowKey 标识窗口（一般传当前下标）。
    */
   function lines(cv, opts) {
     const { x, w, h } = setup(cv);
@@ -67,13 +75,16 @@ const CHART = (() => {
 
     let mn, mx;
     const freeze = opts.freeze !== false;
+    const key = (opts.windowKey !== undefined) ? String(opts.windowKey) : '';
     if (opts.yRange) { mn = opts.yRange[0]; mx = opts.yRange[1]; }
-    else if (freeze && frozen.has(cv)) { const r = frozen.get(cv); mn = r.mn; mx = r.mx; }
-    else {
-      // 全量（忽略 off）算范围 —— 这是 R-scale 的关键
-      const all = opts.lines.map(l => l.data);
-      [mn, mx] = rangeOf(freeze ? all : opts.lines.filter(l => !isOff(l)).map(l => l.data), opts.log);
-      if (freeze) frozen.set(cv, { mn, mx });
+    else if (freeze && frozen.has(cv) && frozen.get(cv).key === key) {
+      const r = frozen.get(cv); mn = r.mn; mx = r.mx;
+    } else {
+      // 规则①：用**未隐藏**的全体序列（此时 data 已是窗口化的切片）
+      const all = opts.lines.filter(l => !isOff(l)).map(l => l.data);
+      const src = all.length ? all : opts.lines.map(l => l.data);
+      [mn, mx] = rangeOf(src, opts.log);
+      if (freeze) frozen.set(cv, { mn, mx, key });
     }
     if (opts.log) mn = Math.max(mn, 1e-9);
     if (!(mx > mn)) mx = mn + (Math.abs(mn) * 0.01 + 1);
@@ -184,5 +195,5 @@ const CHART = (() => {
     });
   }
 
-  return { lines, pie, bars, fmt, setRangeMode, getRangeMode, rangeOf };
+  return { lines, pie, bars, fmt, setRangeMode, getRangeMode, rangeOf, windowed };
 })();

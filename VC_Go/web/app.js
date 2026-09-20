@@ -188,17 +188,25 @@ function drawRecent() {
 function drawFull() {
   const i = selGood;
   const base0 = hist.price[i][0] || 1;
+  const len = cur + 1;                              // 只画到光标处
+  const data = CHART.windowed(hist.price[i].map(v => v / base0), len);
   CHART.lines($('#c-full'), {
-    n: N, log: true, base: 1,
-    cursor: cur,
-    lines: [{ data: hist.price[i].map(v => v / base0), color: COLORS[i % COLORS.length], width: 1.8 }],
+    n: data.length, log: true, base: 1,
+    cursor: data.length - 1,
+    windowKey: data.length,                         // 同一窗口内比例尺冻结
+    lines: [{ data, color: COLORS[i % COLORS.length], width: 1.8 }],
   });
 }
 function drawAll(r) {
+  const len = cur + 1;                              // 窗口 = [0, cur]
   const lines = META.goods.map((n, i) => ({
-    data: hist.price[i], color: COLORS[i % COLORS.length], off: hidden.has(n), width: 1.3,
+    data: CHART.windowed(hist.price[i], len),
+    color: COLORS[i % COLORS.length], off: hidden.has(n), width: 1.3,
   }));
-  CHART.lines($('#c-all'), { n: N, log: true, lines, cursor: cur, freeze: frozenOn });
+  CHART.lines($('#c-all'), {
+    n: len, log: true, lines, cursor: len - 1,
+    freeze: frozenOn, windowKey: len,
+  });
 }
 
 // ---------------------------------------------------------------- 建筑页
@@ -361,29 +369,33 @@ function weightedPrice(r) {
   return d > 0 ? fmt(n / d) : '—';
 }
 function drawGDP() {
+  const len = cur + 1;
   CHART.lines($('#c-gdp'), {
-    n: N, log: true, cursor: cur,
+    n: len, log: true, cursor: len - 1, windowKey: len,
     lines: [
-      { data: hist.gdpNom, color: getCSS('--accent'), width: 1.8 },
-      { data: hist.gdpReal, color: getCSS('--up'), width: 1.8 },
+      { data: CHART.windowed(hist.gdpNom, len), color: getCSS('--accent'), width: 1.8 },
+      { data: CHART.windowed(hist.gdpReal, len), color: getCSS('--up'), width: 1.8 },
     ],
   });
 }
 function drawReal() {
+  const len = cur + 1;
+  const k = ROWS[0].productAdded || 1;
   CHART.lines($('#c-real'), {
-    n: N, cursor: cur,
+    n: len, cursor: len - 1, windowKey: len,
     lines: [
-      { data: hist.gdpReal, color: getCSS('--up'), width: 2 },
-      { data: hist.index.map(v => v * (ROWS[0].productAdded || 1)), color: getCSS('--neutral'), width: 1.4 },
+      { data: CHART.windowed(hist.gdpReal, len), color: getCSS('--up'), width: 2 },
+      { data: CHART.windowed(hist.index.map(v => v * k), len), color: getCSS('--neutral'), width: 1.4 },
     ],
   });
 }
 function drawGov() {
+  const len = cur + 1;
   CHART.lines($('#c-gov'), {
-    n: N, cursor: cur,
+    n: len, cursor: len - 1, windowKey: len,
     lines: [
-      { data: hist.govCash, color: getCSS('--down'), width: 1.8 },
-      { data: hist.govCap, color: getCSS('--warn'), width: 1.6 },
+      { data: CHART.windowed(hist.govCash, len), color: getCSS('--down'), width: 1.8 },
+      { data: CHART.windowed(hist.govCap, len), color: getCSS('--warn'), width: 1.6 },
     ],
   });
 }
@@ -407,6 +419,9 @@ function drawPie(r) {
     `⚠ 这是"模型派生的就业结构"，与 <code>WealthTier</code> 的固定工资带 {5,10,20} 口径不同，` +
     `不能与"财富档"混读。`;
 }
+// 读设计令牌（图表要按当前主题取色）
+function getCSS(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
 // 阶级占比：**按各建筑自己的劳动结构**聚合（§5 第 20 轮），不得写死 75/20/5。
 // 口径：每建筑 headcount = 等级 × 每级雇佣人数；再按该建筑的 Shares 分到三档。
 // 三档是"共同池下标"：0 恒为最低档（劳工 5 元），1 为中档（农业是农民 7 元、
